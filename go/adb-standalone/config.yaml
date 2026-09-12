@@ -1,0 +1,59 @@
+# adb-standalone — minimal sample configuration
+# Override any field via environment variables using UPPER_SNAKE_CASE,
+# e.g. SURREAL_URL=ws://localhost:8000
+
+gprn:
+  service: adb-standalone
+  environment: local
+  placeholder: artifact
+
+# ADB schema identifiers (kept for API compatibility)
+schema: artifactdb-schema/v1
+internal_schema: artifactdb-internal/v1
+
+permissions:
+  default_read: public
+  default_write: owners
+
+prefixes:
+  - /exohub
+
+tenants:
+  - path: /exohub
+    alias: exohub
+
+# SurrealDB connection
+# IMPORTANT: change username and password before deploying to any non-local environment.
+surreal:
+  url: ws://localhost:8000
+  ns: adb
+  db: adb
+  username: root
+  password: "<change-me>"
+
+# Optional: enable semantic (vector) search by pointing to an ONNX embedding model.
+# Leave model_path empty (default) for FTS-only mode.
+# semantic:
+#   model_path: /path/to/model.onnx
+#   dimensions: 256
+
+# Object storage
+# Set endpoint to "managed" (or leave empty) to use the embedded versitygw POSIX-FS store
+# launched by "exo standalone up". Set to a real URL to use an external S3/MinIO bucket.
+storage:
+  s3:
+    endpoint: http://localhost:9100    # versitygw default port
+    # public_endpoint: http://localhost:9100  # override host in presigned URLs (client-reachable)
+    bucket: adb-standalone
+    region: us-east-1
+    # IMPORTANT: change credentials before deploying to any non-local environment.
+    access_key_id: versitygw
+    secret_access_key: "<change-me>"
+    use_path_style: true
+    presigned_url_expiration: 3600   # seconds
+    signature_version: v4
+    meta_redirect: false             # true → return JSON {url} instead of 307
+
+# HTTP server
+server:
+  addr: :8080

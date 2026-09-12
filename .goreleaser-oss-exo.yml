@@ -1,0 +1,36 @@
+version: 2
+project_name: exo
+dist: dist-exo
+before:
+  hooks:
+    - sh -c "cd go/exo && go mod download"
+builds:
+  - id: exo
+    dir: ./go/exo
+    main: .
+    binary: exo
+    env:
+      - CGO_ENABLED=0
+    tags:
+      - artifactdb
+      - exohubapi
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .ShortCommit }}
+      - -X main.date={{ .Date }}
+archives:
+  - id: exo
+    builds: [exo]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format: tar.gz
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+release:
+  skip_upload: true

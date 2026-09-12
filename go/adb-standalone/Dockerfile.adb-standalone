@@ -1,0 +1,7 @@
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates
+COPY dist-adb-standalone/adb-standalone_linux_amd64_v1/adb-standalone /usr/local/bin/adb-standalone
+COPY go/adb-standalone/config.docker.yaml /etc/adb-standalone/config.yaml
+EXPOSE 8080
+ENTRYPOINT ["adb-standalone"]
+CMD ["serve", "--config", "/etc/adb-standalone/config.yaml"]

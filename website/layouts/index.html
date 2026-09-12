@@ -1,0 +1,171 @@
+{{ define "main" }}
+<main>
+    <div class="bg-gray-200 dark:bg-gray-900">
+        <div class="px-4 py-8 mx-auto max-w-screen-xl">
+            <div class="grid gap-8 items-center mb-8 sm:mb-0 lg:gap-12 lg:grid-cols-12">
+                <div class="col-span-6 px-4 text-center sm:mb-6 lg:text-left lg:mb-0">
+                    <h1 class="mb-2 text-4xl font-extrabold tracking-tight leading-none text-gray-900 md:text-5xl xl:text-6xl dark:text-white">
+                        {{ .Site.Title }}
+                    </h1>
+                    <h2 class="pb-2 text-3xl font-light text-gray-800 dark:text-gray-300 md:text-4xl">
+                        {{ .Site.Params.Moto }}
+                    </h2>
+                    <p class="mx-auto mb-6 max-w-xl font-normal text-gray-900 lg:mx-0 xl:mb-2 md:text-lg xl:text-xl dark:text-gray-50">
+                        {{ .Site.Params.Description}}
+                    </p>
+                </div>
+                <div class="col-span-6">
+                    <div class="mx-auto w-full max-w-sm sm:max-w-md lg:max-w-lg hero-container">
+                        {{/* Use Hugo's image processing for optimized responsive images; read path from params.Hero.Image */}}
+                        {{ $heroParam := or .Site.Params.Hero.Image .Site.Params.hero.image }}
+                        {{ $heroPath := or $heroParam "images/pages/tailbliss-rocket-indigo.png" }}
+                        {{ $heroImage := resources.Get $heroPath }}
+                        {{ if $heroImage }}
+                            {{ $heroWebP := $heroImage.Resize "576x576 webp q85" }}
+                            {{ $heroWebPSmall := $heroImage.Resize "320x320 webp q85" }}
+                            <img
+                                src="{{ $heroWebP.RelPermalink }}"
+                                srcset="{{ $heroWebPSmall.RelPermalink }} 320w, {{ $heroWebP.RelPermalink }} 576w"
+                                sizes="(max-width: 640px) 320px, 576px"
+                                alt="{{ or .Site.Params.Hero.Alt (printf "%s hero" .Site.Title) }}"
+                                class="overflow-hidden mx-auto rounded-2xl shadow-xl hero-image"
+                                width="576"
+                                height="576"
+                                loading="eager"
+                                fetchpriority="high" />
+                        {{ else if $heroParam }}
+                            {{/* If not found in assets, fall back to static path using the provided param */}}
+                            <img
+                                src="{{ printf "%s" $heroPath | relURL }}"
+                                alt="{{ or .Site.Params.Hero.Alt (printf "%s hero" .Site.Title) }}"
+                                class="overflow-hidden mx-auto rounded-2xl shadow-xl hero-image"
+                                width="576"
+                                height="576"
+                                loading="eager"
+                                fetchpriority="high" />
+                        {{ else }}
+                            {{/* Fallback to bundled static image */}}
+                            <img
+                                src="{{ "images/tailbliss-rocket-indigo.webp" | relURL }}"
+                                alt="{{ or .Site.Params.Hero.Alt (printf "%s hero" .Site.Title) }}"
+                                class="overflow-hidden mx-auto rounded-2xl shadow-xl hero-image"
+                                width="576"
+                                height="576"
+                                loading="eager"
+                                fetchpriority="high" />
+                        {{ end }}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- More main page content here... -->
+
+    {{/* Demo section is internal-only; excluded from the OSS build. */}}
+    
+
+    <!-- Our mission section -->
+    <div class="relative my-4">
+        <div class="lg:mx-auto lg:grid lg:max-w-7xl lg:grid-cols-2 lg:items-start lg:gap-24 lg:px-8">
+            <div class="relative sm:py-8 lg:py-0">
+                <div aria-hidden="true" class="hidden sm:dark:block lg:absolute lg:inset-y-0 lg:right-0 lg:w-screen">
+                    <div class="absolute inset-y-0 right-1/2 w-full bg-gray-50 rounded-r-3xl dark:bg-gray-900/10 lg:right-72"></div><svg class="absolute top-8 left-1/2 -ml-3 lg:-right-8 lg:left-auto lg:top-12" width="404" height="392" fill="none" viewBox="0 0 404 392" loading="lazy">
+                        <defs>
+                            <pattern id="02f20b47-fd69-4224-a62a-4c9de5c763f7" x="0" y="0" width="20" height="20" patternUnits="userSpaceOnUse">
+                                <rect x="0" y="0" width="4" height="4" class="text-gray-200 dark:text-gray-900/60" fill="currentcolor"></rect>
+                            </pattern>
+                        </defs>
+                        <rect width="404" height="392" fill="url(#02f20b47-fd69-4224-a62a-4c9de5c763f7)"></rect>
+                    </svg>
+                </div>
+                <div class="relative px-4 py-6 mx-auto w-full h-auto sm:max-w-3xl sm:px-6 lg:px-0 lg:py-20">
+                    <div class="overflow-hidden rounded-2xl shadow-xl">
+                        {{ $p1image := resources.Get .Site.Params.P1.Image }}
+                        {{ with $p1image }}
+                        {{ with .Resize "600x600 webp q85" }}
+                        <img src="{{ .RelPermalink }}" width="{{ .Width }}" height="{{ .Height }}" class="w-full h-auto" alt="P1" loading="lazy" />
+                        {{ end }}
+                        {{ end }}
+                    </div>
+                </div>
+            </div>
+            <div class="relative px-4 mx-auto max-w-md sm:max-w-3xl sm:px-6 lg:px-0">
+                <div class="md:pt-12 sm:pt-6 lg:pt-20">
+                    <h2 class="text-3xl font-bold tracking-tight text-gray-900 dark:text-gray-50 sm:text-4xl">
+                        {{ .Site.Params.P1.Heading }}
+                    </h2>
+                    {{ range .Site.Params.P1.Content }}
+                    <p class="mt-6 max-w-3xl text-lg leading-7 text-gray-900 dark:text-white">
+                        {{ .text }}
+                    </p>
+                    {{ end }}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="relative my-4">
+        <div class="lg:mx-auto lg:grid lg:max-w-7xl lg:grid-cols-2 lg:items-start lg:gap-24 lg:px-8">
+            <div class="relative px-4 mx-auto max-w-md sm:max-w-3xl sm:px-6 lg:px-0">
+                <div class="md:pt-12 sm:pt-6 lg:pt-20">
+                    <h2 class="text-3xl font-bold tracking-tight text-gray-900 dark:text-gray-50 sm:text-4xl">
+                        {{ .Site.Params.P2.Heading }}
+                    </h2>
+                    {{ range .Site.Params.P2.Content }}
+                    <div class="mt-6 max-w-3xl flex items-start gap-4">
+                        {{/* Prefer user's PNG logos under assets/images/logos; try multiple name patterns */}}
+                        {{ $scratch := newScratch }}
+                        {{ with .icon }}
+                          {{ $name := . }}
+                          {{ $candidates := slice (printf "images/logos/%s-logo.png" $name) (printf "images/logos/exo%s-logo.png" $name) (printf "images/logos/%s.png" $name) (printf "images/logos/exo%s.png" $name) }}
+                          {{ range $candidates }}
+                            {{ with resources.Get . }}
+                              {{ if not ($scratch.Get "logo") }}{{ $scratch.Set "logo" . }}{{ end }}
+                            {{ end }}
+                          {{ end }}
+                        {{ end }}
+                        {{ with $scratch.Get "logo" }}
+                          {{ $logoResized := .Fit "40x40" }}
+                          <img src="{{ $logoResized.RelPermalink }}" width="{{ $logoResized.Width }}" height="{{ $logoResized.Height }}" alt="logo" class="mt-0.5 w-10 h-10 flex-shrink-0" loading="lazy" />
+                          {{ else }}
+                            {{ with .icon }}{{ partial "icon.html" . }}{{ end }}
+                          {{ end }}
+                        {{ $t := .text }}
+                        {{ $bolded := replaceRE `^([^—]+)\s*—\s*(.*)$` "<strong>$1</strong> — $2" $t }}
+                        <p class="text-lg leading-7 text-gray-900 dark:text-white">{{ $bolded | safeHTML }}</p>
+                    </div>
+                    {{ end }}
+                    {{ range .Site.Params.P2.Content }}
+                    {{ end }}
+                </div>
+            </div>
+            <div class="relative sm:py-8 lg:py-0">
+                <div aria-hidden="true" class="hidden sm:dark:block lg:absolute lg:inset-y-0 lg:right-0 lg:w-screen">
+                    <div class="absolute inset-y-0 right-1/2 w-full bg-gray-50 rounded-r-3xl dark:bg-gray-900/10 lg:right-72"></div><svg class="absolute top-8 left-1/2 -ml-3 lg:-right-8 lg:left-auto lg:top-12" width="404" height="392" fill="none" viewBox="0 0 404 392" loading="lazy">
+                        <defs>
+                            <pattern id="02f20b47-fd69-4224-a62a-4c9de5c763f7" x="0" y="0" width="20" height="20" patternUnits="userSpaceOnUse">
+                                <rect x="0" y="0" width="4" height="4" class="text-gray-200 dark:text-gray-900/60" fill="currentcolor"></rect>
+                            </pattern>
+                        </defs>
+                        <rect width="404" height="392" fill="url(#02f20b47-fd69-4224-a62a-4c9de5c763f7)"></rect>
+                    </svg>
+                </div>
+                <div class="relative px-4 py-6 mx-auto w-full h-auto sm:max-w-3xl sm:px-6 lg:px-0 lg:py-20">
+                    <div class="overflow-hidden rounded-2xl shadow-xl">
+                        {{ $p1image := resources.Get .Site.Params.P2.Image }}
+                        {{ with $p1image }}
+                        {{ with .Resize "600x600 webp q85" }}
+                        <img src="{{ .RelPermalink }}" width="{{ .Width }}" height="{{ .Height }}" class="w-full h-auto" alt="P1" loading="lazy" />
+                        {{ end }}
+                        {{ end }}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {{/* Install exo CLI CTA */}}
+    {{ partial "newsletter.html" . }}
+
+</main>
+{{ end }}

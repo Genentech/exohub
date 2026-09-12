@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    name: Build and test (no build tags)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: Build go/exo
+        run: go build ./...
+        working-directory: go/exo
+
+      - name: Test go/exo
+        run: go test ./...
+        working-directory: go/exo
+
+      - name: Build go/exo-credential-helper
+        run: go build ./...
+        working-directory: go/exo-credential-helper
+
+      - name: Test go/exo-credential-helper
+        run: go test ./...
+        working-directory: go/exo-credential-helper
+
+      - name: Build go/git-annex-remote-drive
+        run: go build ./...
+        working-directory: go/git-annex-remote-drive
+
+      - name: Test go/git-annex-remote-drive
+        run: go test ./...
+        working-directory: go/git-annex-remote-drive
+
+      - name: Build go/git-annex-remote-s5cmd
+        run: go build ./...
+        working-directory: go/git-annex-remote-s5cmd
+
+      - name: Test go/git-annex-remote-s5cmd
+        run: go test ./...
+        working-directory: go/git-annex-remote-s5cmd
+
+      - name: Build go/git-annex-remote-artifactdb-export
+        run: go build ./...
+        working-directory: go/git-annex-remote-artifactdb-export
+
+      - name: Test go/git-annex-remote-artifactdb-export
+        run: go test ./...
+        working-directory: go/git-annex-remote-artifactdb-export
+
+      - name: Build go/adb-standalone
+        run: go build ./...
+        working-directory: go/adb-standalone
+
+      - name: Test go/adb-standalone
+        run: go test ./...
+        working-directory: go/adb-standalone

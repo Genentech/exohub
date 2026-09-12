@@ -1,0 +1,29 @@
+{{/* Renders a brand logo from assets/images/logos as an <img>.
+   Usage in Markdown:
+     {{< logo name="exocli" size="96x96" alt="ExoCLI" class="mx-2" >}}
+   - name: base name of the logo (e.g., exocli, exogit, exospace)
+   - size: optional Hugo image size string (default 96x96). Examples: 64x64, 128x128
+   - alt:  alt text (defaults to "<name> logo")
+   - class: extra CSS classes
+*/}}
+{{ $name := .Get "name" | lower }}
+{{ if not $name }}{{ errorf "logo shortcode requires name param" }}{{ end }}
+{{ $size := .Get "size" | default "96x96" }}
+{{ $alt := .Get "alt" | default (printf "%s logo" $name) }}
+{{ $class := .Get "class" | default "inline-block" }}
+
+{{/* Initialize as boolean false to avoid nil execution issues in some Hugo versions */}}
+{{ $logo := false }}
+{{ $candidates := slice (printf "images/logos/%s-logo.png" $name) (printf "images/logos/exo%s-logo.png" $name) (printf "images/logos/%s.png" $name) (printf "images/logos/exo%s.png" $name) }}
+{{ range $candidates }}
+  {{ with resources.Get . }}
+    {{ if not $logo }}{{ $logo = . }}{{ end }}
+  {{ end }}
+{{ end }}
+
+{{ with $logo }}
+  {{ $res := .Fit $size }}
+  <img src="{{ $res.RelPermalink }}" width="{{ $res.Width }}" height="{{ $res.Height }}" alt="{{ $alt }}" class="{{ $class }}" style="display: inline; vertical-align: middle;" loading="lazy" />
+{{ else }}
+  {{ warnf "logo '%s' not found in assets/images/logos" $name }}
+{{ end }}

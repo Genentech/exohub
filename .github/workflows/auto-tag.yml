@@ -1,0 +1,62 @@
+name: Auto-tag version
+
+# On a push to main that touches VERSION, create a v<version> tag if one does not
+# already exist. That tag then triggers release.yml which builds binaries and
+# publishes a GitHub Release.
+#
+# IMPORTANT — downstream triggering:
+#   A tag pushed with the default GITHUB_TOKEN does NOT trigger other workflows
+#   (GitHub loop-prevention). Set a repo secret RELEASE_TOKEN (a PAT or GitHub App
+#   token with `contents: write`) so the pushed tag fires release.yml.
+#   Without it the tag is created but release.yml won't auto-run — use
+#   workflow_dispatch on release.yml for that tag if needed.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "VERSION"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: auto-tag
+  cancel-in-progress: false
+
+jobs:
+  auto-tag:
+    name: Tag VERSION
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Read version from VERSION file
+        id: v
+        run: |
+          VERSION="$(cat VERSION | tr -d '[:space:]')"
+          if [[ -z "$VERSION" ]]; then
+            echo "::error::VERSION file is empty or missing"; exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Resolved version ${VERSION} (tag v${VERSION})"
+
+      - name: Create tag if missing
+        env:
+          TAG: ${{ steps.v.outputs.tag }}
+        run: |
+          git fetch --tags --quiet
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "Tag ${TAG} already exists — nothing to do."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" -m "Release ${TAG}"
+          git push origin "${TAG}"
+          echo "Created and pushed ${TAG}."

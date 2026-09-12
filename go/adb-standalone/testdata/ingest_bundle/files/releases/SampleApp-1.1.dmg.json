@@ -1,0 +1,55 @@
+{
+  "repo_url": "git@github.com:example-org/sample-app.git",
+  "path": "releases/SampleApp-1.1.dmg",
+  "ref": "081195e36381de44af9c125cf540164ba1cfb669",
+  "size": 129990,
+  "commits": [
+    {
+      "author_name": "Dev User",
+      "committer_email": "dev@example.com",
+      "subject": "fix: dmg in releases again",
+      "author_date": "2026-05-14T15:15:42-07:00",
+      "author_email": "dev@example.com",
+      "committer_date": "2026-05-14T15:15:42-07:00",
+      "body": "",
+      "hash": "3d425c56ea10c92482fc78e8ef521658bd16de12",
+      "committer_name": "Dev User",
+      "parents": [
+        "6340aae3a95213b88fd16844409af1cff7f180f4"
+      ]
+    },
+    {
+      "author_name": "Dev User",
+      "committer_email": "dev@example.com",
+      "subject": "Restore .gitignore: exclude releases/ and *.dmg",
+      "author_date": "2026-05-14T15:11:02-07:00",
+      "author_email": "dev@example.com",
+      "committer_date": "2026-05-14T15:11:02-07:00",
+      "body": "",
+      "hash": "0bfe86ac8f58cbcbb6add76b7848a09e95f44e43",
+      "committer_name": "Dev User",
+      "parents": [
+        "4374bc9aa4bc082270a03a8a6c6209ac1ff1374a"
+      ]
+    }
+  ],
+  "backend": "SHA256E",
+  "locations": [
+    {
+      "s3url": "s3://example-bucket/sandbox/devuser/SampleApp/_annex",
+      "chunks": [
+        {
+          "chunk_number": 1,
+          "chunk_key": "SHA256E-s129990-S1073741824-C1--a09e0458ce638990f33113b97dc4c48405483ef74098ba743d8c40b4dadf4310.1.dmg",
+          "chunk_size": 129990,
+          "s3_path": "s3://example-bucket/sandbox/devuser/SampleApp/_annex/SHA256E-s129990-S1073741824-C1--a09e0458ce638990f33113b97dc4c48405483ef74098ba743d8c40b4dadf4310.1.dmg"
+        }
+      ],
+      "remote": "s3-annex",
+      "type": "annex",
+      "uuid": "6304c358-f1e6-43d5-b7ad-4eb050168a8d"
+    }
+  ],
+  "key": "SHA256E-s129990--a09e0458ce638990f33113b97dc4c48405483ef74098ba743d8c40b4dadf4310.1.dmg",
+  "$schema": "exohub-artifact/v1.json"
+}

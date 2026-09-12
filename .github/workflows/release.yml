@@ -1,0 +1,124 @@
+name: Release
+
+# Tag-driven GitHub release. Triggered by a v* tag pushed by auto-tag.yml (which
+# fires on every PR merge that bumps VERSION). Can also be triggered manually via
+# workflow_dispatch for a specific existing tag.
+#
+# Builds all 6 binaries (exo, exo-credential-helper, git-annex-remote-drive,
+# git-annex-remote-s5cmd, git-annex-remote-artifactdb-export, adb-standalone)
+# via goreleaser and publishes a single GitHub Release with all archives,
+# per-project checksums, and install.sh.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing v<semver> tag to (re)create a release for"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build binaries
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        config:
+          - .goreleaser-oss-exo.yml
+          - .goreleaser-oss-exo-credential-helper.yml
+          - .goreleaser-oss-git-annex-remote-drive.yml
+          - .goreleaser-oss-git-annex-remote-s5cmd.yml
+          - .goreleaser-oss-git-annex-remote-artifactdb-export.yml
+          - .goreleaser-oss-adb-standalone.yml
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: Install goreleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          install-only: true
+          version: "~> v2"
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          REF="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "tag=${REF}" >> "$GITHUB_OUTPUT"
+
+      - name: Build with goreleaser
+        env:
+          GORELEASER_CURRENT_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          goreleaser release --config "${{ matrix.config }}" --clean --skip=publish
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.config }}
+          path: |
+            dist-*/
+          retention-days: 1
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Resolve version from tag
+        id: version
+        run: |
+          REF="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION="${REF#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Download all dist artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-dist/
+          merge-multiple: true
+
+      - name: Collect release assets
+        id: assets
+        run: |
+          mkdir -p release-assets
+          # Collect all tarballs and checksum files from goreleaser dist dirs
+          find all-dist/ -type f \( -name "*.tar.gz" -o -name "*_checksums.txt" \) \
+            | sort | while read -r f; do
+              cp "$f" release-assets/
+            done
+          # Ship install.sh from the repo root
+          cp install.sh release-assets/install.sh
+          echo "Release assets:"
+          ls -lh release-assets/
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --generate-notes \
+            release-assets/*

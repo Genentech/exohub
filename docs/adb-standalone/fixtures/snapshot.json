@@ -1,0 +1,7 @@
+{
+    "base": "http://catalog.example.com",
+    "captured_at": "2026-09-09T20:00:00Z",
+    "document_count": 600,
+    "snapshot_version": "2026-09-09",
+    "tenant": "exohub"
+}

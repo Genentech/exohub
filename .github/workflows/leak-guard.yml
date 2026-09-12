@@ -1,0 +1,33 @@
+name: leak-guard
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+permissions:
+  contents: read
+
+jobs:
+  leak-guard:
+    name: Leak guard (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        run: |
+          GITLEAKS_VERSION="8.27.2"
+          curl -sSfL \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: gitleaks secret scan
+        run: |
+          args=(detect --source=. --no-git --redact --exit-code 1)
+          [ -f .gitleaks.toml ] && args+=(--config=.gitleaks.toml)
+          gitleaks "${args[@]}"

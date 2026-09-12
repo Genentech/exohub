@@ -1,0 +1,41 @@
+{
+  "repo_url": "git@github.com:example-org/sample-app.git",
+  "path": "releases/SampleApp-2.2.0.dmg",
+  "ref": "081195e36381de44af9c125cf540164ba1cfb669",
+  "size": 232624,
+  "commits": [
+    {
+      "author_name": "Dev User",
+      "committer_email": "dev@example.com",
+      "subject": "fix: dmg",
+      "author_date": "2026-05-14T16:03:34-07:00",
+      "author_email": "dev@example.com",
+      "committer_date": "2026-05-14T16:03:34-07:00",
+      "body": "",
+      "hash": "081195e36381de44af9c125cf540164ba1cfb669",
+      "committer_name": "Dev User",
+      "parents": [
+        "2baf64ab61c74b320f2c27d1a38223c71e3ecb16"
+      ]
+    }
+  ],
+  "backend": "SHA256E",
+  "locations": [
+    {
+      "s3url": "s3://example-bucket/sandbox/devuser/SampleApp/_annex",
+      "chunks": [
+        {
+          "chunk_number": 1,
+          "chunk_key": "SHA256E-s232624-S1073741824-C1--e9dc02805cf917cfc291a0e4889da3236b432d9bc8f87e75d81c7b2d3b2cbe82.0.dmg",
+          "chunk_size": 232624,
+          "s3_path": "s3://example-bucket/sandbox/devuser/SampleApp/_annex/SHA256E-s232624-S1073741824-C1--e9dc02805cf917cfc291a0e4889da3236b432d9bc8f87e75d81c7b2d3b2cbe82.0.dmg"
+        }
+      ],
+      "remote": "s3-annex",
+      "type": "annex",
+      "uuid": "6304c358-f1e6-43d5-b7ad-4eb050168a8d"
+    }
+  ],
+  "key": "SHA256E-s232624--e9dc02805cf917cfc291a0e4889da3236b432d9bc8f87e75d81c7b2d3b2cbe82.0.dmg",
+  "$schema": "exohub-artifact/v1.json"
+}

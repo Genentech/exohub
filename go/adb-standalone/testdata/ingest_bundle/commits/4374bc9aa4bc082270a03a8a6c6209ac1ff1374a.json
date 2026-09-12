@@ -1,0 +1,19 @@
+{
+  "author_name": "Dev User",
+  "repo_url": "git@github.com:example-org/sample-app.git",
+  "committer_email": "dev@example.com",
+  "subject": "Merge: keep local release.sh and .gitignore",
+  "committer_date": "2026-05-14T15:10:33-07:00",
+  "body": "",
+  "committer_name": "Dev User",
+  "path": "commits/4374bc9aa4bc082270a03a8a6c6209ac1ff1374a.json",
+  "ref": "081195e36381de44af9c125cf540164ba1cfb669",
+  "author_date": "2026-05-14T15:10:33-07:00",
+  "author_email": "dev@example.com",
+  "hash": "4374bc9aa4bc082270a03a8a6c6209ac1ff1374a",
+  "parents": [
+    "da824f7e73f3368c748a415163c2e84437ad630e",
+    "c07520b4676b204c061e04ba20fad7a79f345c4d"
+  ],
+  "$schema": "exohub-commit/v1.json"
+}

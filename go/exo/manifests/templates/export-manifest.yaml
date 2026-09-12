@@ -1,0 +1,34 @@
+# ExoExportWorkflow manifest example
+#
+# Notes:
+# - Use `exo submit --manifest <file>` to submit this manifest to an ExoHub Worker for execution.
+# - This manifest can also be used directly from the CLI with `exo export --manifest <file>`.
+
+# Required: repository identity for pull
+name: my-dataset
+url: https://github.com/example/data-repo.git
+ref: v1.2.3
+queue: exohub-sync-aws # or exohub-sync-shpc
+# - exohub-sync-aws targets an ExoHub Worker in the cloud, e.g. sync from S3 to a local volume.
+# - exohub-sync-shpc targets an ExoHub Worker in sHPC (ExoGate), e.g. sync from Exospace cache/folders to S3.
+
+# Optional: where the repo is checked out/used
+# If omitted, the worker defaults to EXOHUB_TMP/<name>
+#repo-dir: /data/work/my-dataset
+
+# What to run within ExoExportWorkflow
+remote-type: export
+
+# Source and destination special remote names for export
+# from is optional; omit to export from the repo itself (here)
+from: s3-private
+to: gcs-public
+
+# Optional: restrict export to specific repo paths/globs
+paths:
+  - data/**
+  - results/*.tsv
+
+# Example usage:
+#   exo submit --manifest manifests/export-manifest.yaml --queue exohub-sync-aws
+#   exo export --manifest manifests/export-manifest.yaml

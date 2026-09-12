@@ -1,0 +1,235 @@
+# adb-standalone parity test corpus
+# Consumed by parity_test.go (L1) and adb-live-diff (L2).
+# Each entry describes one HTTP request to replay against the service.
+#
+# Fields:
+#   id      - unique test case identifier
+#   method  - HTTP method (default: GET)
+#   path    - URL path (relative to /v1/{tenant})
+#   query   - query string parameters (map)
+#   fixture - path to the golden fixture JSON (relative to docs/adb-standalone/fixtures/)
+#   gates   - list of assertion gates to apply: G1, G2, G3
+#   note    - human-readable description
+
+tenant: exohub
+
+cases:
+
+  # ── /search ───────────────────────────────────────────────────────────
+
+  - id: search_wildcard
+    path: /search
+    query: {q: "*", size: "2"}
+    fixture: search_p1.json
+    gates: [G1, G2, G3]
+    note: wildcard search, page 1 — matches all public docs, size=2
+
+  - id: search_single_term
+    path: /search
+    query: {q: "bundle", size: "2"}
+    gates: [G2]
+    note: single keyword — should return only bundle docs
+
+  - id: search_multi_term
+    path: /search
+    query: {q: "build cli buddy", size: "5"}
+    gates: [G2]
+    note: multi-term phrase search
+
+  - id: search_field_scoped
+    path: /search
+    query: {q: "sample-app", fields: "_extra,path,size", size: "5"}
+    gates: [G2]
+    note: field-scoped search
+
+  - id: search_by_project_id
+    path: /search
+    query: {q: "dld1-nf-v26", size: "5"}
+    gates: [G2]
+    note: search by project_id value
+
+  - id: search_size_1
+    path: /search
+    query: {q: "*", size: "1"}
+    gates: [G2]
+    note: size boundary — exactly 1 result
+
+  - id: search_size_large
+    path: /search
+    query: {q: "*", size: "500"}
+    gates: [G2]
+    note: size larger than seed set — all docs returned, next=null
+
+  - id: search_size_0
+    path: /search
+    query: {q: "*", size: "0"}
+    gates: [G1]
+    note: size=0 — empty results, count=0, next=null
+
+  - id: search_empty_q
+    path: /search
+    query: {size: "2"}
+    gates: [G2]
+    note: empty q — returns all public docs
+
+  - id: search_no_results
+    path: /search
+    query: {q: "xyznonexistentterm12345678", size: "10"}
+    gates: [G1, G2]
+    note: term that matches nothing — empty results, total=0
+
+  # ── /scroll ───────────────────────────────────────────────────────────
+
+  - id: scroll_page2
+    path: /search
+    query: {q: "*", size: "2"}
+    fixture: search_p2.json
+    gates: [G1, G2]
+    scroll_follow: true
+    note: follow next from search_wildcard — page 2
+
+  - id: scroll_full_traversal
+    path: /search
+    query: {q: "sample-app", size: "5"}
+    gates: [G2]
+    scroll_full: true
+    note: traverse all scroll pages, assert full _extra.id set + terminal next=null
+
+  - id: scroll_invalid_id
+    path: /scroll/nonexistent-scroll-id-000
+    expected_status: 404
+    gates: [G1]
+    note: unknown scroll id — 404 error envelope
+
+  # ── /files/{id}/metadata ──────────────────────────────────────────────
+
+  - id: metadata_existing
+    path: /files/sample-app:bundle.json@v2.2.0/metadata
+    fixture: file_metadata.json
+    gates: [G1]
+    note: existing document — returns verbatim doc
+
+  - id: metadata_url_encoded
+    path: /files/sample-app%3Abundle.json%40v2.2.0/metadata
+    fixture: file_metadata.json
+    gates: [G1]
+    note: URL-encoded id (%3A = :, %40 = @) — must decode and find same doc
+
+  - id: metadata_not_found
+    path: /files/nonexistent-project:no.json@v0.0.0/metadata
+    expected_status: 404
+    gates: [G1]
+    note: unknown document id — 404 error envelope
+
+  # ── /projects/{id}/versions ───────────────────────────────────────────
+
+  - id: versions_multi_version
+    path: /projects/sample-app/versions
+    fixture: project_versions.json
+    gates: [G1]
+    note: multi-version project — aggs list, total, latest
+
+  - id: versions_single_project
+    path: /projects/dld1-nf-v26/versions
+    gates: [G1]
+    note: second project — has distinct version set
+
+  - id: versions_unknown_project
+    path: /projects/nonexistent-project-xyz/versions
+    expected_status: 404
+    gates: [G1]
+    note: unknown project — 404 error envelope
+
+  # ── /files/{id} redirect + chunks ─────────────────────────────────────
+
+  - id: files_redirect_existing
+    path: /files/sample-app:bundle.json@v2.2.0
+    expected_status: 307
+    requires_storage: true
+    gates: []
+    note: existing document — 307 redirect to presigned URL; skipped in L1 (no MinIO)
+
+  - id: files_redirect_not_found
+    path: /files/nonexistent-project:no.json@v0.0.0
+    expected_status: 404
+    requires_storage: true
+    gates: [G1]
+    note: unknown document id — 404 error envelope; skipped in L1 (no MinIO)
+
+  - id: files_chunks_not_found
+    path: /files/nonexistent-project:no.json@v0.0.0
+    query: {chunks: "true"}
+    expected_status: 404
+    requires_storage: true
+    gates: [G1]
+    note: unknown document id with chunks=true — 404 error envelope; skipped in L1 (no MinIO)
+
+  # ── /schemas ──────────────────────────────────────────────────────────
+
+  - id: schemas_list
+    path: /schemas
+    fixture: schemas.json
+    gates: [G1]
+    note: full schema list — document_types with name+url
+
+  # ── error envelopes ───────────────────────────────────────────────────
+
+  - id: error_bad_size_param
+    path: /search
+    query: {q: "*", size: "notanumber"}
+    expected_status: 400
+    gates: [G1]
+    note: malformed size param — 400 error envelope {reason, status:"error"}
+
+  - id: error_unknown_route
+    path: /unknown-endpoint-xyz
+    expected_status: 404
+    gates: []
+    note: route not registered — 404 from router
+
+  # ── /jobs ─────────────────────────────────────────────────────────────
+
+  - id: jobs_known_id
+    path: /jobs/some-project@v1.0.0
+    expected_status: 200
+    gates: []
+    note: any job id returns SUCCESS (sync ingest — always done)
+
+  # ── /semantic-search ──────────────────────────────────────────────────
+
+  - id: semantic_search_disabled
+    path: /semantic-search
+    query: {q: "rnaseq"}
+    expected_status: 404
+    gates: [G1]
+    note: semantic search disabled (no model_path) — 404 error envelope; always passes
+
+  - id: semantic_search_basic
+    path: /semantic-search
+    query: {q: "rnaseq datasets", limit: "5"}
+    fixture: semantic_search_g1.json
+    gates: [G1, G2]
+    note: basic semantic search — requires semantic.model_path; skipped in L1 when off
+    requires_semantic: true
+
+  - id: semantic_search_project_filter
+    path: /semantic-search
+    query: {q: "bundle", project_id: "sample-app", limit: "10"}
+    gates: [G2]
+    note: semantic search with project_id filter; result-set check only
+    requires_semantic: true
+
+  # ── /entities ─────────────────────────────────────────────────────────
+
+  - id: entities_not_found
+    path: /entities
+    query: {name: "UNKNOWN_ENTITY_XYZ_12345"}
+    expected_status: 404
+    gates: [G1]
+    note: entity not found — 404 error envelope
+
+  - id: entities_missing_name
+    path: /entities
+    expected_status: 400
+    gates: [G1]
+    note: missing name param — 400 error envelope

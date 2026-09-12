@@ -1,0 +1,40 @@
+# Public gitleaks config — shipped to the OSS mirror as .gitleaks.toml by
+# scripts/oss-export.sh. It intentionally contains ONLY the upstream default
+# secret ruleset plus a test-fixture allowlist. Any project-specific detection
+# rules live only in the internal config and are never published.
+
+title = "exohub gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known-safe test fixtures and documentation domains."
+
+paths = [
+  ".gitleaks.toml",
+  "go/exo/safe/validate.go",
+  "go/git-annex-remote-artifactdb-export/main_test.go",
+  "go/exo-credential-helper/main_basecreds_test.go",
+  "go/exo-credential-helper/main_test.go",
+  "go/exo-credential-helper/main_exohubapi_test.go",
+  "go/exo/commands/doctor/doctor_test.go",
+  "go/exo/commands/init/grants_test.go",
+  "go/exo/internal/credhelper/credhelper_exohubapi_test.go",
+  "go/git-annex-remote-s5cmd/main_test.go",
+  "go/exo/commands/serve/static/xterm/xterm.js",
+]
+
+# Known-safe regex matches — override false positives from the default ruleset.
+regexes = [
+  # PEM-header literals used to DETECT accidental key commits — not real keys.
+  '''-----BEGIN (OPENSSH |RSA |EC |DSA |ENCRYPTED )?PRIVATE KEY-----''',
+  # IANA-reserved documentation domain; never a real host.
+  '''example\.com''',
+  # JWT-structured test tokens in test files (unsigned; no real credentials).
+  '''eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0''',
+  # Canonical jwt.io example JWT signature — used in tests.
+  '''SflKxwRJSMeKKF2QT4fwpMeJf36P''',
+  # Clearly-fake AWS test/mock access key IDs in test files.
+  '''ASIA(TEST|ROOT|SERVER|MODEL2|CONCURRENT|EXPIRED|123|IOSFODNN7EXAMPLE)''',
+]

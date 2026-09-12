@@ -1,0 +1,30 @@
+version: 2
+project_name: adb-standalone
+dist: dist-adb-standalone
+before:
+  hooks:
+    - sh -c "cd go/adb-standalone && go mod download"
+builds:
+  - id: adb-standalone
+    dir: ./go/adb-standalone
+    main: .
+    binary: adb-standalone
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+archives:
+  - id: adb-standalone
+    builds: [adb-standalone]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format: tar.gz
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+release:
+  skip_upload: true

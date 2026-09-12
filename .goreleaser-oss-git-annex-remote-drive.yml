@@ -1,0 +1,28 @@
+version: 2
+project_name: git-annex-remote-drive
+dist: dist-git-annex-remote-drive
+builds:
+  - id: git-annex-remote-drive
+    dir: ./go/git-annex-remote-drive
+    main: .
+    binary: git-annex-remote-drive
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.appVersion={{ .Version }}
+archives:
+  - id: git-annex-remote-drive
+    builds: [git-annex-remote-drive]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format: tar.gz
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+release:
+  skip_upload: true

@@ -1,0 +1,81 @@
+# adb-standalone — batteries-included Docker Compose stack
+#
+# Services:
+#   surrealdb   — document store / FTS / optional vector
+#   versitygw   — S3-compatible object store (POSIX-FS backend, Apache-2.0)
+#   adb         — adb-standalone HTTP API server
+#
+# Credentials / overrides (set in .env or environment):
+#   SURREAL_PASSWORD        — SurrealDB root password  (required, no default)
+#   VERSITYGW_ACCESS_KEY    — versitygw root access key (default: versitygw)
+#   VERSITYGW_SECRET_KEY    — versitygw root secret key (required, no default)
+#   STORAGE_S3_PUBLIC_ENDPOINT — presigned-URL host reachable by clients
+#                                (default: http://localhost:9100)
+#   ADB_BASE_URL            — base URL for absolute URL generation
+#                                (default: http://localhost:8080)
+#
+# Quick start:
+#   echo "SURREAL_PASSWORD=change-me" > .env
+#   echo "VERSITYGW_SECRET_KEY=change-me" >> .env
+#   docker compose up
+
+services:
+  surrealdb:
+    image: surrealdb/surrealdb:v2
+    command:
+      - start
+      - --log=info
+      - --user=root
+      - --pass=${SURREAL_PASSWORD}
+      - file:///data/surreal.db
+    volumes:
+      - surreal-data:/data
+    healthcheck:
+      test: ["CMD", "/surreal", "is-ready"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  versitygw:
+    image: ghcr.io/versity/versitygw:latest
+    command:
+      - --access=${VERSITYGW_ACCESS_KEY:-versitygw}
+      - --secret=${VERSITYGW_SECRET_KEY}
+      - posix
+      - /data
+    volumes:
+      - versitygw-data:/data
+    ports:
+      - "9100:9100"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9100/"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  adb:
+    build:
+      context: ../..
+      dockerfile: go/adb-standalone/Dockerfile.adb-standalone
+    environment:
+      SURREAL_PASSWORD: ${SURREAL_PASSWORD}
+      VERSITYGW_ACCESS_KEY: ${VERSITYGW_ACCESS_KEY:-versitygw}
+      VERSITYGW_SECRET_KEY: ${VERSITYGW_SECRET_KEY}
+      STORAGE_S3_PUBLIC_ENDPOINT: ${STORAGE_S3_PUBLIC_ENDPOINT:-http://localhost:9100}
+      ADB_BASE_URL: ${ADB_BASE_URL:-http://localhost:8080}
+    ports:
+      - "8080:8080"
+    depends_on:
+      surrealdb:
+        condition: service_healthy
+      versitygw:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+volumes:
+  surreal-data:
+  versitygw-data:
