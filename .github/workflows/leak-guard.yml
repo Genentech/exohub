@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   leak-guard:
-    name: Leak guard (gitleaks + denylist)
+    name: Leak guard (gitleaks)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,5 +26,8 @@ jobs:
             | tar -xz -C /usr/local/bin gitleaks
           gitleaks version
 
-      - name: Run leak-guard (gitleaks + denylist grep)
-        run: bash scripts/leak-scan.sh
+      - name: gitleaks secret scan
+        run: |
+          args=(detect --source=. --no-git --redact --exit-code 1)
+          [ -f .gitleaks.toml ] && args+=(--config=.gitleaks.toml)
+          gitleaks "${args[@]}"

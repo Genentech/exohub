@@ -1,63 +1,18 @@
-# .gitleaks.toml — gitleaks configuration for exo-cli leak-scan gate
-# Used by scripts/leak-scan.sh, .pre-commit-config.yaml, and CI (GitHub Actions + GitLab).
+# Public gitleaks config — shipped to the OSS mirror as .gitleaks.toml by
+# scripts/oss-export.sh. It intentionally contains ONLY the upstream default
+# secret ruleset plus a test-fixture allowlist. Any project-specific detection
+# rules live only in the internal config and are never published.
 
-title = "exo-cli gitleaks config"
+title = "exohub gitleaks config"
 
 [extend]
-# Start from the upstream default ruleset
 useDefault = true
 
-[[rules]]
-id = "roche-internal-url"
-description = "Roche-internal hostname in source"
-regex = '''(?i)(roche\.com|genomics\.roche\.com|code\.roche\.com|ssh\.code\.roche\.com|exogit\.genomics\.roche\.com)'''
-tags = ["roche", "internal", "url"]
-
-[[rules]]
-id = "janus-reference"
-description = "Janus SDK import path or string reference"
-regex = '''(?i)(janus-go|janus\.StablePublic|janus\.AppClientConfig|code\.roche\.com/janus)'''
-tags = ["janus", "internal"]
-
-[[rules]]
-id = "internal-service-name"
-description = "Internal service name (olympus, charon) in source"
-regex = '''(?i)\b(olympus|charon)\b'''
-tags = ["internal", "service"]
-
-[[rules]]
-id = "gene-com-url"
-description = "gene.com internal address"
-regex = '''(?i)(idp\.auth\.gene\.com|go\.gene\.com)'''
-tags = ["gene", "internal", "url"]
-
-[[rules]]
-id = "dev-exohub"
-description = "dev-exohub internal environment reference"
-regex = '''(?i)dev-exohub'''
-tags = ["internal", "env"]
-
-[[rules]]
-id = "gene-com-domain"
-description = "gene.com domain reference (broader)"
-regex = '''(?i)gene\.com'''
-tags = ["gene", "internal"]
-
-[[rules]]
-id = "internal-aws-account"
-description = "Known internal AWS account ID"
-regex = '''\b769164612757\b'''
-tags = ["aws", "internal", "account-id"]
-
 [allowlist]
-description = "Paths and patterns that are legitimately present in the public/exported tree — see .oss-allow"
+description = "Known-safe test fixtures and documentation domains."
 
 paths = [
   ".gitleaks.toml",
-  ".oss-allow",
-  "scripts/leak-scan.sh",
-  "scripts/test-leak-guard.sh",
-  "scripts/oss-export.sh",
   "go/exo/safe/validate.go",
   "go/git-annex-remote-artifactdb-export/main_test.go",
   "go/exo-credential-helper/main_basecreds_test.go",
@@ -70,16 +25,16 @@ paths = [
   "go/exo/commands/serve/static/xterm/xterm.js",
 ]
 
-# Known-safe regex matches — override false positives from the default ruleset
+# Known-safe regex matches — override false positives from the default ruleset.
 regexes = [
-  # PEM-header literals in safe/validate.go used to DETECT accidental key commits.
+  # PEM-header literals used to DETECT accidental key commits — not real keys.
   '''-----BEGIN (OPENSSH |RSA |EC |DSA |ENCRYPTED )?PRIVATE KEY-----''',
-  # example.com is an IANA-reserved documentation domain; never a real host.
+  # IANA-reserved documentation domain; never a real host.
   '''example\.com''',
-  # JWT-structured test tokens in test files (unsigned, no real credentials).
+  # JWT-structured test tokens in test files (unsigned; no real credentials).
   '''eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0''',
-  # Canonical jwt.io example JWT signature — used in gitleaks own examples and our tests.
+  # Canonical jwt.io example JWT signature — used in tests.
   '''SflKxwRJSMeKKF2QT4fwpMeJf36P''',
-  # AWS test/mock access key IDs in test files (short or clearly fake ASIA* prefixes).
+  # Clearly-fake AWS test/mock access key IDs in test files.
   '''ASIA(TEST|ROOT|SERVER|MODEL2|CONCURRENT|EXPIRED|123|IOSFODNN7EXAMPLE)''',
 ]
