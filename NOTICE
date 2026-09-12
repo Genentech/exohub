@@ -1,0 +1,15 @@
+Exo CLI
+Copyright (c) 2026 Genentech, Inc.
+
+This product is licensed under the terms of the MIT License; see the LICENSE
+file for the full text.
+
+This software includes third-party open source components, each distributed
+under its own license. In particular, `exo` builds on and orchestrates:
+
+  - git-annex (https://git-annex.branchable.com/)
+
+Go module dependencies and their respective licenses are declared in the
+project's go.mod files and vendored/third-party directories. Each such component
+remains the copyright of its respective authors and is provided under its own
+license terms.

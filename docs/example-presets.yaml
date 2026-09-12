@@ -1,0 +1,66 @@
+# Example .exohub/presets configuration
+# This file should be placed at .exohub/presets in your repository
+#
+# Note: .exohub/ directory is ALWAYS included automatically in every clone
+# Do not list .exohub/ in sparse_paths
+
+presets:
+  # Minimal preset for CI/CD pipelines
+  - name: ci-minimal
+    description: Sparse checkout for CI/CD pipelines (config and scripts only)
+    depth: 1  # Shallow clone with depth 1
+    sparse_paths:
+      - Makefile
+      - scripts/
+      - .github/
+    git_config:
+      status.showUntrackedFiles: "no"
+
+  # Development preset with full repository
+  - name: development
+    description: Full repository for local development
+    depth: 0  # Full clone (0 means unlimited depth)
+    git_config:
+      core.untrackedCache: "true"
+      core.fsmonitor: "true"
+      status.showUntrackedFiles: "normal"
+
+  # Data-only preset for data scientists
+  - name: data-only
+    description: Sparse checkout for data files only
+    depth: 1
+    sparse_paths:
+      - data/
+      - notebooks/
+    git_config:
+      status.showUntrackedFiles: "no"
+
+  # Documentation preset
+  - name: docs-only
+    description: Sparse checkout for documentation
+    depth: 1
+    sparse_paths:
+      - docs/
+      - README.md
+      - CONTRIBUTING.md
+    git_config:
+      status.showUntrackedFiles: "no"
+
+  # Shared workspace preset with specific configuration
+  - name: shared-workspace
+    description: Configuration for shared team workspace
+    depth: 0
+    git_config:
+      core.sharedRepository: "group"
+      core.fileMode: "true"
+
+  # Read-only preset for auditing/review
+  - name: readonly
+    description: Read-only configuration for auditing
+    depth: 1
+    sparse_paths:
+      - src/
+      - tests/
+    git_config:
+      core.fileMode: "false"
+      status.showUntrackedFiles: "no"

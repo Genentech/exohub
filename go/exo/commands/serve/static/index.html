@@ -1,0 +1,2145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ExoHub Atlas</title>
+  <link rel="icon" type="image/png" href="favicon.png">
+  <link rel="stylesheet" href="xterm/xterm.css">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      background: #161622;
+      color: #e0e0e0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      height: 100%;
+      width: 100%;
+      overflow: hidden;
+    }
+    body {
+      display: flex;
+      flex-direction: column;
+    }
+    #terminal-container {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      padding: 4px;
+      display: none;
+      overflow: hidden;
+    }
+    #terminal-container .xterm { height: 100% !important; overflow: hidden !important; }
+    #terminal-container .xterm-viewport { overflow-y: hidden !important; }
+    #toolbar {
+      display: none;
+      position: fixed;
+      top: 6px;
+      right: 6px;
+      z-index: 100;
+      align-items: center;
+      gap: 8px;
+    }
+    #status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #666;
+      transition: background 0.3s;
+    }
+    #status-dot.connected { background: #2ecc71; }
+    #status-dot.disconnected { background: #e74c3c; }
+    #home-btn {
+      position: absolute;
+      top: 16px;
+      left: 16px;
+      z-index: 101;
+      background: none;
+      border: 1px solid #FF6B35;
+      color: #FF6B35;
+      font-size: 0.8rem;
+      padding: 2px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      text-decoration: none;
+    }
+    #home-btn:hover { background: #FF6B3520; border-color: #FF8F5E; color: #FF8F5E; }
+    #disconnect-btn {
+      display: none;
+      background: none;
+      border: 1px solid #555;
+      color: #888;
+      font-size: 0.7rem;
+      padding: 2px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    #disconnect-btn:hover { border-color: #e74c3c; color: #e74c3c; }
+    #select-btn {
+      display: none;
+      background: none;
+      border: 1px solid #555;
+      color: #888;
+      font-size: 0.7rem;
+      padding: 2px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    #select-btn:hover { border-color: #E84393; color: #E84393; }
+    #select-btn.active { border-color: #E84393; color: #E84393; background: #E8439320; }
+    #theme-select {
+      background: transparent;
+      border: 1px solid #555;
+      color: #888;
+      font-size: 0.7rem;
+      padding: 2px 4px;
+      border-radius: 4px;
+      cursor: pointer;
+      outline: none;
+    }
+    #theme-select:hover { border-color: #E84393; color: #E84393; }
+    #mode-btn {
+      background: none;
+      border: 1px solid #555;
+      color: #888;
+      font-size: 0.85rem;
+      padding: 1px 6px;
+      border-radius: 4px;
+      cursor: pointer;
+      line-height: 1;
+    }
+    #mode-btn:hover { border-color: #E84393; color: #E84393; }
+    .font-btn {
+      background: none;
+      border: 1px solid #555;
+      color: #888;
+      padding: 1px 4px;
+      border-radius: 4px;
+      cursor: pointer;
+      line-height: 1;
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    }
+    .font-btn:hover { border-color: #E84393; color: #E84393; }
+    .font-btn.active { border-color: #E84393; color: #E84393; background: #E8439320; }
+    #font-s { font-size: 0.6rem; }
+    #font-m { font-size: 0.75rem; }
+    #font-l { font-size: 0.9rem; }
+
+    /* Landing page */
+    #auth-overlay {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      gap: 20px;
+      background: linear-gradient(rgba(26,26,46,0.93), rgba(26,26,46,0.93)), url('exohub-hero.jpg') center center / cover no-repeat;
+      background-color: #161622;
+      position: relative;
+    }
+    #ascii-logo {
+      font-family: monospace;
+      font-size: 12px;
+      line-height: 1.2;
+      white-space: pre;
+      text-align: left;
+      display: inline-block;
+      opacity: 0;
+    }
+    #subtitle {
+      font-size: 1rem;
+      color: #E84393;
+      letter-spacing: 6px;
+      text-transform: uppercase;
+      opacity: 0;
+    }
+    #society-words {
+      display: none;
+      position: absolute;
+      left: 50%;
+      top: calc(50% + 82px);
+      transform: translateX(-50%);
+      text-align: center;
+      white-space: nowrap;
+      pointer-events: none;
+    }
+    .society-block {
+      display: block;
+      font-family: monospace;
+      font-size: 8px;
+      line-height: 1.2;
+      white-space: pre;
+      text-align: left;
+      margin: 0 auto;
+      opacity: 0;
+    }
+    #seekers-readme-shell {
+      display: none;
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: calc(50% + 164px);
+      margin: 0 auto;
+      transform: translateX(44px);
+      width: min(760px, calc(100vw - 48px));
+      max-width: 760px;
+      padding: 10px 18px 0;
+      min-height: 196px;
+      opacity: 0;
+      pointer-events: none;
+    }
+    #seekers-readme {
+      min-height: 8.6em;
+      color: #cdbfae;
+      font-family: "American Typewriter", "Courier Prime", "Courier New", "Liberation Mono", monospace;
+      font-size: 0.92rem;
+      line-height: 1.72;
+      letter-spacing: 0.01em;
+      text-align: left;
+      text-wrap: pretty;
+      position: relative;
+    }
+    #seekers-readme-content {
+      display: block;
+    }
+    #seekers-readme-content p {
+      display: block;
+      width: 100%;
+      margin: 0 0 1.15em;
+      text-align: left;
+    }
+    #seekers-readme-content p:last-child {
+      margin-bottom: 0;
+    }
+    #seekers-readme-content .dropcap {
+      margin: 0.16em 0.14em -0.12em 0;
+      color: #e7d3b7;
+      font-size: 2.7em;
+      line-height: 0.86;
+      text-transform: uppercase;
+    }
+    #bottom-walker-template,
+    .bottom-walker {
+      position: absolute;
+      left: -140px;
+      bottom: 0;
+      width: 112px;
+      height: 156px;
+      pointer-events: none;
+      z-index: 4;
+    }
+    #bottom-walker-template.hidden,
+    .bottom-walker.hidden { display: none; }
+    .walker-shadow {
+      position: absolute;
+      bottom: 0;
+      left: 18px;
+      width: 72px;
+      height: 8px;
+      background:
+        linear-gradient(to right,
+          transparent 0 8px,
+          rgba(0, 0, 0, 0.3) 8px 64px,
+          transparent 64px 72px);
+      animation: walker-shadow 420ms steps(2, end) infinite;
+    }
+    .walker-sprite {
+      position: absolute;
+      left: 12px;
+      bottom: 2px;
+      width: 24px;
+      height: 38px;
+      transform-origin: bottom left;
+      animation: walker-bob 420ms steps(2, end) infinite;
+      transform: scale(4);
+    }
+    .walker-head {
+      position: absolute;
+      top: 2px;
+      left: 12px;
+      width: auto;
+      height: 16px;
+      max-width: none;
+      transform: translateX(-50%);
+      image-rendering: pixelated;
+      z-index: 2;
+    }
+    .walker-body {
+      position: absolute;
+      top: 16px;
+      left: 0;
+      width: 24px;
+      height: 24px;
+      background-image: url('walker_body_sheet.png');
+      background-repeat: no-repeat;
+      background-size: 48px 24px;
+      background-position: 0 0;
+      image-rendering: pixelated;
+      animation: walker-frame 420ms step-end infinite;
+      z-index: 1;
+    }
+    @keyframes walker-bob {
+      0% { transform: scale(4) translateY(0); }
+      100% { transform: scale(4) translateY(-1px); }
+    }
+    @keyframes walker-frame {
+      0%, 49.999% { background-position: 0 0; }
+      50%, 100% { background-position: -24px 0; }
+    }
+    @keyframes walker-shadow {
+      0% { transform: scaleX(1); opacity: 0.35; }
+      100% { transform: scaleX(0.92); opacity: 0.22; }
+    }
+    .walker-item {
+      position: absolute;
+      image-rendering: pixelated;
+      z-index: 3;
+    }
+    .walker-item-pickaxe {
+      animation: pickaxe-swing 420ms steps(2, end) infinite;
+    }
+    .walker-item-briefcase {
+      animation: briefcase-swing 420ms steps(2, end) infinite;
+    }
+    @keyframes pickaxe-swing {
+      0% { transform: rotate(235deg); }
+      100% { transform: rotate(245deg); }
+    }
+    @keyframes briefcase-swing {
+      0% { transform: rotate(-4deg); }
+      100% { transform: rotate(4deg); }
+    }
+    @media (max-width: 900px) {
+      .bottom-walker {
+        zoom: 0.82;
+      }
+    }
+    #install-info {
+      opacity: 0;
+      text-align: center;
+      color: #888;
+      font-size: 0.85rem;
+      line-height: 1.6;
+      position: absolute;
+      bottom: 48px;
+      left: 0;
+      right: 0;
+    }
+    #install-info code {
+      background: rgba(42,42,74,0.8);
+      color: #FF6B35;
+      padding: 4px 10px;
+      border-radius: 4px;
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      font-size: 0.8rem;
+    }
+    #install-info a {
+      color: #E84393;
+      text-decoration: none;
+      font-size: 0.85rem;
+      padding: 0;
+      border: none;
+    }
+    #install-info a:hover { text-decoration: underline; background: none; }
+    #auth-content {
+      opacity: 0;
+      text-align: center;
+    }
+    #auth-instructions { display: none; text-align: center; }
+    .auth-code {
+      font-size: 2rem;
+      font-weight: bold;
+      font-family: monospace;
+      color: #FF6B35;
+      background: rgba(42,42,74,0.8);
+      padding: 12px 24px;
+      border-radius: 8px;
+      display: inline-block;
+    }
+    #auth-overlay a:not(#home-btn):not(.install-link) {
+      color: #E84393;
+      text-decoration: none;
+      font-size: 1.1rem;
+      padding: 10px 20px;
+      border: 1px solid #E84393;
+      border-radius: 6px;
+      transition: background 0.2s;
+    }
+    #auth-overlay a:hover { background: #E8439320; }
+    .waiting { color: #888; font-size: 0.9rem; }
+    .btn-action {
+      color: #E84393;
+      font-size: 0.95rem;
+      padding: 8px 18px;
+      border: 1px solid #E84393;
+      border-radius: 6px;
+      cursor: pointer;
+      background: none;
+      transition: background 0.2s;
+    }
+    .btn-action:hover { background: #E8439320; }
+    .spinner {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 2px solid #888;
+      border-top: 2px solid #E84393;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Floating particles */
+    .particle {
+      position: absolute;
+      width: 3px;
+      height: 3px;
+      border-radius: 50%;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    #download-panel {
+      display: none;
+      position: fixed;
+      bottom: 0;
+      right: 0;
+      width: 360px;
+      max-height: 300px;
+      background: var(--dl-bg, #161622);
+      border-top: 1px solid var(--dl-accent, #E84393);
+      border-left: 1px solid var(--dl-accent, #E84393);
+      border-radius: 8px 0 0 0;
+      z-index: 200;
+      overflow-y: auto;
+      font-size: 0.85rem;
+      font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+    }
+    #download-panel .dl-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--dl-dim, #333);
+      position: sticky;
+      top: 0;
+      background: var(--dl-bg, #161622);
+    }
+    #download-panel .dl-header span { color: var(--dl-accent, #E84393); font-weight: bold; }
+    #download-panel .dl-header #dl-close-btn { color: var(--dl-error, #CC4444); font-weight: normal; }
+    #download-panel .dl-list { padding: 4px 0; }
+    #download-panel .dl-item {
+      display: block;
+      padding: 6px 12px;
+      color: var(--dl-label, #FF6B35);
+      text-decoration: none;
+      word-break: break-all;
+    }
+    #download-panel .dl-item:hover { background: var(--dl-hover, #2a2a3e); }
+    #error-message {
+      display: none;
+      color: #ff6b6b;
+      background: rgba(42,42,74,0.8);
+      padding: 16px 24px;
+      border-radius: 8px;
+      border: 1px solid #ff6b6b;
+      max-width: 600px;
+      text-align: center;
+    }
+    #doc-link-btn {
+      display: none;
+      background: none;
+      border: 1px solid #555;
+      color: #888;
+      font-size: 0.65rem;
+      font-family: monospace;
+      padding: 2px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      max-width: 280px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #doc-link-btn:hover { border-color: #E84393; color: #E84393; }
+    #session-ended { display: none; text-align: center; }
+    #session-ended p { color: #888; margin-bottom: 16px; }
+  </style>
+</head>
+<body>
+  <div id="auth-overlay">
+    <a id="home-btn" href="/">Home</a>
+    <!-- Particles will be injected here -->
+    <div id="society-the" style="display:none;font-size:1.4rem;color:#E84393;letter-spacing:8px;text-transform:uppercase;opacity:0;margin-bottom:8px">The</div>
+    <pre id="ascii-logo"><span class="logo-row" style="opacity:0"><span style="color:#FF6B35">███████╗                 </span><span style="color:#9B59B6">██╗  ██╗       ██╗   </span></span>
+<span class="logo-row" style="opacity:0"><span style="color:#FF6B35">██╔════╝██╗  ██╗ ██████╗ </span><span style="color:#9B59B6">██║  ██║██╗ ██╗██║   </span></span>
+<span class="logo-row" style="opacity:0"><span style="color:#FF6B35">█████╗  ╚██╗██╔╝██╔═══██╗</span><span style="color:#9B59B6">███████║██║ ██║██████╗ </span></span>
+<span class="logo-row" style="opacity:0"><span style="color:#FF6B35">██╔══╝  ██╔╝╚██╗██║   ██║</span><span style="color:#9B59B6">██╔══██║██║ ██║██╔══██╗</span></span>
+<span class="logo-row" style="opacity:0"><span style="color:#FF6B35">███████╗██║  ██║╚██████╔╝</span><span style="color:#9B59B6">██║  ██║╚████╔╝██████╔╝</span></span>
+<span class="logo-row" style="opacity:0"><span style="color:#FF6B35">╚══════╝╚═╝  ╚═╝ ╚═════╝ </span><span style="color:#9B59B6">╚═╝  ╚═╝ ╚═══╝ ╚═════╝ </span></span></pre>
+    <div id="subtitle">Atlas</div>
+    <div id="society-words">
+      <pre id="society-society" class="society-block" style="display:inline-block;vertical-align:middle;margin:8px 12px 0 0"><span style="color:#4FD1C5"> ██████╗  ██████╗  ██████╗██╗███████╗</span><span style="color:#E84393">████████╗██╗   ██╗</span>
+<span style="color:#4FD1C5">██╔════╝ ██╔═══██╗██╔════╝██║██╔════╝</span><span style="color:#E84393">╚══██╔══╝╚██╗ ██╔╝</span>
+<span style="color:#4FD1C5">╚█████╗  ██║   ██║██║     ██║█████╗ </span><span style="color:#E84393">    ██║    ╚████╔╝ </span>
+<span style="color:#4FD1C5"> ╚═══██╗ ██║   ██║██║     ██║██╔══╝ </span><span style="color:#E84393">    ██║     ╚██╔╝  </span>
+<span style="color:#4FD1C5">██████╔╝ ╚██████╔╝╚██████╗██║███████╗</span><span style="color:#E84393">   ██║      ██║   </span>
+<span style="color:#4FD1C5">╚═════╝   ╚═════╝  ╚═════╝╚═╝╚══════╝</span><span style="color:#E84393">   ╚═╝      ╚═╝   </span></pre>
+      <div id="society-of" style="display:inline-block;vertical-align:middle;font-size:1rem;color:#E84393;letter-spacing:6px;text-transform:uppercase;opacity:0;margin:0 12px">of</div>
+      <pre id="society-seekers" class="society-block" style="display:inline-block;vertical-align:middle;margin:8px 0 0 0"><span style="color:#F2C94C">███████╗███████╗███████╗██╗  ██╗</span><span style="color:#FF6B35">███████╗██████╗ ███████╗</span>
+<span style="color:#F2C94C">██╔════╝██╔════╝██╔════╝██║ ██╔╝</span><span style="color:#FF6B35">██╔════╝██╔══██╗██╔════╝</span>
+<span style="color:#F2C94C">███████╗█████╗  █████╗  █████╔╝ </span><span style="color:#FF6B35">█████╗  ██████╔╝███████╗</span>
+<span style="color:#F2C94C">╚════██║██╔══╝  ██╔══╝  ██╔═██╗ </span><span style="color:#FF6B35">██╔══╝  ██╔══██╗╚════██║</span>
+<span style="color:#F2C94C">███████║███████╗███████╗██║  ██╗</span><span style="color:#FF6B35">███████╗██║  ██║███████║</span>
+<span style="color:#F2C94C">╚══════╝╚══════╝╚══════╝╚═╝  ╚═╝</span><span style="color:#FF6B35">╚══════╝╚═╝  ╚═╝╚══════╝</span></pre>
+    </div>
+    <div id="seekers-readme-shell">
+      <div id="seekers-readme"><span id="seekers-readme-content"></span></div>
+    </div>
+    <div id="install-info">
+      <p>Install the <code>exo</code> CLI.<br>The same ExoHub experience. Anywhere.</p>
+      <p style="margin-top:12px"><code id="curl-cmd"></code> <span id="copy-cmd" title="Copy to clipboard" style="cursor:pointer;color:#888;font-size:0.65rem;border:1px solid #555;padding:1px 6px;border-radius:3px;vertical-align:middle;opacity:0">copy</span></p>
+      <p style="margin-top:12px"><a class="install-link" href="/docs/user-guide/installation/">Installation &amp; Setup</a> for more</p>
+      <p id="confidentiality-notice" style="margin-top:16px;font-size:0.75rem;color:#888;">
+        ⚠️ This system contains Roche confidential data (C3). Access is restricted to authorized personnel.<br>
+        <a id="confidentiality-link" href="#" style="color:#888;font-size:0.75rem;border:none;padding:0;">View confidentiality policy</a>
+      </p>
+    </div>
+    <div id="auth-content">
+      <div id="auth-instructions">
+        <p style="margin-bottom:12px;">Enter this code to authenticate:</p>
+        <div class="auth-code" id="auth-code"></div>
+        <p style="margin:16px 0;">
+          <a id="auth-link" href="#" target="_blank">Open authentication page</a>
+        </p>
+        <p class="waiting"><span class="spinner"></span>Waiting for authentication...</p>
+      </div>
+      <div id="connecting">
+        <p class="waiting"><span class="spinner"></span>Connecting...</p>
+      </div>
+      <div id="session-ended">
+        <p>Session ended</p>
+        <button class="btn-action" id="reconnect-btn">Reconnect</button>
+      </div>
+      <div id="error-message"></div>
+    </div>
+    <div id="bottom-walker-template" class="bottom-walker">
+      <div class="walker-shadow"></div>
+      <div class="walker-sprite">
+        <img class="walker-head" alt="profile sprite head">
+        <div class="walker-body"></div>
+      </div>
+    </div>
+  </div>
+  <span id="version-label" style="display:none;position:fixed;bottom:4px;right:6px;color:#555;font-size:0.65rem;font-family:monospace;z-index:100"></span>
+  <div id="toolbar">
+    <button id="doc-link-btn" style="display:none"></button>
+    <button id="select-btn">Select mode</button>
+    <button id="disconnect-btn">Disconnect</button>
+    <select id="theme-select"></select>
+    <button id="mode-btn" title="Toggle dark/light mode">☼</button>
+    <span style="display:inline-flex;gap:2px"><button id="font-s" class="font-btn" title="Small font">a</button><button id="font-m" class="font-btn" title="Medium font">a</button><button id="font-l" class="font-btn" title="Large font">a</button></span>
+    <div id="status-dot"></div>
+  </div>
+  <div id="download-panel">
+    <div class="dl-header">
+      <span>Downloads</span>
+      <span id="dl-close-btn" style="cursor:pointer;font-size:1rem;line-height:1" title="Close">✕</span>
+    </div>
+    <div class="dl-list" id="download-list"></div>
+  </div>
+  <div id="terminal-container"></div>
+
+  <script src="anime.min.js"></script>
+  <script src="xterm/xterm.js"></script>
+  <script src="xterm/xterm-addon-fit.js"></script>
+  <script>
+    window.EXOHUB_CATALOG_URL = "__EXOHUB_CATALOG_URL__";
+    window.EXOHUB_THEMES = __EXOHUB_THEMES__;
+  </script>
+  <script>
+    (function() {
+      // ── ASCII Logo Animation ──
+
+      // Create floating particles
+      var overlay = document.getElementById('auth-overlay');
+      var colors = ['#FF6B35', '#E84393', '#9B59B6'];
+      for (var i = 0; i < 50; i++) {
+        var p = document.createElement('div');
+        p.className = 'particle';
+        p.style.left = Math.random() * 100 + '%';
+        p.style.top = Math.random() * 100 + '%';
+        p.style.background = colors[Math.floor(Math.random() * colors.length)];
+        p.style.width = (2 + Math.random() * 3) + 'px';
+        p.style.height = p.style.width;
+        overlay.appendChild(p);
+      }
+
+      // Animate particles floating
+      anime({
+        targets: '.particle',
+        translateY: function() { return anime.random(-80, 80); },
+        translateX: function() { return anime.random(-40, 40); },
+        opacity: [0, function() { return 0.2 + Math.random() * 0.3; }],
+        duration: function() { return 3000 + Math.random() * 4000; },
+        delay: function() { return Math.random() * 2000; },
+        direction: 'alternate',
+        loop: true,
+        easing: 'easeInOutSine'
+      });
+
+      // Shake detection — spawn burst of particles on rapid mouse movement or window resize
+      function spawnBurst() {
+        if (overlay.style.display === 'none') return;
+          shakeHistory = [];
+          for (var j = 0; j < 15; j++) {
+            var sp = document.createElement('div');
+            sp.className = 'particle';
+            sp.style.left = Math.random() * 100 + '%';
+            sp.style.top = Math.random() * 100 + '%';
+            sp.style.background = colors[Math.floor(Math.random() * colors.length)];
+            var sz = (2 + Math.random() * 3) + 'px';
+            sp.style.width = sz;
+            sp.style.height = sz;
+            overlay.appendChild(sp);
+            anime({
+              targets: sp,
+              translateY: anime.random(-120, 120),
+              translateX: anime.random(-120, 120),
+              opacity: [0.4, 0],
+              scale: [1, 0],
+              duration: 5000 + Math.random() * 5000,
+              easing: 'easeOutExpo',
+              complete: function(anim) {
+                if (anim.animatables[0] && anim.animatables[0].target.parentNode) {
+                  anim.animatables[0].target.remove();
+                }
+              }
+            });
+          }
+      }
+
+      // Window resize shake
+      var shakeHistory = [];
+      window.addEventListener('resize', function() {
+        var now = Date.now();
+        shakeHistory.push(now);
+        shakeHistory = shakeHistory.filter(function(t) { return now - t < 500; });
+        if (shakeHistory.length >= 3) {
+          shakeHistory = [];
+          spawnBurst();
+        }
+      });
+
+      // Mouse shake — rapid direction changes
+      var lastMouseX = 0, lastMouseDir = 0, mouseDirChanges = [], lastMoveTime = 0;
+      overlay.addEventListener('mousemove', function(e) {
+        var now = Date.now();
+        var dx = e.clientX - lastMouseX;
+        var dir = dx > 0 ? 1 : dx < 0 ? -1 : 0;
+        if (dir !== 0 && dir !== lastMouseDir && lastMouseDir !== 0) {
+          mouseDirChanges.push(now);
+          mouseDirChanges = mouseDirChanges.filter(function(t) { return now - t < 400; });
+          if (mouseDirChanges.length >= 4) {
+            mouseDirChanges = [];
+            spawnBurst();
+          }
+        }
+        lastMouseX = e.clientX;
+        lastMouseDir = dir;
+        lastMoveTime = now;
+      });
+
+      // ── Click Crumble Effect ──
+      // Each click: chunks fall + dark scar remains where bg image was
+      overlay.addEventListener('click', function(e) {
+        if (overlay.style.display === 'none') return;
+        // Ignore clicks on buttons/links/install info
+        if (e.target.tagName === 'BUTTON' || e.target.tagName === 'A') return;
+        if (e.target.closest('#install-info')) return;
+
+        var rect = overlay.getBoundingClientRect();
+        var x = e.clientX - rect.left;
+        var y = e.clientY - rect.top;
+
+        // Leave a dark scar (permanent)
+        var count = 2 + Math.floor(Math.random() * 3);
+        for (var s = 0; s < count; s++) {
+          var scar = document.createElement('div');
+          var sw = 4 + Math.random() * 10;
+          var sh = 3 + Math.random() * 6;
+          scar.style.cssText = 'position:absolute;pointer-events:none;background:#161622;border-radius:1px;z-index:0;';
+          scar.style.left = (x + (Math.random() - 0.5) * 20) + 'px';
+          scar.style.top = (y + (Math.random() - 0.5) * 15) + 'px';
+          scar.style.width = sw + 'px';
+          scar.style.height = sh + 'px';
+          scar.style.opacity = '0';
+          overlay.appendChild(scar);
+          anime({
+            targets: scar,
+            opacity: [0, 0.8 + Math.random() * 0.2],
+            duration: 300,
+            delay: 200 + Math.random() * 200,
+            easing: 'easeOutQuad'
+          });
+        }
+
+        // Falling chunks
+        var chunkCount = 3 + Math.floor(Math.random() * 4);
+        for (var j = 0; j < chunkCount; j++) {
+          var chunk = document.createElement('div');
+          chunk.style.cssText = 'position:absolute;pointer-events:none;border-radius:1px;z-index:2;';
+          chunk.style.left = (x + (Math.random() - 0.5) * 16) + 'px';
+          chunk.style.top = (y + (Math.random() - 0.5) * 12) + 'px';
+          var size = 2 + Math.random() * 4;
+          chunk.style.width = size + 'px';
+          chunk.style.height = size + 'px';
+          chunk.style.background = colors[Math.floor(Math.random() * colors.length)];
+          chunk.style.opacity = '0.4';
+          overlay.appendChild(chunk);
+          anime({
+            targets: chunk,
+            translateX: (Math.random() - 0.5) * 30,
+            translateY: [0, 100 + Math.random() * 150],
+            rotate: Math.random() * 360,
+            opacity: [0.4, 0],
+            duration: 800 + Math.random() * 600,
+            easing: 'easeInQuad',
+            complete: function(anim) {
+              if (anim.animatables[0] && anim.animatables[0].target.parentNode) {
+                anim.animatables[0].target.remove();
+              }
+            }
+          });
+        }
+      });
+
+      // ── Animation System ──
+      var logoEl = document.getElementById('ascii-logo');
+      logoEl.style.opacity = '1';
+
+      function getAnimationPool(targets, options) {
+        options = options || {};
+        var baseDelay = options.delay || 0;
+        var staggered = !!options.stagger;
+
+        function delayFor(step, start, from) {
+          if (staggered) {
+            return anime.stagger(step, { start: baseDelay + start, from: from });
+          }
+          return baseDelay + start;
+        }
+
+        return [
+          // 1. Typewriter: rows appear left-to-right with a cursor sweep
+          function() {
+            anime({ targets: targets, opacity: [0,1], duration: 1,
+              delay: delayFor(120, 100), easing: 'linear' });
+            anime({ targets: targets, clipPath: ['inset(0 100% 0 0)', 'inset(0 0% 0 0)'],
+              duration: 600, delay: delayFor(120, 100), easing: 'easeOutQuad' });
+          },
+          // 2. Matrix rain: rows drop in from above with slight bounce
+          function() {
+            anime({ targets: targets, opacity: [0,1], translateY: [-40, 0],
+              duration: 700, delay: delayFor(80, 150), easing: 'easeOutBounce' });
+          },
+          // 3. Scan-line: a horizontal light sweep reveals the logo
+          function() {
+            anime({ targets: targets, opacity: [0,1], duration: 1,
+              delay: delayFor(60, 100), easing: 'linear' });
+            anime({ targets: targets,
+              textShadow: ['0 0 20px #E84393', '0 0 0px #E84393'],
+              duration: 400, delay: delayFor(60, 100), easing: 'easeOutQuad' });
+            anime({ targets: targets, filter: ['brightness(3)', 'brightness(1)'],
+              duration: 500, delay: delayFor(60, 100), easing: 'easeOutQuad' });
+          },
+          // 4. Explode in: rows scale from tiny at center
+          function() {
+            anime({ targets: targets, opacity: [0,1], scaleX: [0, 1], scaleY: [0.3, 1],
+              duration: 600, delay: delayFor(70, 200, 'center'),
+              easing: 'easeOutBack' });
+          },
+          // 5. Glitch: rows appear with random horizontal offsets then snap into place
+          function() {
+            anime({ targets: targets, opacity: [0,1], duration: 1, delay: baseDelay + 100 });
+            anime({ targets: targets,
+              translateX: function() { return [anime.random(-60, 60), 0]; },
+              duration: 400, delay: delayFor(50, 200), easing: 'easeOutExpo' });
+            anime({ targets: targets,
+              translateX: function() { return [anime.random(-20, 20), 0]; },
+              duration: 200, delay: delayFor(30, 600), easing: 'easeOutQuad' });
+          },
+          // 6. Fade spiral: rows fade in with rotation from alternating sides
+          function() {
+            anime({ targets: targets, opacity: [0,1],
+              translateX: function(el, i) { return [i % 2 === 0 ? -80 : 80, 0]; },
+              rotate: function(el, i) { return [i % 2 === 0 ? -8 : 8, 0]; },
+              duration: 700, delay: delayFor(90, 150), easing: 'easeOutCubic' });
+          },
+          // 7. Wave ripple: rows slide up with a wave-like timing
+          function() {
+            anime({ targets: targets, opacity: [0,1], translateY: [30, 0],
+              duration: 600, delay: delayFor(100, 100, 'center'),
+              easing: 'easeOutElastic(1, .5)' });
+          },
+          // 8. Shutter blinds: rows clip open like venetian blinds
+          function() {
+            anime({ targets: targets, opacity: [0,1], duration: 1,
+              delay: delayFor(80, 100), easing: 'linear' });
+            anime({ targets: targets,
+              clipPath: ['inset(50% 0 50% 0)', 'inset(0% 0 0% 0)'],
+              duration: 500, delay: delayFor(80, 100), easing: 'easeOutQuad' });
+          },
+          // 9. Pixel assemble: rows appear scattered then snap together
+          function() {
+            anime({ targets: targets, opacity: [0,1],
+              translateX: function() { return [anime.random(-100, 100), 0]; },
+              translateY: function() { return [anime.random(-50, 50), 0]; },
+              scale: [0.5, 1],
+              duration: 800, delay: delayFor(60, 100), easing: 'easeOutExpo' });
+          },
+          // 10. Gravity drop: rows fall from top one by one, slight squash on landing
+          function() {
+            anime({ targets: targets, opacity: [0,1],
+              translateY: [-200, 0], scaleY: [1, 0.9, 1], scaleX: [1, 1.05, 1],
+              duration: 500, delay: delayFor(70, 100),
+              easing: 'easeInQuad' });
+          }
+        ];
+      }
+
+      function runRandomAnimation(targets, options) {
+        var animationPool = getAnimationPool(targets, options);
+        animationPool[Math.floor(Math.random() * animationPool.length)]();
+      }
+
+      runRandomAnimation('.logo-row', { stagger: true });
+
+      // Subtitle fade in
+      anime({
+        targets: '#subtitle',
+        opacity: [0, 1],
+        translateY: [15, 0],
+        letterSpacing: ['12px', '6px'],
+        duration: 800,
+        delay: 1200,
+        easing: 'easeOutExpo'
+      });
+
+      // Install info fade in
+      anime({
+        targets: '#install-info',
+        opacity: [0, 0.8],
+        translateY: [10, 0],
+        duration: 600,
+        delay: 1400,
+        easing: 'easeOutExpo'
+      });
+
+      // Typing animation for curl command
+      (function() {
+        var cmd = 'curl -sSL https://github.com/exohub/exo-cli/releases/latest/download/install.sh | bash';
+        var el = document.getElementById('curl-cmd');
+        var i = 0;
+        setTimeout(function type() {
+          if (i <= cmd.length) {
+            el.textContent = cmd.slice(0, i) + '█';
+            i++;
+            setTimeout(type, 20 + Math.random() * 80);
+          } else {
+            el.textContent = cmd;
+            var copyBtn = document.getElementById('copy-cmd');
+            copyBtn.style.opacity = '1';
+            copyBtn.onclick = function() {
+              var done = function() {
+                copyBtn.textContent = 'copied!';
+                copyBtn.style.color = '#2ecc71';
+                setTimeout(function() { copyBtn.textContent = 'copy'; copyBtn.style.color = '#888'; }, 1500);
+              };
+              if (navigator.clipboard) {
+                navigator.clipboard.writeText(cmd).then(done);
+              } else {
+                var ta = document.createElement('textarea');
+                ta.value = cmd;
+                ta.style.position = 'fixed';
+                ta.style.opacity = '0';
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+                done();
+              }
+            };
+          }
+        }, 1800);
+      })();
+
+      // Set confidentiality link URL from current host
+      (function() {
+        var link = document.getElementById('confidentiality-link');
+        if (link) link.href = location.origin + '/confidentiality';
+      })();
+
+      // Auth content fade in
+      anime({
+        targets: '#auth-content',
+        opacity: [0, 1],
+        translateY: [10, 0],
+        duration: 600,
+        delay: 1600,
+        easing: 'easeOutExpo'
+      });
+
+      // Subtle continuous glow pulse
+      anime({
+        targets: '#ascii-logo',
+        textShadow: ['0 0 0px #E84393', '0 0 12px #E8439340'],
+        duration: 3000, delay: 2000,
+        direction: 'alternate', loop: true, easing: 'easeInOutSine'
+      });
+
+      // ── App Logic ──
+      var authOverlay = document.getElementById('auth-overlay');
+      var authInstructions = document.getElementById('auth-instructions');
+      var connectingEl = document.getElementById('connecting');
+      var sessionEndedEl = document.getElementById('session-ended');
+      var termContainer = document.getElementById('terminal-container');
+      var errorEl = document.getElementById('error-message');
+      var toolbar = document.getElementById('toolbar');
+      var statusDot = document.getElementById('status-dot');
+      var disconnectBtn = document.getElementById('disconnect-btn');
+      var selectBtn = document.getElementById('select-btn');
+      var landingThemeSelect = document.getElementById('landing-theme-select');
+      var themeSelect = document.getElementById('theme-select');
+      var modeBtn = document.getElementById('mode-btn');
+      var downloadPanel = document.getElementById('download-panel');
+      var downloadList = document.getElementById('download-list');
+      var docLinkBtn = document.getElementById('doc-link-btn');
+      var currentDocUrl = '';
+      var selectMode = false;
+
+      // --- Theme/mode setup ---
+      var savedTheme = localStorage.getItem('exo-theme') || '';
+      var savedMode = localStorage.getItem('exo-theme-mode') || 'dark';
+      if (savedMode === 'auto') savedMode = 'dark';
+      var modeIcons = {dark: '☽', light: '☀'};
+      var modeCycle = {dark: 'light', light: 'dark'};
+
+      function populateThemeSelect(el) {
+        (window.EXOHUB_THEMES || []).forEach(function(t) {
+          var opt = document.createElement('option');
+          opt.value = t.name;
+          opt.textContent = t.name;
+          if (t.name === savedTheme) opt.selected = true;
+          el.appendChild(opt);
+        });
+        if (!savedTheme && el.options.length > 0) el.options[0].selected = true;
+      }
+      function setupModeBtn(btn) {
+        btn.textContent = modeIcons[savedMode] || modeIcons.auto;
+        btn.title = 'Theme mode: ' + savedMode;
+        btn.addEventListener('click', function() {
+          var next = modeCycle[savedMode] || 'auto';
+          localStorage.setItem('exo-theme-mode', next);
+          location.reload();
+        });
+      }
+      function onThemeChange(el) {
+        el.addEventListener('change', function() {
+          localStorage.setItem('exo-theme', el.value);
+          location.reload();
+        });
+      }
+
+      // Theme controls (in toolbar, visible on landing + after auth)
+      populateThemeSelect(themeSelect);
+      setupModeBtn(modeBtn);
+      onThemeChange(themeSelect);
+
+      // Font size controls
+      var fontSizes = {s: 11, m: 14, l: 18};
+      var savedFontSize = localStorage.getItem('exo-font-size') || 'm';
+      ['s', 'm', 'l'].forEach(function(size) {
+        var btn = document.getElementById('font-' + size);
+        if (size === savedFontSize) btn.classList.add('active');
+        btn.addEventListener('click', function() {
+          localStorage.setItem('exo-font-size', size);
+          if (term) {
+            term.options.fontSize = fontSizes[size];
+            if (fitAddon) fitAddon.fit();
+            sendResize(activeWs);
+          }
+          document.querySelectorAll('.font-btn').forEach(function(b) { b.classList.remove('active'); });
+          btn.classList.add('active');
+        });
+      });
+
+      // Show toolbar immediately so theme controls are visible on landing page
+      toolbar.style.display = 'flex';
+
+      // Set CSS custom properties from the active theme
+      (function() {
+        var themes = window.EXOHUB_THEMES || [];
+        var name = savedTheme || (themes[0] && themes[0].name) || '';
+        var mode = savedMode === 'light' ? 'light' : 'dark';
+        var t = null;
+        for (var i = 0; i < themes.length; i++) {
+          if (themes[i].name === name) { t = themes[i]; break; }
+        }
+        if (!t && themes.length > 0) t = themes[0];
+        if (t) {
+          var r = document.documentElement.style;
+          r.setProperty('--dl-accent', t.accent[mode]);
+          r.setProperty('--dl-label', t.label[mode]);
+          r.setProperty('--dl-error', t.error[mode]);
+          r.setProperty('--dl-dim', t.dim[mode]);
+          r.setProperty('--dl-bg', t.codeBg[mode]);
+          r.setProperty('--dl-hover', t.codeBg[mode] + '80');
+        }
+      })();
+
+      var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      // Derive base path from the page URL (e.g. /atlas/ → /atlas)
+      var basePath = location.pathname.replace(/\/+$/, '').replace(/\/index\.html$/, '');
+      var urlParams = new URLSearchParams(location.search);
+      var docParam = urlParams.get('doc');
+      var wsParams = new URLSearchParams();
+      if (docParam) wsParams.set('doc', docParam);
+      ['q', 'query', 'sort', 'fields', 'size', 'latest', 'schema', 'project', 'version'].forEach(function(k) {
+        var v = urlParams.get(k);
+        if (v) wsParams.set(k, v);
+      });
+      if (savedTheme) wsParams.set('theme', savedTheme);
+      wsParams.set('theme_mode', savedMode);
+      var wsQS = wsParams.toString();
+      var wsURL = proto + '//' + location.host + basePath + '/ws' + (wsQS ? '?' + wsQS : '');
+
+      var term = null;
+      var fitAddon = null;
+      var activeWs = null;
+      var animationStart = Date.now();
+      var minAnimationMs = 2500;
+      var navigatingForward = false; // suppress pushState during forward nav
+      var currentSearchUrl = '';    // current search URL for browser bar
+      var pendingWs = null;       // WS to start terminal with after animation
+      var pendingData = [];       // binary frames buffered during animation
+
+      function addDownload(url, filename) {
+        if (downloadList.children.length === 1 && !downloadList.querySelector('.dl-item')) {
+          downloadList.innerHTML = '';
+        }
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = filename || '';
+        a.className = 'dl-item';
+        a.textContent = filename || 'Download';
+        a.target = '_blank';
+        downloadList.insertBefore(a, downloadList.firstChild);
+        downloadPanel.style.display = 'block';
+        if (downloadList.children.length === 1) {
+          a.click();
+        }
+      }
+
+      function toggleDownloadPanel() {
+        if (downloadPanel.style.display === 'block') {
+          downloadPanel.style.display = 'none';
+        } else {
+          if (downloadList.children.length === 0) {
+            downloadList.innerHTML = '<div style="padding:12px;color:#555;text-align:center">No downloads yet</div>';
+          }
+          downloadPanel.style.display = 'block';
+        }
+      }
+
+      function toggleSelectMode() {
+        selectMode = !selectMode;
+        if (selectMode) {
+          // Disable mouse reporting → text selection works
+          if (term) term.write('\x1b[?1002l\x1b[?1006l');
+          selectBtn.classList.add('active');
+          selectBtn.textContent = 'Select mode ON';
+        } else {
+          // Re-enable mouse reporting → clicks work
+          if (term) term.write('\x1b[?1002h\x1b[?1006h');
+          selectBtn.classList.remove('active');
+          selectBtn.textContent = 'Select mode';
+          if (term) term.focus();
+        }
+      }
+
+      function showError(msg) {
+        connectingEl.style.display = 'none';
+        authInstructions.style.display = 'none';
+        sessionEndedEl.style.display = 'none';
+        errorEl.textContent = msg;
+        errorEl.style.display = 'block';
+      }
+
+      function cleanupTerminal() {
+        if (term) {
+          term.dispose();
+          term = null;
+          fitAddon = null;
+        }
+        termContainer.style.display = 'none';
+        termContainer.innerHTML = '';
+        disconnectBtn.style.display = 'none';
+        selectBtn.style.display = 'none';
+        downloadPanel.style.display = 'none';
+        docLinkBtn.style.display = 'none';
+        themeSelect.style.display = '';
+        modeBtn.style.display = '';
+        // Reset select mode
+        selectMode = false;
+        selectBtn.classList.remove('active');
+        selectBtn.textContent = 'Select mode';
+      }
+
+      function showSessionEnded() {
+        cleanupTerminal();
+        statusDot.className = 'disconnected';
+        connectingEl.style.display = 'none';
+        authInstructions.style.display = 'none';
+        errorEl.style.display = 'none';
+        sessionEndedEl.style.display = 'block';
+        authOverlay.style.display = 'flex';
+      }
+
+      function startTerminal(ws) {
+        // Fade out the overlay
+        anime({
+          targets: '#auth-overlay',
+          opacity: [1, 0],
+          duration: 400,
+          easing: 'easeInQuad',
+          complete: function() {
+            authOverlay.style.display = 'none';
+            authOverlay.style.opacity = '1';
+          }
+        });
+        termContainer.style.display = 'block';
+        disconnectBtn.style.display = 'block';
+        selectBtn.style.display = 'block';
+        themeSelect.style.display = 'none';
+        modeBtn.style.display = 'none';
+        document.getElementById('version-label').style.display = 'block';
+        toolbar.style.display = 'flex';
+
+        var isLight = savedMode === 'light';
+        var xtermTheme = isLight
+          ? { background: '#FFFFFF', foreground: '#333333', cursor: '#E84393', selectionBackground: '#E8439340' }
+          : { background: '#161622', foreground: '#e0e0e0', cursor: '#E84393', selectionBackground: '#E8439340' };
+        if (isLight) {
+          document.body.style.background = '#FFFFFF';
+          termContainer.style.background = '#FFFFFF';
+        }
+
+        term = new Terminal({
+          cursorBlink: true,
+          fontSize: fontSizes[savedFontSize] || 14,
+          fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
+          theme: xtermTheme,
+        });
+        fitAddon = new FitAddon.FitAddon();
+        term.loadAddon(fitAddon);
+        term.open(termContainer);
+        fitAddon.fit();
+        term.focus();
+
+        sendResize(ws);
+
+        term.onData(function(data) {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(new TextEncoder().encode(data));
+          }
+        });
+
+        window.addEventListener('resize', function() {
+          if (fitAddon) {
+            fitAddon.fit();
+            sendResize(ws);
+          }
+        });
+
+        // Browser back/forward button navigation
+        window.addEventListener('popstate', function(e) {
+          if (!term || !ws || ws.readyState !== WebSocket.OPEN) return;
+          if (e.state && e.state.view === 'document') {
+            // Forward → tell PTY bridge to open the document
+            navigatingForward = true;
+            ws.send(JSON.stringify({ type: 'open-doc', code: e.state.doc }));
+            term.focus();
+          } else {
+            // Back → send Escape to return to stash
+            ws.send(new TextEncoder().encode('\x1b'));
+            term.focus();
+          }
+        });
+
+        // Push an initial history entry so the first back doesn't leave the page
+        history.replaceState({ view: 'stash' }, '');
+      }
+
+      function sendResize(ws) {
+        if (term && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: 'resize',
+            rows: term.rows,
+            cols: term.cols,
+          }));
+        }
+      }
+
+      function connect() {
+        var ws = new WebSocket(wsURL);
+        ws.binaryType = 'arraybuffer';
+        activeWs = ws;
+
+        ws.onopen = function() {
+          connectingEl.innerHTML = '<p class="waiting"><span class="spinner"></span>Preparing authentication...</p>';
+          connectingEl.style.display = 'block';
+          statusDot.className = 'connected';
+          toolbar.style.display = 'flex';
+        };
+
+        ws.onmessage = function(event) {
+          if (typeof event.data === 'string') {
+            var msg = JSON.parse(event.data);
+            switch (msg.type) {
+              case 'auth_required':
+                connectingEl.style.display = 'none';
+                authInstructions.style.display = 'block';
+                document.getElementById('auth-code').textContent = msg.code;
+                document.getElementById('auth-link').href = msg.url;
+                break;
+              case 'auth_done':
+                authInstructions.style.display = 'none';
+                connectingEl.style.display = 'none';
+                var elapsed = Date.now() - animationStart;
+                var wait = Math.max(0, minAnimationMs - elapsed);
+                pendingWs = ws;
+                setTimeout(function() {
+                  startTerminal(pendingWs);
+                  for (var k = 0; k < pendingData.length; k++) {
+                    term.write(new Uint8Array(pendingData[k]));
+                  }
+                  pendingData = [];
+                  pendingWs = null;
+                }, wait);
+                break;
+              case 'download':
+                addDownload(msg.url, msg.code);
+                break;
+              case 'toggle-downloads':
+                toggleDownloadPanel();
+                break;
+              case 'doc-link':
+                currentDocUrl = location.origin + location.pathname + '?doc=' + encodeURIComponent(msg.code);
+                docLinkBtn.textContent = 'Copy link';
+                docLinkBtn.style.display = 'block';
+                // Push browser history so back button returns to stash
+                // (skip if this was triggered by forward navigation — URL already correct)
+                if (navigatingForward) {
+                  navigatingForward = false;
+                } else {
+                  history.pushState({ view: 'document', doc: msg.code }, '', '?doc=' + encodeURIComponent(msg.code));
+                }
+                break;
+              case 'doc-link-hide':
+                docLinkBtn.style.display = 'none';
+                currentDocUrl = '';
+                // Restore stash URL with search params (if any)
+                history.replaceState({ view: 'stash' }, '', currentSearchUrl || location.pathname);
+                break;
+              case 'search-params':
+                // msg.code contains URL-encoded params: q=text&schema=...&latest=true
+                var sp = new URLSearchParams(msg.code || '');
+                currentSearchUrl = location.pathname + (sp.toString() ? '?' + sp.toString() : '');
+                history.replaceState({ view: 'stash' }, '', currentSearchUrl);
+                break;
+              case 'clipboard':
+                var clipUrl = location.origin + location.pathname + '?doc=' + encodeURIComponent(msg.code);
+                docLinkBtn.textContent = clipUrl;
+                docLinkBtn.style.maxWidth = '600px';
+                docLinkBtn.style.color = '#FF6B35';
+                docLinkBtn.style.borderColor = '#FF6B35';
+                setTimeout(function() {
+                  docLinkBtn.textContent = 'Copy link';
+                  docLinkBtn.style.maxWidth = '';
+                  docLinkBtn.style.color = '';
+                  docLinkBtn.style.borderColor = '';
+                }, 5000);
+                break;
+              case 'copy-content':
+                navigator.clipboard.writeText(atob(msg.code));
+                break;
+              case 'toggle-select':
+                toggleSelectMode();
+                break;
+              case 'error':
+                showError(msg.error);
+                break;
+            }
+          } else {
+            if (pendingWs) {
+              // Animation still playing — buffer the data
+              pendingData.push(event.data);
+            } else if (term) {
+              term.write(new Uint8Array(event.data));
+            } else {
+              startTerminal(ws);
+              term.write(new Uint8Array(event.data));
+            }
+          }
+        };
+
+        ws.onclose = function() {
+          statusDot.className = 'disconnected';
+          if (term) {
+            showSessionEnded();
+          }
+        };
+
+        ws.onerror = function() {
+          showError('WebSocket connection failed. Please refresh to retry.');
+        };
+      }
+
+      docLinkBtn.addEventListener('click', function() {
+        if (!currentDocUrl) return;
+        var ta = document.createElement('textarea');
+        ta.value = currentDocUrl;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        docLinkBtn.textContent = 'Copied!';
+        setTimeout(function() { docLinkBtn.textContent = 'Copy link'; }, 1500);
+        term.focus();
+      });
+
+      disconnectBtn.addEventListener('click', function() {
+        if (activeWs) {
+          activeWs.close();
+        }
+      });
+
+      selectBtn.addEventListener('click', function() {
+        toggleSelectMode();
+      });
+
+      document.getElementById('dl-close-btn').addEventListener('click', function() {
+        downloadPanel.style.display = 'none';
+      });
+
+      document.getElementById('reconnect-btn').addEventListener('click', function() {
+        sessionEndedEl.style.display = 'none';
+        connectingEl.innerHTML = '<p class="waiting"><span class="spinner"></span>Reconnecting...</p>';
+        connectingEl.style.display = 'block';
+        connect();
+      });
+
+      connect();
+
+      // ── Bottom Walker ──
+      var walkerTemplate = document.getElementById('bottom-walker-template');
+      var walkerWidth = 112;
+      var walkerSpriteBase = new Image();
+      walkerSpriteBase.src = 'walker_body_sheet.png';
+      var walkerSpriteCache = {};
+      var pickaxeSpriteUrl = null;
+      var briefcaseSpriteUrl = null;
+
+      function buildPickaxeSprite() {
+        if (pickaxeSpriteUrl) return pickaxeSpriteUrl;
+        var c = document.createElement('canvas');
+        c.width = 7; c.height = 11;
+        var ctx = c.getContext('2d');
+        var steel = [180,185,195], mid = [140,148,160], dark = [100,108,120];
+        var brown = [139,105,20], dbrown = [107,78,18], lbrown = [165,130,50];
+        var px = function(x, y, rgb) { var d = ctx.createImageData(1,1); d.data.set([rgb[0],rgb[1],rgb[2],255]); ctx.putImageData(d,x,y); };
+        for (var y = 0; y <= 5; y++) px(3, y, y % 2 === 0 ? lbrown : brown);
+        px(0,6,dark); px(3,6,lbrown); px(6,6,dark);
+        px(0,7,dark); px(1,7,mid); px(3,7,brown); px(5,7,mid); px(6,7,dark);
+        px(1,8,mid); px(2,8,steel); px(3,8,dbrown); px(4,8,steel); px(5,8,mid);
+        px(1,9,mid); px(2,9,steel); px(3,9,dbrown); px(4,9,steel); px(5,9,mid);
+        px(2,10,steel); px(3,10,mid); px(4,10,steel);
+        pickaxeSpriteUrl = c.toDataURL('image/png');
+        return pickaxeSpriteUrl;
+      }
+
+      function buildBriefcaseSprite() {
+        if (briefcaseSpriteUrl) return briefcaseSpriteUrl;
+        var c = document.createElement('canvas');
+        c.width = 9; c.height = 7;
+        var ctx = c.getContext('2d');
+        var blk = [28,28,32], dblk = [18,18,22], edge = [42,42,48], gold = [190,150,20], handle = [22,22,26];
+        var px = function(x, y, rgb) { var d = ctx.createImageData(1,1); d.data.set([rgb[0],rgb[1],rgb[2],255]); ctx.putImageData(d,x,y); };
+        px(4,0,handle); px(5,0,handle);
+        for (var x = 0; x < 9; x++) { px(x,1,edge); px(x,6,edge); }
+        for (var y = 2; y <= 5; y++) { px(0,y,edge); px(8,y,edge); for (var x = 1; x < 8; x++) px(x, y, y === 2 ? dblk : blk); }
+        px(4,3,gold); px(5,3,gold);
+        briefcaseSpriteUrl = c.toDataURL('image/png');
+        return briefcaseSpriteUrl;
+      }
+
+      var injectedCatalogBase = window.EXOHUB_CATALOG_URL;
+      var catalogBase = (!injectedCatalogBase || String(injectedCatalogBase).indexOf('__EXOHUB_CATALOG_URL__') !== -1)
+        ? ''
+        : String(injectedCatalogBase).replace(/\/+$/, '');
+      if (!catalogBase) {
+        var catalogNotice = document.getElementById('catalog-not-configured');
+        if (catalogNotice) { catalogNotice.style.display = 'block'; }
+        var catalogDependent = document.querySelectorAll('.catalog-dependent');
+        for (var i = 0; i < catalogDependent.length; i++) { catalogDependent[i].style.display = 'none'; }
+      }
+      var spriteRolePlan = [
+        {
+          key: 'builder',
+          role: 'builder',
+          pauseMin: 2000,
+          pauseMax: 3000,
+          query: 'metadata.role=builder AND metadata.tag:8bit AND _extra.project_id:"exohub-society"',
+          fields: '_extra.id'
+        },
+        {
+          key: 'salesman',
+          role: 'salesman',
+          pauseMin: 10000,
+          pauseMax: 15000,
+          query: 'metadata.role=salesman AND metadata.tag:8bit AND _extra.project_id:"exohub-society"',
+          fields: '_extra.id'
+        },
+        {
+          key: 'user-exocoin',
+          role: 'user',
+          pauseMin: 2000,
+          pauseMax: 3000,
+          query: 'metadata.role=user AND metadata.tag:8bit AND _extra.project_id:"exohub-society" AND _exists_:metadata.exocoin',
+          fields: '_extra.id,metadata.exocoin,commits.committer_date'
+        },
+        {
+          key: 'user-join',
+          role: 'user',
+          pauseMin: 2000,
+          pauseMax: 3000,
+          query: 'metadata.role=user AND metadata.tag:8bit AND _extra.project_id:"exohub-society"',
+          fields: '_extra.id,metadata.exocoin,commits.committer_date',
+          sort: '-commits.committer_date'
+        }
+      ];
+      var spriteSequence = {
+        profilesByRole: {},
+        roleIndex: 0,
+        profileIndex: 0,
+        loading: false,
+        nextStartAt: Number.POSITIVE_INFINITY,
+        currentRole: null,
+        currentRoleExhausted: false,
+        currentRolePauseReadyAt: 0,
+        waitingForRoleThreshold: '',
+        usedProfileIds: {}
+      };
+      var walkersUnlocked = false;
+      var activeWalkers = [];
+      var seekersReadmeStarted = false;
+      var seekersReadmeCache = null;
+      var seekersReadmeShell = document.getElementById('seekers-readme-shell');
+      var seekersReadmeEl = document.getElementById('seekers-readme');
+      var seekersReadmeContent = document.getElementById('seekers-readme-content');
+
+      walkerTemplate.classList.add('hidden');
+
+      function hslToRgb(h, s, l) {
+        h = ((h % 360) + 360) % 360;
+        s /= 100;
+        l /= 100;
+        var c = (1 - Math.abs(2 * l - 1)) * s;
+        var x = c * (1 - Math.abs((h / 60) % 2 - 1));
+        var m = l - c / 2;
+        var rgb = [0, 0, 0];
+
+        if (h < 60) rgb = [c, x, 0];
+        else if (h < 120) rgb = [x, c, 0];
+        else if (h < 180) rgb = [0, c, x];
+        else if (h < 240) rgb = [0, x, c];
+        else if (h < 300) rgb = [x, 0, c];
+        else rgb = [c, 0, x];
+
+        return [
+          Math.round((rgb[0] + m) * 255),
+          Math.round((rgb[1] + m) * 255),
+          Math.round((rgb[2] + m) * 255),
+          255
+        ];
+      }
+
+      function randomWalkerPalette() {
+        var shirtHue = Math.random() * 360;
+        var pantsHue = Math.random() * 360;
+        var bootHue = Math.random() * 360;
+        var beltHue = Math.random() * 360;
+
+        return {
+          shirtDark: hslToRgb(shirtHue, 12 + Math.random() * 28, 30 + Math.random() * 10),
+          shirtMid: hslToRgb(shirtHue, 18 + Math.random() * 34, 42 + Math.random() * 10),
+          shirtLight: hslToRgb(shirtHue, 16 + Math.random() * 30, 58 + Math.random() * 10),
+          belt: hslToRgb(beltHue, 18 + Math.random() * 36, 22 + Math.random() * 12),
+          buckle: hslToRgb(35 + Math.random() * 30, 70 + Math.random() * 20, 50 + Math.random() * 12),
+          pantsDark: hslToRgb(pantsHue, 20 + Math.random() * 28, 18 + Math.random() * 10),
+          pantsMid: hslToRgb(pantsHue, 18 + Math.random() * 26, 28 + Math.random() * 12),
+          boots: hslToRgb(bootHue, 24 + Math.random() * 30, 12 + Math.random() * 10)
+        };
+      }
+
+      function paletteKey(palette) {
+        return JSON.stringify(palette);
+      }
+
+      function buildWalkerSprite(palette) {
+        if (!walkerSpriteBase.complete || !walkerSpriteBase.naturalWidth) {
+          return 'walker_body_sheet.png';
+        }
+
+        var key = paletteKey(palette);
+        if (walkerSpriteCache[key]) return walkerSpriteCache[key];
+
+        var sourceCanvas = document.createElement('canvas');
+        sourceCanvas.width = walkerSpriteBase.naturalWidth;
+        sourceCanvas.height = walkerSpriteBase.naturalHeight;
+        var ctx = sourceCanvas.getContext('2d');
+        ctx.drawImage(walkerSpriteBase, 0, 0);
+
+        var imageData = ctx.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height);
+        var data = imageData.data;
+        var swaps = {
+          '98,106,118': palette.shirtDark,
+          '126,134,146': palette.shirtMid,
+          '151,159,170': palette.shirtLight,
+          '69,55,84': palette.belt,
+          '242,201,76': palette.buckle,
+          '33,39,48': palette.pantsDark,
+          '52,60,72': palette.pantsMid,
+          '18,21,29': palette.boots
+        };
+
+        for (var i = 0; i < data.length; i += 4) {
+          if (data[i + 3] === 0) continue;
+          var mapped = swaps[data[i] + ',' + data[i + 1] + ',' + data[i + 2]];
+          if (!mapped) continue;
+          data[i] = mapped[0];
+          data[i + 1] = mapped[1];
+          data[i + 2] = mapped[2];
+          data[i + 3] = mapped[3];
+        }
+
+        ctx.putImageData(imageData, 0, 0);
+        var url = sourceCanvas.toDataURL('image/png');
+        walkerSpriteCache[key] = url;
+        return url;
+      }
+
+      function randomBetween(min, max) {
+        return min + Math.random() * (max - min);
+      }
+
+      function sleep(ms) {
+        return new Promise(function(resolve) {
+          setTimeout(resolve, ms);
+        });
+      }
+
+      function parseCommitterDate(result) {
+        var commits = result && result.commits;
+        if (!commits) return '';
+        if (Array.isArray(commits)) {
+          if (!commits.length) return '';
+          var latest = commits[0];
+          return latest && latest.committer_date ? latest.committer_date : '';
+        }
+        return commits.committer_date || '';
+      }
+
+      function parseExocoin(result) {
+        var meta = result && result.metadata;
+        if (!meta || meta.exocoin == null) return null;
+        var value = parseInt(meta.exocoin, 10);
+        return Number.isNaN(value) ? null : value;
+      }
+
+      function extractMarkdownText(payload) {
+        if (!payload) return '';
+        if (typeof payload === 'string') return payload;
+
+        var candidates = [
+          payload.content,
+          payload.text,
+          payload.markdown,
+          payload.raw,
+          payload.body,
+          payload.value
+        ];
+
+        if (payload.metadata) {
+          candidates.push(
+            payload.metadata.content,
+            payload.metadata.text,
+            payload.metadata.markdown,
+            payload.metadata.raw,
+            payload.metadata.body
+          );
+        }
+
+        for (var i = 0; i < candidates.length; i++) {
+          if (typeof candidates[i] === 'string' && candidates[i].trim()) {
+            return candidates[i];
+          }
+        }
+
+        return '';
+      }
+
+      function extractFirstReadmeSection(markdown) {
+        var text = String(markdown || '').replace(/\r\n?/g, '\n').trim();
+        if (!text) return '';
+
+        var headingMatch = text.match(/^# .*\n+/);
+        if (headingMatch) {
+          text = text.slice(headingMatch[0].length);
+        }
+
+        var nextHeading = text.search(/\n#{1,6}\s+/);
+        if (nextHeading !== -1) {
+          text = text.slice(0, nextHeading);
+        }
+
+        return text
+          .replace(/^\s+|\s+$/g, '')
+          .replace(/[ \t]+\n/g, '\n')
+          .replace(/\n{3,}/g, '\n\n');
+      }
+
+      function typingDelayForChar(ch, nextCh) {
+        if (ch === '\n') {
+          return nextCh === '\n' ? 760 : 120;
+        }
+        if (ch === ',') return 280 + Math.random() * 140;
+        if (ch === ';' || ch === ':') return 360 + Math.random() * 150;
+        if (ch === '.' || ch === '!' || ch === '?') return 760 + Math.random() * 220;
+        return 34 + Math.random() * 52;
+      }
+
+      function escapeSeekersHtml(text) {
+        return String(text || '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
+      }
+
+      function renderSeekersReadmeMarkup(text) {
+        var paragraphs = String(text || '').split(/\n{2,}/);
+        var html = [];
+
+        for (var i = 0; i < paragraphs.length; i++) {
+          var paragraph = paragraphs[i];
+          if (!paragraph) continue;
+
+          var firstCharIndex = -1;
+          for (var j = 0; j < paragraph.length; j++) {
+            if (paragraph.charAt(j).trim()) {
+              firstCharIndex = j;
+              break;
+            }
+          }
+
+          if (firstCharIndex === -1) continue;
+
+          var leading = escapeSeekersHtml(paragraph.slice(0, firstCharIndex));
+          var firstChar = escapeSeekersHtml(paragraph.charAt(firstCharIndex));
+          var rest = escapeSeekersHtml(paragraph.slice(firstCharIndex + 1)).replace(/\n/g, '<br>');
+          html.push(
+            '<p>' +
+              leading +
+              '<span class="dropcap">' + firstChar + '</span>' +
+              rest +
+            '</p>'
+          );
+        }
+
+        html.push('<span id="seekers-readme-anchor" aria-hidden="true">&#8203;</span>');
+        return html.join('');
+      }
+
+      async function typeSeekersReadme(text) {
+        seekersReadmeContent.innerHTML = renderSeekersReadmeMarkup('');
+        for (var i = 0; i < text.length; i++) {
+          seekersReadmeContent.innerHTML = renderSeekersReadmeMarkup(text.slice(0, i + 1));
+          await sleep(typingDelayForChar(text.charAt(i), text.charAt(i + 1)));
+        }
+        seekersReadmeContent.innerHTML = renderSeekersReadmeMarkup(text);
+      }
+
+      async function fetchSeekersReadmeText() {
+        if (seekersReadmeCache !== null) {
+          return seekersReadmeCache;
+        }
+
+        try {
+          var searchParams = new URLSearchParams({
+            q: 'is_readme:true AND _extra.project_id:"exohub-society"',
+            latest: 'true',
+            '_extra.$schema': 'exohub-markdown',
+            size: '1'
+          });
+          var searchResp = await fetch(catalogBase + '/search?' + searchParams.toString());
+          if (!searchResp.ok) {
+            seekersReadmeCache = '';
+            return '';
+          }
+
+          var searchPayload = await searchResp.json();
+          var results = searchPayload.results || [];
+          var readmeId = results[0] && results[0]._extra && results[0]._extra.id;
+          if (!readmeId) {
+            seekersReadmeCache = '';
+            return '';
+          }
+
+          var metadataResp = await fetch(catalogBase + '/files/' + encodeURIComponent(readmeId) + '/metadata');
+          if (!metadataResp.ok) {
+            seekersReadmeCache = '';
+            return '';
+          }
+
+          var metadataPayload = await metadataResp.json();
+          seekersReadmeCache = extractFirstReadmeSection(extractMarkdownText(metadataPayload));
+          return seekersReadmeCache;
+        } catch (err) {
+          console.warn('seekers readme fetch failed', err);
+        }
+
+        seekersReadmeCache = '';
+        return '';
+      }
+
+      async function revealSeekersReadme() {
+        if (seekersReadmeStarted) return;
+        seekersReadmeStarted = true;
+
+        var sectionText = await fetchSeekersReadmeText();
+        if (!sectionText) return;
+
+        seekersReadmeShell.style.display = 'block';
+        anime({
+          targets: '#seekers-readme-shell',
+          opacity: [0, 1],
+          duration: 500,
+          easing: 'easeOutQuad'
+        });
+        anime({
+          targets: '#seekers-readme',
+          opacity: [0, 1],
+          translateY: [12, 0],
+          duration: 500,
+          easing: 'easeOutQuad'
+        });
+        await sleep(180);
+        typeSeekersReadme(sectionText);
+      }
+
+      async function fetchRoleProfiles(roleSpec) {
+        if (spriteSequence.profilesByRole[roleSpec.key]) {
+          return spriteSequence.profilesByRole[roleSpec.key];
+        }
+
+        var params = new URLSearchParams({
+          q: roleSpec.query,
+          latest: 'true',
+          '_extra.$schema': 'exohub-artifact',
+          fields: roleSpec.fields,
+          size: '1000'
+        });
+        if (roleSpec.sort) {
+          params.set('sort', roleSpec.sort);
+        }
+
+        try {
+          var resp = await fetch(catalogBase + '/search?' + params.toString());
+          if (!resp.ok) {
+            spriteSequence.profilesByRole[roleSpec.key] = [];
+            return [];
+          }
+
+          var payload = await resp.json();
+          var results = payload.results || [];
+          var profiles = [];
+          var seen = {};
+          for (var j = 0; j < results.length; j++) {
+            if (results[j] && results[j]._extra && results[j]._extra.id) {
+              var id = results[j]._extra.id;
+              if (!seen[id]) {
+                seen[id] = true;
+                profiles.push({
+                  id: id,
+                  src: catalogBase + '/files/' + encodeURIComponent(id),
+                  exocoin: parseExocoin(results[j]),
+                  committerDate: parseCommitterDate(results[j])
+                });
+              }
+            }
+          }
+
+          if (roleSpec.key === 'user-exocoin') {
+            profiles.sort(function(a, b) {
+              var coinDelta = (b.exocoin || 0) - (a.exocoin || 0);
+              if (coinDelta !== 0) return coinDelta;
+              return String(b.committerDate || '').localeCompare(String(a.committerDate || ''));
+            });
+          }
+
+          if (roleSpec.key === 'user-join') {
+            profiles = profiles.filter(function(profile) {
+              return !spriteSequence.usedProfileIds[profile.id];
+            });
+          }
+
+          spriteSequence.profilesByRole[roleSpec.key] = profiles;
+          return profiles;
+        } catch (err) {
+          console.warn('sprite search failed for role', roleSpec.key, err);
+        }
+
+        spriteSequence.profilesByRole[roleSpec.key] = [];
+        return [];
+      }
+
+      async function nextSpriteProfile() {
+        for (var attempts = 0; attempts < spriteRolePlan.length; attempts++) {
+          var roleSpec = spriteRolePlan[spriteSequence.roleIndex];
+          var profiles = await fetchRoleProfiles(roleSpec);
+          if (!profiles.length) {
+            spriteSequence.roleIndex = (spriteSequence.roleIndex + 1) % spriteRolePlan.length;
+            spriteSequence.profileIndex = 0;
+            continue;
+          }
+
+          if (spriteSequence.profileIndex >= profiles.length) {
+            spriteSequence.profileIndex = 0;
+          }
+
+          var startIndex = spriteSequence.profileIndex;
+          var profile = null;
+          var isFirstProfileForRole = startIndex === 0;
+
+          do {
+            var candidate = profiles[spriteSequence.profileIndex];
+            spriteSequence.profileIndex = (spriteSequence.profileIndex + 1) % profiles.length;
+            if (spriteSequence.usedProfileIds[candidate.id]) {
+              continue;
+            }
+            var alreadyActive = activeWalkers.some(function(walker) {
+              return walker.profileId === candidate.id;
+            });
+            if (!alreadyActive) {
+              profile = candidate;
+              break;
+            }
+          } while (spriteSequence.profileIndex !== startIndex);
+
+          if (!profile) {
+            spriteSequence.roleIndex = (spriteSequence.roleIndex + 1) % spriteRolePlan.length;
+            spriteSequence.profileIndex = 0;
+            continue;
+          }
+
+          spriteSequence.currentRole = roleSpec;
+          if (isFirstProfileForRole) {
+            spriteSequence.currentRolePauseReadyAt = performance.now() + randomBetween(roleSpec.pauseMin, roleSpec.pauseMax);
+          }
+          return {
+            profile: profile,
+            roleSpec: roleSpec,
+            profiles: profiles
+          };
+        }
+
+        return null;
+      }
+
+      function hasRemainingProfilesForRole(roleSpec, profiles) {
+        for (var i = 0; i < profiles.length; i++) {
+          var candidate = profiles[(spriteSequence.profileIndex + i) % profiles.length];
+          if (spriteSequence.usedProfileIds[candidate.id]) {
+            continue;
+          }
+          var alreadyActive = activeWalkers.some(function(walker) {
+            return walker.profileId === candidate.id;
+          });
+          if (!alreadyActive) {
+            return true;
+          }
+        }
+        return false;
+      }
+
+      function roleReadyForNextBatch(roleKey) {
+        if (!roleKey) return true;
+        var thresholdX = (roleKey === 'builder' || roleKey === 'salesman')
+          ? window.innerWidth / 10
+          : window.innerWidth / 4;
+        var minX = Number.POSITIVE_INFINITY;
+        for (var i = 0; i < activeWalkers.length; i++) {
+          if (activeWalkers[i].roleKey === roleKey) {
+            minX = Math.min(minX, activeWalkers[i].x);
+          }
+        }
+        if (!Number.isFinite(minX)) return true;
+        return minX >= thresholdX;
+      }
+
+      function createWalker(profile, roleSpec) {
+        var walker = walkerTemplate.cloneNode(true);
+        walker.id = '';
+        walker.classList.remove('hidden');
+        var head = walker.querySelector('.walker-head');
+        var body = walker.querySelector('.walker-body');
+        if (profile && profile.src) {
+          head.src = profile.src;
+        } else {
+          head.removeAttribute('src');
+        }
+        body.style.backgroundImage = 'url("' + buildWalkerSprite(randomWalkerPalette()) + '")';
+        body.style.animationPlayState = 'running';
+
+        var itemEl = null;
+        var roleKey = roleSpec && roleSpec.key ? roleSpec.key : '';
+        if (roleKey === 'builder' || roleKey === 'salesman') {
+          itemEl = document.createElement('img');
+          itemEl.className = 'walker-item';
+          if (roleKey === 'builder') {
+            itemEl.src = buildPickaxeSprite();
+            itemEl.style.width = '7px';
+            itemEl.style.height = '11px';
+            itemEl.style.top = '21px';
+            itemEl.style.left = '20px';
+            itemEl.classList.add('walker-item-pickaxe');
+          } else {
+            itemEl.src = buildBriefcaseSprite();
+            itemEl.style.width = '10px';
+            itemEl.style.height = '8px';
+            itemEl.style.top = '28px';
+            itemEl.style.left = '2px';
+            itemEl.classList.add('walker-item-briefcase');
+          }
+          walker.querySelector('.walker-sprite').appendChild(itemEl);
+        }
+
+        overlay.appendChild(walker);
+
+        return {
+          el: walker,
+          body: body,
+          item: itemEl,
+          profileId: profile && profile.id ? profile.id : '',
+          roleKey: roleKey,
+          x: -walkerWidth,
+          speed: 24 + Math.random() * 10,
+          targetSpeed: 34 + Math.random() * 26,
+          pauseUntil: 0,
+          stopped: false
+        };
+      }
+
+      async function startNextWalker(now) {
+        if (spriteSequence.loading) return;
+        spriteSequence.loading = true;
+        try {
+          var selection = await nextSpriteProfile();
+          if (!selection) {
+            spriteSequence.nextStartAt = Number.POSITIVE_INFINITY;
+            return;
+          }
+          var profile = selection.profile;
+          spriteSequence.usedProfileIds[profile.id] = true;
+          var walker = createWalker(profile, selection.roleSpec);
+          walker.el.style.left = walker.x + 'px';
+          activeWalkers.push(walker);
+          spriteSequence.currentRoleExhausted = !hasRemainingProfilesForRole(selection.roleSpec, selection.profiles);
+
+          if (spriteSequence.currentRoleExhausted) {
+            spriteSequence.waitingForRoleThreshold = selection.roleSpec.key;
+            spriteSequence.roleIndex = (spriteSequence.roleIndex + 1) % spriteRolePlan.length;
+            spriteSequence.profileIndex = 0;
+            spriteSequence.nextStartAt = Math.max(now, spriteSequence.currentRolePauseReadyAt);
+          } else {
+            spriteSequence.waitingForRoleThreshold = '';
+            spriteSequence.nextStartAt = now + randomBetween(3000, 5000);
+          }
+        } finally {
+          spriteSequence.loading = false;
+        }
+      }
+
+      function maybeRetargetWalker(walker, now) {
+        if (walker.pauseUntil > now) return;
+
+        var r = Math.random();
+        if (r < 0.0035) {
+          walker.pauseUntil = now + 800 + Math.random() * 2400;
+          walker.targetSpeed = 0;
+        } else if (r < 0.08) {
+          walker.targetSpeed = 24 + Math.random() * 46;
+        }
+      }
+
+      function stepWalker(now) {
+        if (authOverlay.style.display !== 'none') {
+          if (!walkersUnlocked) {
+            requestAnimationFrame(stepWalker);
+            return;
+          }
+
+          if (
+            spriteSequence.waitingForRoleThreshold &&
+            roleReadyForNextBatch(spriteSequence.waitingForRoleThreshold)
+          ) {
+            spriteSequence.waitingForRoleThreshold = '';
+          }
+
+          if (now >= spriteSequence.nextStartAt && !spriteSequence.waitingForRoleThreshold) {
+            startNextWalker(now);
+          }
+
+          for (var i = activeWalkers.length - 1; i >= 0; i--) {
+            var walker = activeWalkers[i];
+            var lastTs = walker.lastTs || now;
+            var dt = Math.min(0.05, (now - lastTs) / 1000);
+            walker.lastTs = now;
+
+            if (walker.pauseUntil <= now) {
+              maybeRetargetWalker(walker, now);
+              walker.speed += (walker.targetSpeed - walker.speed) * Math.min(1, dt * 1.8);
+              walker.x += walker.speed * dt;
+            }
+
+            if (walker.pauseUntil > now) {
+              walker.speed += (0 - walker.speed) * Math.min(1, dt * 4);
+            } else if (walker.targetSpeed < 1) {
+              walker.targetSpeed = 28 + Math.random() * 32;
+            }
+
+            walker.el.style.left = Math.round(walker.x) + 'px';
+
+            var shouldStopAnim = walker.pauseUntil > now && walker.speed < 6;
+            if (shouldStopAnim !== walker.stopped) {
+              walker.stopped = shouldStopAnim;
+              var playState = shouldStopAnim ? 'paused' : 'running';
+              walker.body.style.animationPlayState = playState;
+              if (walker.item) walker.item.style.animationPlayState = playState;
+            }
+
+            if (walker.x > window.innerWidth + 18) {
+              walker.el.remove();
+              activeWalkers.splice(i, 1);
+            }
+          }
+        }
+
+        requestAnimationFrame(stepWalker);
+      }
+
+      requestAnimationFrame(stepWalker);
+
+      // ── Society of Seekers ──
+      var seekersPreviewMode = false;
+      var seekerBuf = '';
+      var seekerWord = 'seekers';
+      var seekerActive = false;
+      document.addEventListener('keypress', function(e) {
+        if (seekerActive) return;
+        if (authOverlay.style.display === 'none') return;
+        if (term) return;
+        seekerBuf += e.key.toLowerCase();
+        if (seekerBuf.length > seekerWord.length) {
+          seekerBuf = seekerBuf.slice(-seekerWord.length);
+        }
+        if (seekerBuf === seekerWord) {
+          seekerActive = true;
+          activateSeekers();
+        }
+      });
+
+      if (seekersPreviewMode) {
+        seekerActive = true;
+        setTimeout(function() {
+          if (authOverlay.style.display !== 'none') {
+            activateSeekers();
+          }
+        }, 1700);
+      }
+
+      function activateSeekers() {
+        anime({
+          targets: ['#subtitle', '#install-info', '#auth-content'],
+          opacity: 0,
+          duration: 400,
+          easing: 'easeInQuad',
+          complete: function() {
+            document.getElementById('subtitle').style.display = 'none';
+            document.getElementById('install-info').style.display = 'none';
+            document.getElementById('auth-content').style.display = 'none';
+
+            var oldLogoTop = logoEl.getBoundingClientRect().top;
+
+            var theEl = document.getElementById('society-the');
+            var wordsEl = document.getElementById('society-words');
+
+            theEl.style.display = 'block';
+            authOverlay.style.justifyContent = 'flex-start';
+            authOverlay.style.paddingTop = '8vh';
+
+            var newLogoRect = logoEl.getBoundingClientRect();
+            var delta = oldLogoTop - newLogoRect.top;
+            var overlayRect = authOverlay.getBoundingClientRect();
+            var logoBottomInOverlay = newLogoRect.bottom - overlayRect.top;
+
+            logoEl.style.transform = 'translateY(' + delta + 'px)';
+
+            wordsEl.style.top = (logoBottomInOverlay + 4) + 'px';
+            wordsEl.style.display = 'block';
+
+            var wordsHeight = wordsEl.getBoundingClientRect().height;
+            seekersReadmeShell.style.top = (logoBottomInOverlay + 4 + wordsHeight + 12) + 'px';
+
+            walkersUnlocked = true;
+            spriteSequence.nextStartAt = performance.now() + 2000;
+
+            anime({
+              targets: '#ascii-logo',
+              translateY: [delta, 0],
+              duration: 800,
+              easing: 'easeOutQuad'
+            });
+
+            runRandomAnimation('#society-the', { delay: 200 });
+            runRandomAnimation('#society-society', { delay: 700 });
+            runRandomAnimation('#society-of', { delay: 1300 });
+            runRandomAnimation('#society-seekers', { delay: 1900 });
+            setTimeout(revealSeekersReadme, 2700);
+          }
+        });
+      }
+
+      fetch(basePath + '/version').then(function(r) { return r.text(); }).then(function(v) {
+        document.getElementById('version-label').textContent = v;
+      });
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+version: 2
+project_name: git-annex-remote-drive
+dist: dist-git-annex-remote-drive
+builds:
+  - id: git-annex-remote-drive
+    dir: ./go/git-annex-remote-drive
+    main: .
+    binary: git-annex-remote-drive
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.appVersion={{ .Version }}
+      # GOOGLE_DRIVE_CLIENT_ID and GOOGLE_DRIVE_CLIENT_SECRET must be set in CI
+      - -X main.builtinClientID={{ .Env.GOOGLE_DRIVE_CLIENT_ID }}
+      - -X main.builtinClientSecret={{ .Env.GOOGLE_DRIVE_CLIENT_SECRET }}
