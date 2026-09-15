@@ -1,0 +1,61 @@
+# ExoHub Bundle manifest
+#
+# Defines named presets for `exo bundle`. Each preset controls which files
+# and metadata categories are included in the generated bundle.
+#
+# Usage:
+#   exo bundle                        # uses the "default" preset
+#   exo bundle --preset parquet-only  # uses a named preset
+#
+# Output is written to .exohub/bundles/<scope>/ where <scope> is:
+#   - tag name (if HEAD is a tag)
+#   - branch name (if HEAD is on a branch)
+#   - commit hash (if HEAD is detached)
+#
+# Scope controls which outputs are generated:
+#   all   - commits.json + per-file artifact JSONs for all tracked files
+#   git   - commits.json + per-file artifact JSONs for git-only tracked files
+#   annex - per-file artifact JSONs for annexed files only (with locations)
+#
+# Include/exclude use glob patterns (same syntax as .exohub/remotes).
+# When include is set, only matching files are bundled.
+# When exclude is set, matching files are skipped.
+# Both can be combined: include is applied first, then exclude.
+#
+# Hidden directories (paths starting with ".") are excluded by default.
+# Set include_hidden: true to include them. Note: .exohub/ is always
+# excluded, and .artifactdb/ is excluded unless explicitly listed in include.
+
+presets:
+  # Default: bundle everything
+  - name: default
+    scope: all
+    # include_hidden: false
+    # include:
+    #   - "**/*"
+    # exclude:
+    #   - "*.tmp"
+
+  # Example: data files only
+  # - name: parquet-only
+  #   scope: annex
+  #   include:
+  #     - "**/*.parquet"
+
+  # Example: everything except raw sequencing data
+  # - name: no-raw
+  #   scope: all
+  #   exclude:
+  #     - "**/*.bam"
+  #     - "**/*.fastq.gz"
+  #     - "**/*.cram"
+
+  # Example: git history only, no file metadata
+  # - name: changelog
+  #   scope: git
+
+# Example usage:
+#   exo bundle                          # generate bundle with default preset
+#   exo bundle --preset parquet-only    # generate bundle with named preset
+#   exo bundle --from-ref v1.0          # commits since v1.0
+#   exo bundle --scope annex            # override preset scope
