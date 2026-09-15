@@ -1,0 +1,41 @@
+# ExoHub permissions manifest
+#
+# Controls S3 Access Grants for remotes with `grants: true` in .exohub/remotes.
+# Place this file at .exohub/permissions in your repository.
+#
+# Owners have full read/write access and can manage permissions.
+# Viewers have read-only access (when read_access: viewers).
+#
+# The first user to run `exo init` on a new S3 path claims ownership.
+# Subsequent changes require the caller to be an existing owner.
+
+# Required: users with full access and permission management
+owners:
+  - my-username
+  # - collaborator-username
+
+# Users with read-only access
+viewers: []
+
+# Read access policy:
+#   viewers  - grant READ to viewers (and owners)
+#   owners   - grant READ to owners only
+#   public   - anyone can read
+#   none     - no read grants
+read_access: viewers
+
+# Write access policy:
+#   owners   - grant READWRITE to owners
+#   viewers  - grant READWRITE to owners and viewers
+#   public   - anyone can write
+#   none     - no write grants
+write_access: owners
+
+# Grant matrix (what each user gets):
+#
+#   read_access  | write_access | Owners get | Viewers get
+#   -------------|--------------|------------|------------
+#   viewers      | owners       | READWRITE  | READ
+#   viewers      | viewers      | READWRITE  | READWRITE
+#   owners       | owners       | READWRITE  | (none)
+#   none         | none         | (none)     | (none)

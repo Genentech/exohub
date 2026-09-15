@@ -1,0 +1,30 @@
+version: 2
+project_name: exo
+dist: dist-exo
+before:
+  hooks:
+    - sh -c "cd go/exo && go mod download"
+builds:
+  - id: exo
+    dir: ./go/exo
+    main: .
+    binary: exo
+    env:
+      - CGO_ENABLED=0
+    tags:
+      - artifactdb
+      - exohubapi
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .ShortCommit }}
+      - -X main.date={{ .Date }}
+      # GOOGLE_DRIVE_CLIENT_ID and GOOGLE_DRIVE_CLIENT_SECRET must be set in CI
+      - -X github.com/Genentech/exohub/go/exo/commands/auth.builtinDriveClientID={{ .Env.GOOGLE_DRIVE_CLIENT_ID }}
+      - -X github.com/Genentech/exohub/go/exo/commands/auth.builtinDriveClientSecret={{ .Env.GOOGLE_DRIVE_CLIENT_SECRET }}

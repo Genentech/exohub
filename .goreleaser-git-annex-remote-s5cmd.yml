@@ -1,0 +1,19 @@
+version: 2
+project_name: git-annex-remote-s5cmd
+dist: dist-git-annex-remote-s5cmd
+builds:
+  - id: git-annex-remote-s5cmd
+    dir: ./go/git-annex-remote-s5cmd
+    main: .
+    binary: git-annex-remote-s5cmd
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.appVersion={{ .Version }}
