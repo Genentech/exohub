@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
+
 var (
 	flagJSON      bool
 	flagVerbose   bool
@@ -80,3 +81,5 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	}
 	return nil
 }
+
+

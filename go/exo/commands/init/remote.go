@@ -13,13 +13,13 @@ import (
 )
 
 var (
-	remoteType           string
-	remoteName           string
-	remoteS3URL          string
-	remoteRsyncURL       string
+	remoteType         string
+	remoteName         string
+	remoteS3URL        string
+	remoteRsyncURL     string
 	remoteTrackingBranch string
-	remoteChunk          string
-	remoteGrants         bool
+	remoteChunk        string
+	remoteGrants       bool
 )
 
 func NewRemoteCommand() *cobra.Command {

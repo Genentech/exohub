@@ -1,0 +1,30 @@
+{
+  "ref_name": "v2.2.0",
+  "file_count": 7,
+  "repo_url": "git@github.com:example-org/sample-app.git",
+  "commit_hashes": [
+    "081195e36381de44af9c125cf540164ba1cfb669",
+    "2baf64ab61c74b320f2c27d1a38223c71e3ecb16",
+    "3d425c56ea10c92482fc78e8ef521658bd16de12",
+    "6340aae3a95213b88fd16844409af1cff7f180f4",
+    "0bfe86ac8f58cbcbb6add76b7848a09e95f44e43",
+    "4374bc9aa4bc082270a03a8a6c6209ac1ff1374a",
+    "da824f7e73f3368c748a415163c2e84437ad630e",
+    "c07520b4676b204c061e04ba20fad7a79f345c4d"
+  ],
+  "total_size": 1338048,
+  "markdown_file_count": 0,
+  "from_ref": "v2.1.0",
+  "preset": "default",
+  "incremental": false,
+  "annex_file_count": 7,
+  "exo_version": "0.88.0",
+  "commit_count": 8,
+  "path": "bundle.json",
+  "ref": "081195e36381de44af9c125cf540164ba1cfb669",
+  "generated_at": "2026-05-14T23:04:42Z",
+  "scope": "annex",
+  "git_file_count": 0,
+  "ref_type": "tag",
+  "$schema": "exohub-bundle/v1.json"
+}

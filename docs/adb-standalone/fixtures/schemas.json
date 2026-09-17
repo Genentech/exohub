@@ -1,0 +1,24 @@
+{
+    "document_types":[
+        {
+            "name":"exohub-artifact",
+            "url":"http://catalog.example.com/v1/exohub/schemas/exohub-artifact"
+        },
+        {
+            "name":"exohub-bundle",
+            "url":"http://catalog.example.com/v1/exohub/schemas/exohub-bundle"
+        },
+        {
+            "name":"exohub-commit",
+            "url":"http://catalog.example.com/v1/exohub/schemas/exohub-commit"
+        },
+        {
+            "name":"exohub-markdown",
+            "url":"http://catalog.example.com/v1/exohub/schemas/exohub-markdown"
+        },
+        {
+            "name":"git-annex",
+            "url":"http://catalog.example.com/v1/exohub/schemas/git-annex"
+        }
+    ]
+}

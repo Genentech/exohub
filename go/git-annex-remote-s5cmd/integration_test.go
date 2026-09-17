@@ -70,11 +70,11 @@ func TestHandleInitRemote(t *testing.T) {
 // TestHandlePrepare tests the PREPARE command handler
 func TestHandlePrepare(t *testing.T) {
 	tests := []struct {
-		name             string
-		configS3URL      string
-		s5cmdAvailable   bool
-		expectedContains string
-		shouldSucceed    bool
+		name              string
+		configS3URL       string
+		s5cmdAvailable    bool
+		expectedContains  string
+		shouldSucceed     bool
 	}{
 		{
 			name:             "missing_s3url",

@@ -1,0 +1,21 @@
+version: 2
+project_name: git-annex-remote-artifactdb-export
+dist: dist-git-annex-remote-artifactdb-export
+builds:
+  - id: git-annex-remote-artifactdb-export
+    dir: ./go/git-annex-remote-artifactdb-export
+    main: .
+    binary: git-annex-remote-artifactdb-export
+    env:
+      - CGO_ENABLED=0
+    tags:
+      - artifactdb
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.appVersion={{ .Version }}

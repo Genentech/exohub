@@ -129,14 +129,14 @@ func runCommandLogged(args []string, logfile string) error {
 	debugCmd(args...)
 	pathEnv := os.Getenv("PATH")
 	cmdString := strings.Join(QuoteArgs(args), " ")
-
+	
 	// Use stdbuf on Linux for unbuffered output, but it's not available on macOS
 	// On macOS, commands are already unbuffered by default
 	stdbufCmd := ""
 	if commandExists("stdbuf") {
 		stdbufCmd = "stdbuf -oL -eL "
 	}
-
+	
 	shellCmd := fmt.Sprintf("set -o pipefail; PATH=%s %s%s 2>&1 | tee -a %s",
 		ShellQuote(pathEnv),
 		stdbufCmd,

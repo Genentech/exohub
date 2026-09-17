@@ -142,8 +142,8 @@ func TestDisplayAnnexConfigText(t *testing.T) {
 
 	// Test unlocked + no thin + gitattributes
 	displayAnnexConfigText(&buf, annexConfig{
-		addUnlocked:      true,
-		thin:             false,
+		addUnlocked:    true,
+		thin:           false,
 		hasGitattributes: true,
 	})
 	out := buf.String()

@@ -11,14 +11,14 @@ import (
 
 	"github.com/Genentech/exohub/go/exo/branding"
 	addcmd "github.com/Genentech/exohub/go/exo/commands/add"
+	themecmd "github.com/Genentech/exohub/go/exo/commands/theme"
+	tipcmd "github.com/Genentech/exohub/go/exo/commands/tip"
 	atlascmd "github.com/Genentech/exohub/go/exo/commands/atlas"
-	authcmd "github.com/Genentech/exohub/go/exo/commands/auth"
 	broadcast "github.com/Genentech/exohub/go/exo/commands/broadcast"
 	bundlecmd "github.com/Genentech/exohub/go/exo/commands/bundle"
 	clonecmd "github.com/Genentech/exohub/go/exo/commands/clone"
 	contextcmd "github.com/Genentech/exohub/go/exo/commands/context"
 	copycmd "github.com/Genentech/exohub/go/exo/commands/copy"
-	doctorcmd "github.com/Genentech/exohub/go/exo/commands/doctor"
 	downloadcmd "github.com/Genentech/exohub/go/exo/commands/download"
 	exportcmd "github.com/Genentech/exohub/go/exo/commands/export"
 	fsck "github.com/Genentech/exohub/go/exo/commands/fsck"
@@ -29,6 +29,8 @@ import (
 	link "github.com/Genentech/exohub/go/exo/commands/link"
 	locatecmd "github.com/Genentech/exohub/go/exo/commands/locate"
 	lockcmd "github.com/Genentech/exohub/go/exo/commands/lock"
+	authcmd "github.com/Genentech/exohub/go/exo/commands/auth"
+	doctorcmd "github.com/Genentech/exohub/go/exo/commands/doctor"
 	logincmd "github.com/Genentech/exohub/go/exo/commands/login"
 	manifest "github.com/Genentech/exohub/go/exo/commands/manifest"
 	mcpcmd "github.com/Genentech/exohub/go/exo/commands/mcp"
@@ -37,10 +39,9 @@ import (
 	pull "github.com/Genentech/exohub/go/exo/commands/pull"
 	safecmd "github.com/Genentech/exohub/go/exo/commands/safe"
 	servecmd "github.com/Genentech/exohub/go/exo/commands/serve"
+	standalonecmd "github.com/Genentech/exohub/go/exo/commands/standalone"
 	submit "github.com/Genentech/exohub/go/exo/commands/submit"
 	sync "github.com/Genentech/exohub/go/exo/commands/sync"
-	themecmd "github.com/Genentech/exohub/go/exo/commands/theme"
-	tipcmd "github.com/Genentech/exohub/go/exo/commands/tip"
 	unlockcmd "github.com/Genentech/exohub/go/exo/commands/unlock"
 	upgrade "github.com/Genentech/exohub/go/exo/commands/upgrade"
 	versioncmd "github.com/Genentech/exohub/go/exo/commands/version"
@@ -132,6 +133,7 @@ func main() {
 	rootCmd.AddCommand(publishcmd.NewCommand())
 	rootCmd.AddCommand(pull.NewCommand())
 	rootCmd.AddCommand(safecmd.NewCommand())
+	rootCmd.AddCommand(standalonecmd.NewCommand())
 	serveVersion := version
 	if version == "dev" && commit != "" {
 		serveVersion = "dev-" + commit

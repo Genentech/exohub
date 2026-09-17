@@ -10,7 +10,7 @@ DOCKER_REPOSITORY = 347633553755.dkr.ecr.us-west-2.amazonaws.com
 DOCKER_LOCAL_REPOSITORY = localhost:5000
 ATLAS_IMAGE = gp/exohub-atlas
 
-.PHONY: exocli exocli-version exo-serve-assets image push dev-push git-annex-remote-s5cmd git-annex-remote-artifactdb-export git-annex-remote-drive exo-credential-helper binaries build test test-integration test-integration-coverage test-all test-all-coverage test-coverage-html test-all-coverage-html leak-scan oss-export oss-export-skip-verify oss-sync oss-sync-dry-run
+.PHONY: exocli exocli-version exo-serve-assets image push dev-push git-annex-remote-s5cmd git-annex-remote-artifactdb-export git-annex-remote-drive exo-credential-helper adb-capture adb-standalone binaries build test test-integration test-integration-coverage test-all test-all-coverage test-coverage-html test-all-coverage-html leak-scan oss-export oss-export-skip-verify oss-sync oss-sync-dry-run
 exocli:
 	@mkdir -p bin .gocache
 	(cd go/exo && GOCACHE=$(PWD)/.gocache go build -tags artifactdb -o ../../bin/exo .)
@@ -51,6 +51,14 @@ dev-push:
 	docker push ${DOCKER_LOCAL_REPOSITORY}/${ATLAS_IMAGE}:${BUILD_TAG}
 	docker push ${DOCKER_LOCAL_REPOSITORY}/${ATLAS_IMAGE}:latest
 
+adb-capture:
+	@mkdir -p bin .gocache
+	(cd go/adb-standalone/tools/adb-capture && GOCACHE=$(PWD)/.gocache go build -o ../../../../bin/adb-capture .)
+
+adb-standalone:
+	@mkdir -p bin .gocache
+	(cd go/adb-standalone && GOCACHE=$(PWD)/.gocache go build -o ../../bin/adb-standalone .)
+
 git-annex-remote-s5cmd:
 	@mkdir -p bin .gocache
 	(cd go/git-annex-remote-s5cmd && GOCACHE=$(PWD)/.gocache go build -o ../../bin/git-annex-remote-s5cmd .)
@@ -68,14 +76,16 @@ exo-credential-helper:
 
 .PHONY: binaries
 binaries:
-	rm -rf dist dist-exo dist-git-annex-remote-s5cmd dist-git-annex-remote-artifactdb-export dist-git-annex-remote-drive dist-exo-credential-helper
+	rm -rf dist dist-exo dist-adb-standalone dist-git-annex-remote-s5cmd dist-git-annex-remote-artifactdb-export dist-git-annex-remote-drive dist-exo-credential-helper
 	GOCACHE=$(PWD)/.gocache GORELEASER_CURRENT_TAG=$${GORELEASER_CURRENT_TAG:-v0.0.0} goreleaser build --snapshot --clean --config .goreleaser-exo.yml
+	GOCACHE=$(PWD)/.gocache GORELEASER_CURRENT_TAG=$${GORELEASER_CURRENT_TAG:-v0.0.0} goreleaser build --snapshot --clean --config .goreleaser-adb-standalone.yml
 	GOCACHE=$(PWD)/.gocache GORELEASER_CURRENT_TAG=$${GORELEASER_CURRENT_TAG:-v0.0.0} goreleaser build --snapshot --clean --config .goreleaser-git-annex-remote-s5cmd.yml
 	GOCACHE=$(PWD)/.gocache GORELEASER_CURRENT_TAG=$${GORELEASER_CURRENT_TAG:-v0.0.0} goreleaser build --snapshot --clean --config .goreleaser-git-annex-remote-artifactdb-export.yml
 	GOCACHE=$(PWD)/.gocache GORELEASER_CURRENT_TAG=$${GORELEASER_CURRENT_TAG:-v0.0.0} goreleaser build --snapshot --clean --config .goreleaser-exo-credential-helper.yml
 	GOCACHE=$(PWD)/.gocache GORELEASER_CURRENT_TAG=$${GORELEASER_CURRENT_TAG:-v0.0.0} goreleaser build --snapshot --clean --config .goreleaser-git-annex-remote-drive.yml
 	mkdir -p dist
 	cp -a dist-exo/* dist/
+	cp -a dist-adb-standalone/* dist/
 	cp -a dist-git-annex-remote-s5cmd/* dist/
 	cp -a dist-git-annex-remote-artifactdb-export/* dist/
 	cp -a dist-exo-credential-helper/* dist/

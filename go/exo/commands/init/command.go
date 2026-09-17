@@ -23,9 +23,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	contextcmd "github.com/Genentech/exohub/go/exo/commands/context"
 	"github.com/Genentech/exohub/go/exo/commandutil"
 	"github.com/Genentech/exohub/go/exo/configdir"
+	contextcmd "github.com/Genentech/exohub/go/exo/commands/context"
 	"github.com/Genentech/exohub/go/exo/gitprovider"
 )
 
@@ -123,14 +123,14 @@ var (
 	flagProfile     string
 	flagPickProfile bool
 	flagForce       bool
-	flagRepoName    string
-	flagYes         bool
-	flagReset       bool
-	flagDead        string
-	flagDestroy     string
-	flagDryRun      bool
-	flagConfirm     string
-	flagRemote      string
+	flagRepoName   string
+	flagYes        bool
+	flagReset      bool
+	flagDead       string
+	flagDestroy    string
+	flagDryRun     bool
+	flagConfirm    string
+	flagRemote     string
 )
 
 var initStylesOnce sync.Once
@@ -3114,7 +3114,7 @@ func destroyUUIDFromGitAnnexBranch(uuid, remoteName string) error {
 			// Skip main log files (already processed above)
 			base := filepath.Base(filename)
 			if base != "remote.log" && base != "uuid.log" &&
-				base != "trust.log" && base != "group.log" {
+			   base != "trust.log" && base != "group.log" {
 				filesToFilter = append(filesToFilter, filename)
 			}
 		}
@@ -3247,7 +3247,7 @@ func previewLocationLogFiltering(uuid string) (int, error) {
 		// Skip main log files - we only care about location logs
 		base := filepath.Base(filename)
 		if base != "remote.log" && base != "uuid.log" &&
-			base != "trust.log" && base != "group.log" {
+		   base != "trust.log" && base != "group.log" {
 			count++
 		}
 	}
@@ -3396,7 +3396,7 @@ func countKeysOnUUID(uuid string) (int, error) {
 		// Skip main log files - we only care about location logs (key logs)
 		base := filepath.Base(filename)
 		if base != "remote.log" && base != "uuid.log" &&
-			base != "trust.log" && base != "group.log" {
+		   base != "trust.log" && base != "group.log" {
 			count++
 		}
 	}

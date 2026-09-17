@@ -61,15 +61,15 @@ func normalizeGitLabHost(host string) string {
 
 // gitlabCreateProjectRequest represents the GitLab API request for creating a project
 type gitlabCreateProjectRequest struct {
-	Name                        string `json:"name"`
-	Description                 string `json:"description,omitempty"`
-	NamespaceID                 int    `json:"namespace_id,omitempty"`
-	Path                        string `json:"path,omitempty"`
-	Visibility                  string `json:"visibility"`
-	UseCustomTemplate           bool   `json:"use_custom_template,omitempty"`
-	TemplateProjectID           int    `json:"template_project_id,omitempty"`
-	GroupWithProjectTemplatesID int    `json:"group_with_project_templates_id,omitempty"`
-	InitializeWithReadme        bool   `json:"initialize_with_readme,omitempty"`
+	Name                            string `json:"name"`
+	Description                     string `json:"description,omitempty"`
+	NamespaceID                     int    `json:"namespace_id,omitempty"`
+	Path                            string `json:"path,omitempty"`
+	Visibility                      string `json:"visibility"`
+	UseCustomTemplate               bool   `json:"use_custom_template,omitempty"`
+	TemplateProjectID               int    `json:"template_project_id,omitempty"`
+	GroupWithProjectTemplatesID      int    `json:"group_with_project_templates_id,omitempty"`
+	InitializeWithReadme            bool   `json:"initialize_with_readme,omitempty"`
 }
 
 // gitlabProject represents a GitLab project response
@@ -442,7 +442,7 @@ func (g *GitLabProvider) createRepositoryFromTemplate(ctx context.Context, opts 
 		Visibility:                  visibility,
 		UseCustomTemplate:           true,
 		TemplateProjectID:           templateProjectID,
-		GroupWithProjectTemplatesID: templateGroupID,
+		GroupWithProjectTemplatesID:  templateGroupID,
 	}
 
 	body, err := json.Marshal(reqBody)

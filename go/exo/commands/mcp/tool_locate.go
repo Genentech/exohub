@@ -48,8 +48,8 @@ func handleLocate(_ context.Context, request gomcp.CallToolRequest) (*gomcp.Call
 			continue
 		}
 		var entry struct {
-			File    string `json:"file"`
-			Whereis []struct {
+			File      string `json:"file"`
+			Whereis   []struct {
 				Description string `json:"description"`
 				Here        bool   `json:"here"`
 			} `json:"whereis"`

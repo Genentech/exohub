@@ -79,9 +79,9 @@ func formatFullVersion(version, commit, date string) string {
 }
 
 var companionBinaries = []struct {
-	name         string
-	binary       string
-	args         []string
+	name        string
+	binary      string
+	args        []string
 	supportsFull bool
 }{
 	{"git-annex-remote-s5cmd", "git-annex-remote-s5cmd", []string{"--version"}, true},

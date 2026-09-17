@@ -16,8 +16,8 @@ var ExoHub = Palette{
 	Description: "ExoHub brand gradient (orange / pink / purple)",
 
 	// Pink center of gradient — primary selection/accent
-	Accent:     ColorPair{Light: "#C4256E", Dark: "#E84393"},
-	AccentDim:  ColorPair{Light: "#A04878", Dark: "#D17EB8"}, // rose, between pink and purple
+	Accent:    ColorPair{Light: "#C4256E", Dark: "#E84393"},
+	AccentDim: ColorPair{Light: "#A04878", Dark: "#D17EB8"}, // rose, between pink and purple
 	AccentDull: ColorPair{Light: "#7B4380", Dark: "#B07CC0"}, // muted violet
 
 	// Teal/cyan — cool complement to the warm gradient, extends the brand palette
@@ -32,7 +32,7 @@ var ExoHub = Palette{
 	Highlight: ColorPair{Light: "#A68B09", Dark: "#ECFD65"},
 
 	// Orange end of gradient — section headers
-	Label: ColorPair{Light: "#C45A1E", Dark: "#FF6B35"},
+	Label:    ColorPair{Light: "#C45A1E", Dark: "#FF6B35"},
 	// Purple end of gradient — secondary labels
 	LabelAlt: ColorPair{Light: "#6B3A7A", Dark: "#B07CC0"},
 

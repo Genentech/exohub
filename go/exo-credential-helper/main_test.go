@@ -46,11 +46,11 @@ func TestCacheRoundTrip(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	creds := &credentialOutput{
-		Version:         1,
-		AccessKeyID:     "ASIATEST",
+		Version:        1,
+		AccessKeyID:    "ASIATEST",
 		SecretAccessKey: "secret",
-		SessionToken:    "token",
-		Expiration:      time.Now().Add(1 * time.Hour).UTC().Format(time.RFC3339),
+		SessionToken:   "token",
+		Expiration:     time.Now().Add(1 * time.Hour).UTC().Format(time.RFC3339),
 	}
 
 	s3URL := "s3://test-bucket/prefix/"
@@ -79,11 +79,11 @@ func TestCacheExpired(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", tmpDir)
 
 	creds := &credentialOutput{
-		Version:         1,
-		AccessKeyID:     "ASIAEXPIRED",
+		Version:        1,
+		AccessKeyID:    "ASIAEXPIRED",
 		SecretAccessKey: "secret",
-		SessionToken:    "token",
-		Expiration:      time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339),
+		SessionToken:   "token",
+		Expiration:     time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339),
 	}
 
 	s3URL := "s3://test-bucket/prefix/"
@@ -190,11 +190,11 @@ func TestLoadBearerTokenFromFile(t *testing.T) {
 
 func TestOutputCredentialsJSON(t *testing.T) {
 	creds := &credentialOutput{
-		Version:         1,
-		AccessKeyID:     "ASIATEST",
+		Version:        1,
+		AccessKeyID:    "ASIATEST",
 		SecretAccessKey: "secret123",
-		SessionToken:    "token456",
-		Expiration:      "2026-03-05T22:00:00Z",
+		SessionToken:   "token456",
+		Expiration:     "2026-03-05T22:00:00Z",
 	}
 
 	// Capture stdout

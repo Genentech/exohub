@@ -24,11 +24,11 @@ func (s *stringValue) UnmarshalYAML(node *yaml.Node) error {
 }
 
 type manifest struct {
-	From stringValue `yaml:"from"`
-	To   stringValue `yaml:"to"`
-	Ref  stringValue `yaml:"ref"`
-	Auto stringValue `yaml:"auto"`
-	Jobs stringValue `yaml:"jobs"`
+	From                 stringValue `yaml:"from"`
+	To                   stringValue `yaml:"to"`
+	Ref                  stringValue `yaml:"ref"`
+	Auto                 stringValue `yaml:"auto"`
+	Jobs                 stringValue `yaml:"jobs"`
 }
 
 func NewCommand() *cobra.Command {

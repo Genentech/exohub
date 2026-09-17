@@ -1,14 +1,14 @@
 package login
 
 import (
-	"encoding/json"
-	"fmt"
-	"os"
+"encoding/json"
+"fmt"
+"os"
 
-	"github.com/spf13/cobra"
+"github.com/spf13/cobra"
 
-	"github.com/Genentech/exohub/go/exo/internal/defaults"
-	"github.com/Genentech/exohub/go/exo/safe"
+"github.com/Genentech/exohub/go/exo/internal/defaults"
+"github.com/Genentech/exohub/go/exo/safe"
 )
 
 var (
@@ -41,29 +41,29 @@ func printConfidentialityDisclaimer() {
 
 // NewLoginCommand creates the login command
 func NewLoginCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "login",
-		Short: "Authenticate via device flow",
-		Long: `Authenticate via OIDC device flow.
+cmd := &cobra.Command{
+Use:   "login",
+Short: "Authenticate via device flow",
+Long: `Authenticate via OIDC device flow.
 
 This command initiates a device authentication flow that allows you to log in
 using any device with a web browser. After authentication, credentials are
 securely cached for future use.`,
-		RunE: runLogin,
-	}
+RunE: runLogin,
+}
 
-	cmd.Flags().BoolVar(&force, "force", false, "Force re-authentication even if valid credentials exist")
-	cmd.Flags().BoolVar(&showQRCode, "qrcode", false, "Display QR code for authentication")
-	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output JSON (for MCP/automation)")
+cmd.Flags().BoolVar(&force, "force", false, "Force re-authentication even if valid credentials exist")
+cmd.Flags().BoolVar(&showQRCode, "qrcode", false, "Display QR code for authentication")
+cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output JSON (for MCP/automation)")
 
-	return cmd
+return cmd
 }
 
 func runLogin(cmd *cobra.Command, args []string) error {
-	if jsonOutput {
-		return runLoginJSON()
-	}
-	return runLoginInteractive()
+if jsonOutput {
+	return runLoginJSON()
+}
+return runLoginInteractive()
 }
 
 // LoginResult is the JSON output for exo login --json.
@@ -129,100 +129,100 @@ func runLoginJSON() error {
 }
 
 func runLoginInteractive() error {
-	tokenFile, err := GetTokenFile()
+tokenFile, err := GetTokenFile()
+if err != nil {
+return fmt.Errorf("failed to get token file path: %w", err)
+}
+
+// If force flag is set, delete existing credentials
+if force {
+fmt.Println("🗑️  Deleting cached credentials...")
+err := DeleteToken(tokenFile)
+if err != nil {
+return fmt.Errorf("failed to delete cached credentials: %w", err)
+}
+}
+
+// Always try to refresh when a refresh token exists
+if !force {
+token, err := LoadToken(tokenFile)
+if err == nil && token.RefreshToken != "" {
+fmt.Println("🔄 Refreshing credentials...")
+refreshed, refreshUser, refreshErr := RefreshAuth(token.RefreshToken)
+if refreshErr == nil {
+	err = SaveToken(tokenFile, refreshed)
 	if err != nil {
-		return fmt.Errorf("failed to get token file path: %w", err)
+		return fmt.Errorf("failed to save refreshed credentials: %w", err)
 	}
-
-	// If force flag is set, delete existing credentials
-	if force {
-		fmt.Println("🗑️  Deleting cached credentials...")
-		err := DeleteToken(tokenFile)
-		if err != nil {
-			return fmt.Errorf("failed to delete cached credentials: %w", err)
-		}
-	}
-
-	// Always try to refresh when a refresh token exists
-	if !force {
-		token, err := LoadToken(tokenFile)
-		if err == nil && token.RefreshToken != "" {
-			fmt.Println("🔄 Refreshing credentials...")
-			refreshed, refreshUser, refreshErr := RefreshAuth(token.RefreshToken)
-			if refreshErr == nil {
-				err = SaveToken(tokenFile, refreshed)
-				if err != nil {
-					return fmt.Errorf("failed to save refreshed credentials: %w", err)
-				}
-				fmt.Printf("✅ Credentials refreshed for: %s\n", refreshUser)
-				fmt.Printf("📁 Credentials saved to: %s\n", tokenFile)
-				return nil
-			}
-			fmt.Printf("⚠️  Refresh failed: %v\n", refreshErr)
-			fmt.Println("🔐 Falling back to interactive login...")
-		}
-	}
-
-	// Perform device flow authentication
-	// Show confidentiality disclaimer before the device flow starts
-	printConfidentialityDisclaimer()
-	token, username, err := DeviceFlowAuth(showQRCode)
-	if err != nil {
-		return err
-	}
-
-	// Save credentials
-	err = SaveToken(tokenFile, token)
-	if err != nil {
-		return fmt.Errorf("failed to save credentials: %w", err)
-	}
-
-	fmt.Printf("\n✅ Successfully authenticated as: %s\n", username)
+	fmt.Printf("✅ Credentials refreshed for: %s\n", refreshUser)
 	fmt.Printf("📁 Credentials saved to: %s\n", tokenFile)
-
-	// Retrieve ExoSafe credentials (only on full device flow login)
-	retrieveSafe(token.AccessToken, false)
-
 	return nil
+}
+fmt.Printf("⚠️  Refresh failed: %v\n", refreshErr)
+fmt.Println("🔐 Falling back to interactive login...")
+}
+}
+
+// Perform device flow authentication
+// Show confidentiality disclaimer before the device flow starts
+printConfidentialityDisclaimer()
+token, username, err := DeviceFlowAuth(showQRCode)
+if err != nil {
+return err
+}
+
+// Save credentials
+err = SaveToken(tokenFile, token)
+if err != nil {
+return fmt.Errorf("failed to save credentials: %w", err)
+}
+
+fmt.Printf("\n✅ Successfully authenticated as: %s\n", username)
+fmt.Printf("📁 Credentials saved to: %s\n", tokenFile)
+
+// Retrieve ExoSafe credentials (only on full device flow login)
+retrieveSafe(token.AccessToken, false)
+
+return nil
 }
 
 // NewLogoutCommand creates the logout command
 func NewLogoutCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "logout",
-		Short: "Clear cached authentication credentials",
-		Long: `Remove locally cached authentication credentials.
+cmd := &cobra.Command{
+Use:   "logout",
+Short: "Clear cached authentication credentials",
+Long: `Remove locally cached authentication credentials.
 
 This command deletes the stored credentials, requiring you to log in again
 on the next authenticated request.`,
-		RunE: runLogout,
-	}
+RunE: runLogout,
+}
 
-	return cmd
+return cmd
 }
 
 func runLogout(cmd *cobra.Command, args []string) error {
-	// TODO: Get context information when context support is added
-	username := os.Getenv("USER")
-	if username == "" {
-		username = "unknown"
-	}
+// TODO: Get context information when context support is added
+username := os.Getenv("USER")
+if username == "" {
+username = "unknown"
+}
 
-	tokenFile, err := GetTokenFile()
-	if err != nil {
-		return fmt.Errorf("failed to get token file path: %w", err)
-	}
+tokenFile, err := GetTokenFile()
+if err != nil {
+return fmt.Errorf("failed to get token file path: %w", err)
+}
 
-	err = DeleteToken(tokenFile)
-	if err != nil {
-		return fmt.Errorf("failed to delete credentials: %w", err)
-	}
+err = DeleteToken(tokenFile)
+if err != nil {
+return fmt.Errorf("failed to delete credentials: %w", err)
+}
 
-	// Clean up ExoSafe provisioned credentials
-	if err := safe.Cleanup(); err != nil {
-		fmt.Printf("⚠️  Failed to clean up ExoSafe credentials: %v\n", err)
-	}
+// Clean up ExoSafe provisioned credentials
+if err := safe.Cleanup(); err != nil {
+	fmt.Printf("⚠️  Failed to clean up ExoSafe credentials: %v\n", err)
+}
 
-	fmt.Println("✅ Successfully logged out. Credentials have been cleared.")
-	return nil
+fmt.Println("✅ Successfully logged out. Credentials have been cleared.")
+return nil
 }

@@ -1,0 +1,47 @@
+# adb-standalone — Docker Compose configuration
+# Used by docker-compose.yml; service names match compose service names.
+
+gprn:
+  service: adb-standalone
+  environment: local
+  placeholder: artifact
+
+schema: artifactdb-schema/v1
+internal_schema: artifactdb-internal/v1
+
+permissions:
+  default_read: public
+  default_write: owners
+
+prefixes:
+  - /exohub
+
+tenants:
+  - path: /exohub
+    alias: exohub
+
+surreal:
+  url: ws://surrealdb:8000
+  ns: adb
+  db: adb
+  username: root
+  password: "${SURREAL_PASSWORD}"
+
+storage:
+  s3:
+    # versitygw service (POSIX-FS backend, Apache-2.0)
+    endpoint: http://versitygw:9100
+    # public_endpoint must point to a host reachable by the client (e.g. localhost:9100
+    # when port-forwarded, or the host IP). Override via STORAGE_S3_PUBLIC_ENDPOINT.
+    public_endpoint: "${STORAGE_S3_PUBLIC_ENDPOINT:-http://localhost:9100}"
+    bucket: adb-standalone
+    region: us-east-1
+    access_key_id: "${VERSITYGW_ACCESS_KEY:-versitygw}"
+    secret_access_key: "${VERSITYGW_SECRET_KEY}"
+    use_path_style: true
+    presigned_url_expiration: 3600
+    signature_version: v4
+
+server:
+  addr: :8080
+  base_url: "${ADB_BASE_URL:-http://localhost:8080}"

@@ -1,0 +1,21 @@
+{
+  "author_name": "Dev User",
+  "repo_url": "git@github.com:example-org/sample-app.git",
+  "committer_email": "dev@example.com",
+  "subject": "fix: dmg",
+  "annex_files": [
+    "releases/SampleApp-2.2.0.dmg"
+  ],
+  "committer_date": "2026-05-14T16:03:34-07:00",
+  "body": "",
+  "committer_name": "Dev User",
+  "path": "commits/081195e36381de44af9c125cf540164ba1cfb669.json",
+  "ref": "081195e36381de44af9c125cf540164ba1cfb669",
+  "author_date": "2026-05-14T16:03:34-07:00",
+  "author_email": "dev@example.com",
+  "hash": "081195e36381de44af9c125cf540164ba1cfb669",
+  "parents": [
+    "2baf64ab61c74b320f2c27d1a38223c71e3ecb16"
+  ],
+  "$schema": "exohub-commit/v1.json"
+}

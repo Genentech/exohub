@@ -679,7 +679,7 @@ Provisions SSH keys to <EXO_CONFIG_DIR>/exo/ssh/ and git tokens to
 <EXO_CONFIG_DIR>/exo/git-credentials.
 
 Exits non-zero if the token is missing or expired, or if the safe is empty.`,
-		Args: cobra.NoArgs,
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runPull(jsonOutput)
 		},

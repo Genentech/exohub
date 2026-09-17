@@ -23,6 +23,8 @@ const longText = `Submit a manifest to the ExoHub API.
 Reads the manifest file to determine the target queue and submits the job.
 Supported queues: exohub-sync-aws, exohub-sync-shpc.`
 
+
+
 var allowedQueues = map[string]struct{}{
 	"exohub-sync-aws":  {},
 	"exohub-sync-shpc": {},
@@ -113,6 +115,7 @@ func submitManifest(manifestPath, queueFlag string, client *http.Client) (string
 		req.Header.Set("Content-Type", "application/x-yaml")
 	}
 
+
 	if client == nil {
 		client = &http.Client{Timeout: 60 * time.Second}
 	} else if client.Timeout == 0 {
@@ -194,3 +197,5 @@ func buildManifestURL(apiBase, queue string) (string, error) {
 	parsed.RawQuery = query.Encode()
 	return parsed.String(), nil
 }
+
+

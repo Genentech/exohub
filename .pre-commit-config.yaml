@@ -1,0 +1,23 @@
+repos:
+- repo: local
+  hooks:
+  - id: forbidden-rejection-files
+    name: forbidden rejection files
+    entry: found Copier update rejection files; review them and remove them
+    files: \.rej$
+    language: fail
+
+- repo: local
+  hooks:
+  - id: gofmt
+    name: gofmt (check only)
+    entry: bash -c 'test -z "$(gofmt -l "$@")"' --
+    language: system
+    types: [go]
+
+# Gitleaks: detect secrets in staged changes before commit.
+# Install gitleaks: https://github.com/gitleaks/gitleaks#installing
+- repo: https://github.com/gitleaks/gitleaks
+  rev: v8.27.2
+  hooks:
+  - id: gitleaks

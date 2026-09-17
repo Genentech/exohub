@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path" // path (not filepath) for S3 key construction — avoids backslash on Windows
+	"path"      // path (not filepath) for S3 key construction — avoids backslash on Windows
 	"path/filepath"
 	"strings"
 	"time"

@@ -1,0 +1,144 @@
+{
+    "count": 2,
+    "next": "/scroll/4xnz5i6wlmt7ju6q587n",
+    "results": [
+        {
+            "_extra": {
+                "$schema": "exohub-commit/v1.json",
+                "artipack": {
+                    "coordinates": [
+                        92,
+                        490
+                    ],
+                    "member": "commits/8c014bcb6e6cba9167f233f038335580083f955f.json",
+                    "path": "perturbation-maps/dld1-nf-v26/_catalog/v0.0.3/.exohub-bundle/0.artipack"
+                },
+                "file_size": 842,
+                "gprn": "gprn:wip:adb::artifact:dld1-nf-v26:8c014bcb6e6cba9167f233f038335580083f955f.json@v0.0.3",
+                "id": "dld1-nf-v26:8c014bcb6e6cba9167f233f038335580083f955f.json@v0.0.3",
+                "index_name": "adb-standalone-v1-exohub-20260415",
+                "latest": true,
+                "location": {
+                    "s3": {
+                        "bucket": "example-bucket"
+                    },
+                    "type": "s3"
+                },
+                "meta_indexed": "2026-07-17T00:52:15.720574+00:00",
+                "meta_uploaded": "2026-07-17T00:52:10+00:00",
+                "metapath": "8c014bcb6e6cba9167f233f038335580083f955f.json",
+                "permissions": {
+                    "owners": [
+                        "aboyounp"
+                    ],
+                    "read_access": "public",
+                    "scope": "project",
+                    "write_access": "owners"
+                },
+                "project_id": "dld1-nf-v26",
+                "tenant": {
+                    "alias": "exohub",
+                    "path": "/exohub"
+                },
+                "type": "exohub commit",
+                "uploaded": "2026-07-17T00:52:10+00:00",
+                "version": "v0.0.3"
+            },
+            "author_date": "2026-07-17T00:36:39+00:00",
+            "author_email": "patrickaboyoun@example.com",
+            "author_name": "Patrick Aboyoun",
+            "body": "",
+            "committer_date": "2026-07-17T00:36:39+00:00",
+            "committer_email": "patrickaboyoun@example.com",
+            "committer_name": "Patrick Aboyoun",
+            "git_files": [
+                ".exohub/bundles/main/0.artipack",
+                ".exohub/bundles/main/bundle.json",
+                ".exohub/bundles/v0.0.2/0.artipack",
+                ".exohub/bundles/v0.0.2/bundle.json"
+            ],
+            "hash": "8c014bcb6e6cba9167f233f038335580083f955f",
+            "id": {
+                "ID": "dld1-nf-v26:8c014bcb6e6cba9167f233f038335580083f955f.json@v0.0.3",
+                "Table": "document"
+            },
+            "parents": [
+                "ec05fab08a35bfd86bda4a46114b82f5c6f2d773"
+            ],
+            "path": "8c014bcb6e6cba9167f233f038335580083f955f.json",
+            "ref": "8c014bcb6e6cba9167f233f038335580083f955f",
+            "repo_url": "git@github.com:example-org/dld1-nf-v26.git",
+            "subject": "trying publish a second time v0.0.2"
+        },
+        {
+            "_extra": {
+                "$schema": "exohub-artifact/v1.json",
+                "artipack": {
+                    "coordinates": [
+                        652,
+                        1169
+                    ],
+                    "member": "files/DS000020633/experiment_main/assay_counts/__sample__group__=1/__feature__group__=1/part-0.parquet.json",
+                    "path": "perturbation-maps/dld1-nf-v26/_catalog/v0.0.3/.exohub-bundle/0.artipack"
+                },
+                "file_size": 1167,
+                "gprn": "gprn:wip:adb::artifact:dld1-nf-v26:DS000020633/experiment_main/assay_counts/__sample__group__=1/__feature__group__=1/part-0.parquet@v0.0.3",
+                "id": "dld1-nf-v26:DS000020633/experiment_main/assay_counts/__sample__group__=1/__feature__group__=1/part-0.parquet@v0.0.3",
+                "index_name": "adb-standalone-v1-exohub-20260415",
+                "latest": true,
+                "location": {
+                    "s3": {
+                        "bucket": "example-bucket"
+                    },
+                    "type": "s3"
+                },
+                "meta_indexed": "2026-07-17T00:52:15.667142+00:00",
+                "meta_uploaded": "2026-07-17T00:52:10+00:00",
+                "metapath": "part-0.parquet.json",
+                "permissions": {
+                    "owners": [
+                        "aboyounp"
+                    ],
+                    "read_access": "public",
+                    "scope": "project",
+                    "write_access": "owners"
+                },
+                "project_id": "dld1-nf-v26",
+                "tenant": {
+                    "alias": "exohub",
+                    "path": "/exohub"
+                },
+                "type": "exohub artifact",
+                "uploaded": "2026-07-17T00:52:10+00:00",
+                "version": "v0.0.3"
+            },
+            "backend": "SHA256E",
+            "id": {
+                "ID": "dld1-nf-v26:DS000020633/experiment_main/assay_counts/__sample__group__=1/__feature__group__=1/part-0.parquet@v0.0.3",
+                "Table": "document"
+            },
+            "key": "SHA256E-s126333352--256110b5ae38853576f95b07ea5b1f6020f17d9f27820e6df2882cd33e879e49",
+            "locations": [
+                {
+                    "chunks": [
+                        {
+                            "chunk_key": "SHA256E-s126333352-S1073741824-C1--256110b5ae38853576f95b07ea5b1f6020f17d9f27820e6df2882cd33e879e49",
+                            "chunk_number": 1,
+                            "chunk_size": 126333350,
+                            "s3_path": "s3://genomicsplatform-datasetdb-usw2-prd-1256/modl/perturbation-maps/dld1-nf-v26/_annex/SHA256E-s126333352-S1073741824-C1--256110b5ae38853576f95b07ea5b1f6020f17d9f27820e6df2882cd33e879e49"
+                        }
+                    ],
+                    "remote": "s3-annex",
+                    "s3url": "s3://genomicsplatform-datasetdb-usw2-prd-1256/modl/perturbation-maps/dld1-nf-v26/_annex",
+                    "type": "annex",
+                    "uuid": "5211f49c-e9ec-4b78-b90c-6d4b5b0daba2"
+                }
+            ],
+            "path": "DS000020633/experiment_main/assay_counts/__sample__group__=1/__feature__group__=1/part-0.parquet",
+            "ref": "8c014bcb6e6cba9167f233f038335580083f955f",
+            "repo_url": "git@github.com:example-org/dld1-nf-v26.git",
+            "size": 126333350
+        }
+    ],
+    "total": 600
+}

@@ -42,6 +42,8 @@ var (
 	errorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF0000")).Bold(true)
 )
 
+
+
 func NewCommand() *cobra.Command {
 	var (
 		urlFlag   string

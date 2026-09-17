@@ -63,15 +63,29 @@ func gitSSHCommand() string {
 // InjectAWSProfileEnv sets AWS_PROFILE (and, when EXO_CONFIG_DIR is active,
 // AWS_SHARED_CREDENTIALS_FILE) on the given exec.Cmd so that AWS SDK calls
 // (including git-annex S3 operations) use the credentials written by exo login.
+//
+// Injection is skipped when the user has already supplied any AWS identity via
+// the environment (AWS_PROFILE, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, or
+// AWS_SESSION_TOKEN), or when EXO_NO_AWS_PROFILE_INJECT=1 is set.
 func InjectAWSProfileEnv(cmd *exec.Cmd) {
+	// Respect user-supplied AWS identity — mirror InjectGitSSHEnv convention.
+	if os.Getenv("EXO_NO_AWS_PROFILE_INJECT") == "1" {
+		return
+	}
+	if os.Getenv("AWS_PROFILE") != "" ||
+		os.Getenv("AWS_ACCESS_KEY_ID") != "" ||
+		os.Getenv("AWS_SECRET_ACCESS_KEY") != "" ||
+		os.Getenv("AWS_SESSION_TOKEN") != "" {
+		return
+	}
+
 	profile := exohubAWSProfile()
 
 	if cmd.Env == nil {
 		cmd.Env = os.Environ()
 	}
 
-	// Replace any existing AWS_PROFILE rather than appending
-	// (some tools read the first match, not the last)
+	// Append AWS_PROFILE; deduplicate so tools reading the first entry are correct.
 	found := false
 	for i, e := range cmd.Env {
 		if strings.HasPrefix(e, "AWS_PROFILE=") {
@@ -86,8 +100,11 @@ func InjectAWSProfileEnv(cmd *exec.Cmd) {
 
 	// When a config root is active, also propagate AWS_SHARED_CREDENTIALS_FILE
 	// so that git-annex and external remote helpers use the isolated creds file.
-	if credsFile, err := configdir.AWSCredentialsFile(); err == nil && configdir.Root() != "" {
-		setOrReplace(cmd, "AWS_SHARED_CREDENTIALS_FILE", credsFile)
+	// Skip if the user has already set it.
+	if os.Getenv("AWS_SHARED_CREDENTIALS_FILE") == "" {
+		if credsFile, err := configdir.AWSCredentialsFile(); err == nil && configdir.Root() != "" {
+			setOrReplace(cmd, "AWS_SHARED_CREDENTIALS_FILE", credsFile)
+		}
 	}
 }
 

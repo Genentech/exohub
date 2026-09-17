@@ -159,6 +159,8 @@ func (b *PTYBridge) Close() {
 // Format: ESC ] 7 7 7 ; <command> [; <args>...] BEL
 var oscPrefix = []byte("\x1b]777;")
 
+
+
 // ptyToWS reads from the PTY, intercepts OSC 777 download sequences,
 // and writes terminal output as binary frames to the WebSocket.
 func (b *PTYBridge) ptyToWS() {

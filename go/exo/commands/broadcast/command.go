@@ -96,11 +96,11 @@ func (s *stringValue) UnmarshalYAML(node *yaml.Node) error {
 }
 
 type manifest struct {
-	RepoDir               string     `yaml:"repo_dir"`
-	RepoDirHyphen         string     `yaml:"repo-dir"`
-	With                  stringList `yaml:"with"`
-	WithRemotes           stringList `yaml:"with_remotes"`
-	WithRemotesHyphenated stringList `yaml:"with-remotes"`
+	RepoDir               string      `yaml:"repo_dir"`
+	RepoDirHyphen         string      `yaml:"repo-dir"`
+	With                  stringList  `yaml:"with"`
+	WithRemotes           stringList  `yaml:"with_remotes"`
+	WithRemotesHyphenated stringList  `yaml:"with-remotes"`
 }
 
 func (m manifest) repoDir() string {

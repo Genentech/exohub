@@ -61,10 +61,10 @@ func hasFail(results []CheckResult) bool {
 
 // PrintResults writes human-readable grouped output to w.
 func PrintResults(w io.Writer, results []CheckResult, verbose bool) {
-	passStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Bold(true) // green
-	warnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Bold(true) // yellow
-	failStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Bold(true) // red
-	skipStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))            // gray
+	passStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("2")).Bold(true)   // green
+	warnStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Bold(true)   // yellow
+	failStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("1")).Bold(true)   // red
+	skipStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))              // gray
 	groupStyle := lipgloss.NewStyle().Bold(true).Underline(true)
 	detailStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
 	remStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("6"))

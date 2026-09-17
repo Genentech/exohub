@@ -40,8 +40,8 @@ type Palette struct {
 	Name        string
 	Description string
 
-	Accent     ColorPair // Primary accent (selection, cursor, active items)
-	AccentDim  ColorPair // Muted accent for secondary emphasis
+	Accent    ColorPair // Primary accent (selection, cursor, active items)
+	AccentDim ColorPair // Muted accent for secondary emphasis
 	AccentDull ColorPair // Subdued accent for tertiary emphasis
 
 	Success    ColorPair // Positive status

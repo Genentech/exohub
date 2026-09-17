@@ -12,10 +12,10 @@ import (
 
 func TestClassifyRemotes(t *testing.T) {
 	tests := []struct {
-		name        string
-		config      *initcmd.RemotesConfig
-		wantContent []string
-		wantCatalog []string
+		name            string
+		config          *initcmd.RemotesConfig
+		wantContent     []string
+		wantCatalog     []string
 	}{
 		{
 			name:   "nil config",

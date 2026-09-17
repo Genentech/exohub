@@ -24,11 +24,11 @@ type PresetsConfig struct {
 
 // CloneMetadata represents metadata stored in .git/exohub/clone-preset
 type CloneMetadata struct {
-	Preset   string `yaml:"preset"`
-	ClonedAt string `yaml:"cloned_at"`
-	RepoURL  string `yaml:"repo_url"`
-	Commit   string `yaml:"commit"`
-	Branch   string `yaml:"branch"`
+	Preset    string `yaml:"preset"`
+	ClonedAt  string `yaml:"cloned_at"`
+	RepoURL   string `yaml:"repo_url"`
+	Commit    string `yaml:"commit"`
+	Branch    string `yaml:"branch"`
 }
 
 // Validate checks if the preset configuration is valid

@@ -166,6 +166,7 @@ func TestGetCredsFromServerDetailParsed(t *testing.T) {
 	}
 }
 
+
 func TestFallbackToServerOnMissingProfile(t *testing.T) {
 	// Simulate a Model 2 worker: no local AWS profile, but token.json is present.
 	tmpDir := t.TempDir()

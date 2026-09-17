@@ -32,10 +32,10 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/oauth2"
 	"google.golang.org/api/drive/v3"
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/option"
+	"golang.org/x/oauth2"
 )
 
 var appVersion = "dev"
@@ -61,9 +61,9 @@ type tokenFile struct {
 // ---- global state ----
 
 var (
-	config     = map[string]string{}
-	exportName string
-	remoteName string // git-annex remote name, used for token file path
+	config      = map[string]string{}
+	exportName  string
+	remoteName  string // git-annex remote name, used for token file path
 
 	// Drive service
 	drv          *drive.Service
@@ -369,7 +369,7 @@ func pkceFlow(clientID string) (*tokenFile, error) {
 		return nil, fmt.Errorf("token exchange error: %s", errCode)
 	}
 	return &tokenFile{
-		AccessToken: result["access_token"].(string),
+		AccessToken:  result["access_token"].(string),
 		RefreshToken: func() string {
 			if v, ok := result["refresh_token"].(string); ok {
 				return v

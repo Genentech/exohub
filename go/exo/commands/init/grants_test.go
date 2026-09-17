@@ -327,9 +327,9 @@ write_access: owners
 	t.Setenv("EXOHUB_API_URL", server.URL)
 	// Provide a token so currentUsername() returns a known non-owner value.
 	os.MkdirAll(filepath.Join(dir, "exo", "credentials"), 0700)
-	header := "eyJhbGciOiJSUzI1NiJ9"                          // base64url({"alg":"RS256"})
+	header := "eyJhbGciOiJSUzI1NiJ9" // base64url({"alg":"RS256"})
 	payload := "eyJwcmVmZXJyZWRfdXNlcm5hbWUiOiJub25vd25lciJ9" // base64url({"preferred_username":"nonowner"})
-	sig := "ZmFrZXNpZw"                                       // base64url(fakesig)
+	sig := "ZmFrZXNpZw" // base64url(fakesig)
 	fakeJWT := header + "." + payload + "." + sig
 	os.WriteFile(filepath.Join(dir, "exo", "credentials", "token.json"),
 		[]byte(`{"access_token":"`+fakeJWT+`","token_type":"Bearer"}`), 0600)

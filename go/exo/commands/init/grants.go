@@ -16,10 +16,10 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"gopkg.in/yaml.v3"
 
-	"github.com/Genentech/exohub/go/exo/commands/login"
 	"github.com/Genentech/exohub/go/exo/commandutil"
 	"github.com/Genentech/exohub/go/exo/internal/defaults"
 	"github.com/Genentech/exohub/go/exo/palette"
+	"github.com/Genentech/exohub/go/exo/commands/login"
 )
 
 // permissionsConfig represents .exohub/permissions file

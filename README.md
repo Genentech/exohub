@@ -38,13 +38,22 @@ handled via `exo login`.
 
 ## Install
 
-From the repo root:
-
-```
-./scripts/install.sh [version]
+```sh
+curl -fsSL https://github.com/Genentech/exohub/releases/latest/download/install.sh | sh
 ```
 
-If `version` is omitted, the installer resolves the latest published version from the configured artifact server (`EXOHUB_ARTIFACT_URL`).
+The installer downloads the latest release from GitHub for your OS and architecture, verifies SHA256 checksums, and places the binaries in `~/.local/bin` (or `/usr/local/bin` when running as root). Pass `--dest <dir>` to choose a different location.
+
+To install a specific version:
+
+```sh
+curl -fsSL https://github.com/Genentech/exohub/releases/latest/download/install.sh | sh -s -- --version exo/v1.2.3
+```
+
+`git-annex` is not bundled; install it separately:
+- macOS: `brew install git-annex`
+- Debian/Ubuntu: `sudo apt-get install git-annex`
+- Other: https://git-annex.branchable.com/install/
 
 ## Requirements
 

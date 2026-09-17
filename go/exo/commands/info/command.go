@@ -17,8 +17,8 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
-	"github.com/Genentech/exohub/go/exo/commands/clone"
 	"github.com/Genentech/exohub/go/exo/commandutil"
+	"github.com/Genentech/exohub/go/exo/commands/clone"
 	"github.com/Genentech/exohub/go/exo/palette"
 )
 
@@ -990,3 +990,4 @@ func displayAnnexConfigText(w io.Writer, cfg annexConfig) {
 		fmt.Fprintf(w, "  %s %s %s\n", fieldStyle.Render("Routing: "), valueStyle.Render("active"), dimStyle.Render("(.gitattributes may affect how files are routed to git vs annex)"))
 	}
 }
+

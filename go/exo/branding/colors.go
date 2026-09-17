@@ -24,17 +24,17 @@ var (
 var (
 	// HeaderStyle creates a styled header with the orange branding color
 	HeaderStyle = lipgloss.NewStyle().
-			Foreground(GradientOrange).
-			Bold(true)
+		Foreground(GradientOrange).
+		Bold(true)
 
 	// AccentStyle creates an accented style with the pink branding color
 	AccentStyle = lipgloss.NewStyle().
-			Foreground(GradientPink)
+		Foreground(GradientPink)
 
 	// SubtleStyle creates a subtle/faded style with the purple branding color
 	SubtleStyle = lipgloss.NewStyle().
-			Foreground(GradientPurple).
-			Faint(true)
+		Foreground(GradientPurple).
+		Faint(true)
 )
 
 // ExoHubBanner returns a big ASCII art "ExoHub" with straight, bold lines

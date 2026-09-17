@@ -65,9 +65,9 @@ func TestSanitizeMsg(t *testing.T) {
 // TestGetExportRef tests export reference retrieval
 func TestGetExportRef(t *testing.T) {
 	tests := []struct {
-		name   string
-		envVar string
-		want   string
+		name    string
+		envVar  string
+		want    string
 	}{
 		{
 			name:   "with export ref env",

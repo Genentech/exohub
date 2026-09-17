@@ -115,8 +115,8 @@ func TestBuildPathMetricsWithRemote(t *testing.T) {
 	}
 
 	outputs := map[string]string{
-		cmdKey("git", "annex", "info", "--json", "--bytes", "--fast", "--", "data/a.txt"):                   `{"size of annexed files in working tree":1000,"annexed files in working tree":1}`,
-		cmdKey("git", "annex", "find", "--in=here", "--format", "${bytesize}\n", "--", "data/a.txt"):        "500\n",
+		cmdKey("git", "annex", "info", "--json", "--bytes", "--fast", "--", "data/a.txt"): `{"size of annexed files in working tree":1000,"annexed files in working tree":1}`,
+		cmdKey("git", "annex", "find", "--in=here", "--format", "${bytesize}\n", "--", "data/a.txt"): "500\n",
 		cmdKey("git", "annex", "find", "--in", "remote-a", "--format", "${bytesize}\n", "--", "data/a.txt"): "200\n",
 	}
 	calls := map[string]int{}
@@ -165,13 +165,13 @@ func TestBuildPathMetricsRemoteLargerThanLocal(t *testing.T) {
 		t.Fatalf("write file: %v", err)
 	}
 
-	localTotal := int64(36_000_000_000)     // 36GB from --fast
-	localSynced := int64(36_000_000_000)    // 36GB present
+	localTotal := int64(36_000_000_000)   // 36GB from --fast
+	localSynced := int64(36_000_000_000)  // 36GB present
 	remoteBytes := int64(2_100_000_000_000) // 2.1TB on remote
 
 	outputs := map[string]string{
-		cmdKey("git", "annex", "info", "--json", "--bytes", "--fast", "--", "data/a.txt"):                   `{"size of annexed files in working tree":` + strconv.FormatInt(localTotal, 10) + `,"annexed files in working tree":35}`,
-		cmdKey("git", "annex", "find", "--in=here", "--format", "${bytesize}\n", "--", "data/a.txt"):        strconv.FormatInt(localSynced, 10) + "\n",
+		cmdKey("git", "annex", "info", "--json", "--bytes", "--fast", "--", "data/a.txt"): `{"size of annexed files in working tree":` + strconv.FormatInt(localTotal, 10) + `,"annexed files in working tree":35}`,
+		cmdKey("git", "annex", "find", "--in=here", "--format", "${bytesize}\n", "--", "data/a.txt"): strconv.FormatInt(localSynced, 10) + "\n",
 		cmdKey("git", "annex", "find", "--in", "s5-annex", "--format", "${bytesize}\n", "--", "data/a.txt"): strconv.FormatInt(remoteBytes, 10) + "\n",
 	}
 	calls := map[string]int{}
@@ -217,8 +217,8 @@ func TestBuildPathMetricsLocalZeroRemoteNonZero(t *testing.T) {
 	remoteBytes := int64(275_000_000) // 275MB on remote
 
 	outputs := map[string]string{
-		cmdKey("git", "annex", "info", "--json", "--bytes", "--fast", "--", "data/a.txt"):                   `{"size of annexed files in working tree":0,"annexed files in working tree":3}`,
-		cmdKey("git", "annex", "find", "--in=here", "--format", "${bytesize}\n", "--", "data/a.txt"):        "",
+		cmdKey("git", "annex", "info", "--json", "--bytes", "--fast", "--", "data/a.txt"): `{"size of annexed files in working tree":0,"annexed files in working tree":3}`,
+		cmdKey("git", "annex", "find", "--in=here", "--format", "${bytesize}\n", "--", "data/a.txt"): "",
 		cmdKey("git", "annex", "find", "--in", "s5-annex", "--format", "${bytesize}\n", "--", "data/a.txt"): strconv.FormatInt(remoteBytes, 10) + "\n",
 	}
 	calls := map[string]int{}
@@ -248,7 +248,7 @@ func TestBuildPathMetricsLocalZeroRemoteNonZero(t *testing.T) {
 func TestAggregateRemotesAndSummaries(t *testing.T) {
 	paths := []pathMetrics{
 		{
-			Path:  "a",
+			Path: "a",
 			Files: filesMetrics{Total: 2, Count: 1},
 			Storage: storageMetrics{
 				Total:  sizeValue{Bytes: 300},
@@ -256,7 +256,7 @@ func TestAggregateRemotesAndSummaries(t *testing.T) {
 			},
 			Remotes: []remoteMetric{
 				{
-					Name:  "r1",
+					Name: "r1",
 					Files: filesMetrics{Total: 2, Count: 1},
 					Storage: remoteStorage{
 						Total:    sizeValue{Bytes: 300},
@@ -266,7 +266,7 @@ func TestAggregateRemotesAndSummaries(t *testing.T) {
 			},
 		},
 		{
-			Path:  "b",
+			Path: "b",
 			Files: filesMetrics{Total: 3, Count: 2},
 			Storage: storageMetrics{
 				Total:  sizeValue{Bytes: 700},
@@ -274,7 +274,7 @@ func TestAggregateRemotesAndSummaries(t *testing.T) {
 			},
 			Remotes: []remoteMetric{
 				{
-					Name:  "r1",
+					Name: "r1",
 					Files: filesMetrics{Total: 3, Count: 2},
 					Storage: remoteStorage{
 						Total:    sizeValue{Bytes: 700},
@@ -443,9 +443,9 @@ func TestBuildPathMetricsSingleFile(t *testing.T) {
 	}
 
 	outputs := map[string]string{
-		cmdKey("git", "annex", "info", "--json", "--bytes", "--fast", "--", "index.duckdb"):                   `{"key":"SHA256E-s123000000--abc.duckdb","size":123000000,"file":"index.duckdb","present":true}`,
-		cmdKey("git", "annex", "find", "--in=here", "--format", "${bytesize}\n", "--", "index.duckdb"):        "123000000\n",
-		cmdKey("git", "annex", "find", "--in", "s5-annex", "--format", "${bytesize}\n", "--", "index.duckdb"): "123000000\n",
+		cmdKey("git", "annex", "info", "--json", "--bytes", "--fast", "--", "index.duckdb"): `{"key":"SHA256E-s123000000--abc.duckdb","size":123000000,"file":"index.duckdb","present":true}`,
+		cmdKey("git", "annex", "find", "--in=here", "--format", "${bytesize}\n", "--", "index.duckdb"):                  "123000000\n",
+		cmdKey("git", "annex", "find", "--in", "s5-annex", "--format", "${bytesize}\n", "--", "index.duckdb"):            "123000000\n",
 	}
 	calls := map[string]int{}
 	withCommandOutputs(t, outputs, calls)

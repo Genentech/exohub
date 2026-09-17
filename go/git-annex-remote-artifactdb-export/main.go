@@ -722,6 +722,8 @@ func uploadPermissions(s5cmd, s3Base, rootDir string) error {
 	return nil
 }
 
+
+
 func repoNameFromURL(repoURL string) string {
 	u := strings.TrimSuffix(repoURL, ".git")
 	if idx := strings.LastIndex(u, "/"); idx >= 0 {

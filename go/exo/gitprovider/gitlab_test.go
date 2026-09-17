@@ -772,7 +772,7 @@ func TestGitLabProvider_ResolveTemplate(t *testing.T) {
 							Name:              "CancerDB Template",
 							Path:              "cancerdb-template",
 							Description:       "Cancer DB template",
-							PathWithNamespace: "exohub/data-repositories/exohub-templates/cancerdb-template",
+							PathWithNamespace:  "exohub/data-repositories/exohub-templates/cancerdb-template",
 						})
 						return
 					}
@@ -798,7 +798,7 @@ func TestGitLabProvider_ResolveTemplate(t *testing.T) {
 							ID:                1,
 							Name:              "CancerDB Template",
 							Path:              "cancerdb-template",
-							PathWithNamespace: "exohub/data-repositories/exohub-templates/cancerdb-template",
+							PathWithNamespace:  "exohub/data-repositories/exohub-templates/cancerdb-template",
 						})
 						return
 					}
@@ -823,7 +823,7 @@ func TestGitLabProvider_ResolveTemplate(t *testing.T) {
 							ID:                2,
 							Name:              "My Template",
 							Path:              "my-template",
-							PathWithNamespace: "mygroup/my-template",
+							PathWithNamespace:  "mygroup/my-template",
 						})
 						return
 					}

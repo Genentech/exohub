@@ -2,7 +2,6 @@
 // acquisition. Exactly one implementation is compiled, selected by build tag:
 //
 //	//go:build !internal  → provider_oidc.go (generic OIDC device-flow + STS; the public build)
-//
 // Internal builds may supply an alternate provider via provider_internal.go (//go:build internal).
 package auth
 

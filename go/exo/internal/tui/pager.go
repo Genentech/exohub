@@ -113,10 +113,10 @@ const (
 )
 
 type pagerModel struct {
-	common         *commonModel
-	viewport       viewport.Model
-	state          pagerState
-	showHelp       bool
+	common   *commonModel
+	viewport viewport.Model
+	state    pagerState
+	showHelp bool
 	showInfo       bool // Field to track whether to show document info
 	showHighlights bool // Field to track whether to show highlights pane
 

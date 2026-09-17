@@ -11,10 +11,10 @@ import (
 
 func TestDetectProvider(t *testing.T) {
 	tests := []struct {
-		name         string
-		headers      map[string]string
-		expectedType ProviderType
-		expectError  bool
+		name           string
+		headers        map[string]string
+		expectedType   ProviderType
+		expectError    bool
 	}{
 		{
 			name: "Gitea via cookie",
@@ -65,7 +65,7 @@ func TestDetectProvider(t *testing.T) {
 					w.WriteHeader(http.StatusNotFound)
 					return
 				}
-
+				
 				for k, v := range tt.headers {
 					w.Header().Set(k, v)
 				}

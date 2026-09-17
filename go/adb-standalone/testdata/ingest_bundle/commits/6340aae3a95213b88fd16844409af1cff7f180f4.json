@@ -1,0 +1,21 @@
+{
+  "author_name": "Dev User",
+  "repo_url": "git@github.com:example-org/sample-app.git",
+  "committer_email": "dev@example.com",
+  "subject": "Remove releases/ and *.dmg from .gitignore — tracked via git-annex",
+  "git_files": [
+    ".gitignore"
+  ],
+  "committer_date": "2026-05-14T15:13:09-07:00",
+  "body": "",
+  "committer_name": "Dev User",
+  "path": "commits/6340aae3a95213b88fd16844409af1cff7f180f4.json",
+  "ref": "081195e36381de44af9c125cf540164ba1cfb669",
+  "author_date": "2026-05-14T15:13:09-07:00",
+  "author_email": "dev@example.com",
+  "hash": "6340aae3a95213b88fd16844409af1cff7f180f4",
+  "parents": [
+    "0bfe86ac8f58cbcbb6add76b7848a09e95f44e43"
+  ],
+  "$schema": "exohub-commit/v1.json"
+}

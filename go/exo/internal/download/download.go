@@ -27,9 +27,9 @@ type ProgressFunc func(filename string, downloaded, total int64)
 type Strategy int
 
 const (
-	StrategyExport       Strategy = iota // Direct presigned URL from export remote
-	StrategyAnnexSingle                  // Presigned URL from annex remote (single chunk)
-	StrategyAnnexChunked                 // Parallel chunk download from annex remote
+	StrategyExport      Strategy = iota // Direct presigned URL from export remote
+	StrategyAnnexSingle                 // Presigned URL from annex remote (single chunk)
+	StrategyAnnexChunked                // Parallel chunk download from annex remote
 )
 
 // Location represents one storage location for an artifact.
@@ -86,10 +86,10 @@ func (m *FileMetadata) IsExohubArtifact() bool {
 
 // FileInfo is a summary of a file for listing purposes.
 type FileInfo struct {
-	ID     string
-	Path   string
-	Size   int64
-	Schema string
+	ID       string
+	Path     string
+	Size     int64
+	Schema   string
 }
 
 // ChunksResponse is the response from GET /files/{id}?chunks=true.

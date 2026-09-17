@@ -1,0 +1,26 @@
+{
+  "author_name": "Dev User",
+  "repo_url": "git@github.com:example-org/sample-app.git",
+  "committer_email": "dev@example.com",
+  "subject": "fix: dmg in releases again",
+  "annex_files": [
+    "releases/SampleApp-1.1.dmg",
+    "releases/SampleApp-1.2.dmg",
+    "releases/SampleApp-1.3.dmg",
+    "releases/SampleApp-2.0.1.dmg",
+    "releases/SampleApp-2.0.dmg",
+    "releases/SampleApp-2.1.0.dmg"
+  ],
+  "committer_date": "2026-05-14T15:15:42-07:00",
+  "body": "",
+  "committer_name": "Dev User",
+  "path": "commits/3d425c56ea10c92482fc78e8ef521658bd16de12.json",
+  "ref": "081195e36381de44af9c125cf540164ba1cfb669",
+  "author_date": "2026-05-14T15:15:42-07:00",
+  "author_email": "dev@example.com",
+  "hash": "3d425c56ea10c92482fc78e8ef521658bd16de12",
+  "parents": [
+    "6340aae3a95213b88fd16844409af1cff7f180f4"
+  ],
+  "$schema": "exohub-commit/v1.json"
+}

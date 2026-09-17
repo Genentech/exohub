@@ -1,0 +1,21 @@
+{
+  "author_name": "Dev User",
+  "repo_url": "git@github.com:example-org/sample-app.git",
+  "committer_email": "dev@example.com",
+  "subject": "chore: bump version to 2.2.0",
+  "git_files": [
+    "SampleApp/SampleApp.xcodeproj/project.pbxproj"
+  ],
+  "committer_date": "2026-05-14T16:01:07-07:00",
+  "body": "",
+  "committer_name": "Dev User",
+  "path": "commits/2baf64ab61c74b320f2c27d1a38223c71e3ecb16.json",
+  "ref": "081195e36381de44af9c125cf540164ba1cfb669",
+  "author_date": "2026-05-14T16:01:07-07:00",
+  "author_email": "dev@example.com",
+  "hash": "2baf64ab61c74b320f2c27d1a38223c71e3ecb16",
+  "parents": [
+    "3d425c56ea10c92482fc78e8ef521658bd16de12"
+  ],
+  "$schema": "exohub-commit/v1.json"
+}

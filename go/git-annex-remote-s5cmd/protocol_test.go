@@ -321,39 +321,39 @@ func TestEnvOrHelper(t *testing.T) {
 // TestRunHelper tests the run command helper
 func TestRunHelper(t *testing.T) {
 	tests := []struct {
-		name        string
-		args        []string
-		expectCode  int
-		expectError bool
-		description string
+		name         string
+		args         []string
+		expectCode   int
+		expectError  bool
+		description  string
 	}{
 		{
-			name:        "no_args",
-			args:        []string{},
-			expectCode:  127,
-			expectError: true,
-			description: "Empty args should return code 127",
+			name:         "no_args",
+			args:         []string{},
+			expectCode:   127,
+			expectError:  true,
+			description:  "Empty args should return code 127",
 		},
 		{
-			name:        "successful_echo",
-			args:        []string{"echo", "test"},
-			expectCode:  0,
-			expectError: false,
-			description: "Successful command should return code 0",
+			name:         "successful_echo",
+			args:         []string{"echo", "test"},
+			expectCode:   0,
+			expectError:  false,
+			description:  "Successful command should return code 0",
 		},
 		{
-			name:        "nonexistent_command",
-			args:        []string{"nonexistent-cmd-12345"},
-			expectCode:  127,
-			expectError: true,
-			description: "Nonexistent command should return code 127",
+			name:         "nonexistent_command",
+			args:         []string{"nonexistent-cmd-12345"},
+			expectCode:   127,
+			expectError:  true,
+			description:  "Nonexistent command should return code 127",
 		},
 		{
-			name:        "false_command",
-			args:        []string{"sh", "-c", "exit 1"},
-			expectCode:  1,
-			expectError: true,
-			description: "Failed command should return exit code 1",
+			name:         "false_command",
+			args:         []string{"sh", "-c", "exit 1"},
+			expectCode:   1,
+			expectError:  true,
+			description:  "Failed command should return exit code 1",
 		},
 	}
 

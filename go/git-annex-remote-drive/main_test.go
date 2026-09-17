@@ -1,10 +1,10 @@
 package main
 
 import (
+	"path/filepath"
 	"bufio"
 	"bytes"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )

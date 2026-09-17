@@ -6,9 +6,9 @@ import (
 
 func TestIsCredentialError(t *testing.T) {
 	tests := []struct {
-		name   string
-		errMsg string
-		want   bool
+		name    string
+		errMsg  string
+		want    bool
 	}{
 		{
 			name:   "ExpiredToken error",

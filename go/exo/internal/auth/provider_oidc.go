@@ -21,9 +21,9 @@ import (
 
 // oidcProvider implements Provider using the OIDC device flow + STS.
 type oidcProvider struct {
-	cfg     Config
-	oauth2  *oauth2.Config
-	pollDur time.Duration
+	cfg      Config
+	oauth2   *oauth2.Config
+	pollDur  time.Duration
 }
 
 // New returns a Provider backed by the generic OIDC + STS implementation.

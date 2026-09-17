@@ -1,0 +1,74 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: ["main"]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build Hugo site
+    runs-on: ubuntu-latest
+    outputs:
+      website-exists: ${{ steps.check-website.outputs.exists }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check website directory exists
+        id: check-website
+        run: |
+          if [ -d website ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "website/ directory not found — skipping Hugo build"
+          fi
+
+      - name: Setup Pages
+        if: steps.check-website.outputs.exists == 'true'
+        uses: actions/configure-pages@v5
+
+      - name: Install Hugo
+        if: steps.check-website.outputs.exists == 'true'
+        run: |
+          HUGO_VERSION="0.147.9"
+          BASE_URL="https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}"
+          TARBALL="hugo_extended_${HUGO_VERSION}_linux-amd64.tar.gz"
+          curl -sSfL "${BASE_URL}/${TARBALL}" -o /tmp/hugo.tar.gz
+          curl -sSfL "${BASE_URL}/hugo_${HUGO_VERSION}_checksums.txt" -o /tmp/hugo_checksums.txt
+          grep "${TARBALL}" /tmp/hugo_checksums.txt | sha256sum --check --status
+          tar -xz -C /usr/local/bin -f /tmp/hugo.tar.gz hugo
+          rm /tmp/hugo.tar.gz /tmp/hugo_checksums.txt
+          hugo version
+
+      - name: Build Hugo site
+        if: steps.check-website.outputs.exists == 'true'
+        run: hugo --environment oss --minify --baseURL "https://genentech.github.io/exohub/"
+        working-directory: website
+
+      - name: Upload Pages artifact
+        if: steps.check-website.outputs.exists == 'true'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: website/public
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    if: needs.build.outputs.website-exists == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

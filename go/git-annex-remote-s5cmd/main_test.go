@@ -196,6 +196,7 @@ func parseTime(s string) time.Time {
 	return t
 }
 
+
 // makeFakeCredHelper writes a shell script that outputs JSON credentials with
 // the given expiration to a temp dir and returns its path.
 func makeFakeCredHelper(t *testing.T, expiration string) string {

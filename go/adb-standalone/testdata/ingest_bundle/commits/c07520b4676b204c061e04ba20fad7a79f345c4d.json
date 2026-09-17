@@ -1,0 +1,22 @@
+{
+  "author_name": "Dev User",
+  "repo_url": "git@github.com:example-org/sample-app.git",
+  "committer_email": "dev@example.com",
+  "subject": "feat: auto-version from conventional commits, DMG saved to releases/",
+  "git_files": [
+    ".gitignore",
+    "release.sh"
+  ],
+  "committer_date": "2026-05-14T14:49:22-07:00",
+  "body": "",
+  "committer_name": "Dev User",
+  "path": "commits/c07520b4676b204c061e04ba20fad7a79f345c4d.json",
+  "ref": "081195e36381de44af9c125cf540164ba1cfb669",
+  "author_date": "2026-05-14T14:49:22-07:00",
+  "author_email": "dev@example.com",
+  "hash": "c07520b4676b204c061e04ba20fad7a79f345c4d",
+  "parents": [
+    "1f1d6f4f685f56e4ecc254c1a09fe328baa4e266"
+  ],
+  "$schema": "exohub-commit/v1.json"
+}

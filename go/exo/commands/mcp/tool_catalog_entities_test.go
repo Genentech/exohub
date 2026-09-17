@@ -18,11 +18,11 @@ func TestHandleCatalogEntities_Basic(t *testing.T) {
 		}
 		resp := map[string]any{
 			"entity": map[string]any{
-				"entity_id":   "e1",
-				"name":        "BRCA1",
-				"type":        "gene",
-				"summary":     "BRCA1 is a tumor suppressor gene...",
-				"source_docs": []string{"proj:doc.json@v1"},
+				"entity_id":    "e1",
+				"name":         "BRCA1",
+				"type":         "gene",
+				"summary":      "BRCA1 is a tumor suppressor gene...",
+				"source_docs":  []string{"proj:doc.json@v1"},
 			},
 			"relationships": []map[string]any{
 				{
@@ -77,7 +77,7 @@ func TestHandleCatalogEntities_WithoutRelationships(t *testing.T) {
 	withTestCatalog(t, mux)
 
 	_, err := callTool(handleCatalogEntities, map[string]any{
-		"name":                  "BRCA1",
+		"name":                 "BRCA1",
 		"include_relationships": false,
 	})
 	if err != nil {

@@ -5,8 +5,8 @@ var Patsica = Palette{
 	Name:        "patsica",
 	Description: "Chaotic eyesore (for testing purposes only)",
 
-	Accent:     ColorPair{Light: "#FF00FF", Dark: "#00FF00"},
-	AccentDim:  ColorPair{Light: "#FF00FF", Dark: "#00FF00"},
+	Accent:    ColorPair{Light: "#FF00FF", Dark: "#00FF00"},
+	AccentDim: ColorPair{Light: "#FF00FF", Dark: "#00FF00"},
 	AccentDull: ColorPair{Light: "#FFFF00", Dark: "#FF00FF"},
 
 	Success:    ColorPair{Light: "#0000FF", Dark: "#FF0000"},

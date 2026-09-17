@@ -11,12 +11,12 @@ import (
 
 func TestFilterUUIDFromLogWithReport(t *testing.T) {
 	tests := []struct {
-		name           string
-		content        string
-		uuid           string
-		expectModified bool
-		expectContent  string
-		expectError    bool
+		name            string
+		content         string
+		uuid            string
+		expectModified  bool
+		expectContent   string
+		expectError     bool
 	}{
 		{
 			name: "removes lines with UUID",

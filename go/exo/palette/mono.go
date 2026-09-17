@@ -7,8 +7,8 @@ var Mono = Palette{
 	Name:        "mono",
 	Description: "Black, white, and grayscale",
 
-	Accent:     ColorPair{Light: "#000000", Dark: "#FFFFFF"},
-	AccentDim:  ColorPair{Light: "#444444", Dark: "#BBBBBB"},
+	Accent:    ColorPair{Light: "#000000", Dark: "#FFFFFF"},
+	AccentDim: ColorPair{Light: "#444444", Dark: "#BBBBBB"},
 	AccentDull: ColorPair{Light: "#666666", Dark: "#888888"},
 
 	Success:    ColorPair{Light: "#333333", Dark: "#CCCCCC"},

@@ -139,29 +139,29 @@ func sshHostToHTTPS(hostname string) string {
 // RemoteConfig represents a single remote configuration
 type RemoteConfig struct {
 	Name           string     `yaml:"name"`
-	Type           string     `yaml:"type"`           // annex, export, import, exospace, artifactdb, drive
-	UUID           string     `yaml:"uuid,omitempty"` // git-annex UUID (tracked for documentation)
+	Type           string     `yaml:"type"` // annex, export, import, exospace, artifactdb, drive
+	UUID           string     `yaml:"uuid,omitempty"`           // git-annex UUID (tracked for documentation)
 	S3URL          string     `yaml:"s3url,omitempty"`
-	Bucket         string     `yaml:"bucket,omitempty"`     // For S3 type remotes
-	Prefix         string     `yaml:"prefix,omitempty"`     // For S3 type remotes (fileprefix)
-	Datacenter     string     `yaml:"datacenter,omitempty"` // For S3 type remotes (AWS region)
+	Bucket         string     `yaml:"bucket,omitempty"`         // For S3 type remotes
+	Prefix         string     `yaml:"prefix,omitempty"`         // For S3 type remotes (fileprefix)
+	Datacenter     string     `yaml:"datacenter,omitempty"`     // For S3 type remotes (AWS region)
 	RsyncURL       string     `yaml:"rsyncurl,omitempty"`
 	TrackingBranch string     `yaml:"tracking_branch,omitempty"`
 	Chunk          string     `yaml:"chunk,omitempty"`
-	Include        stringList `yaml:"include,omitempty"`       // Glob patterns for filtering (import/annex only)
-	Exclude        stringList `yaml:"exclude,omitempty"`       // Glob patterns for exclusion (import/annex only)
-	ImportDir      string     `yaml:"import_dir,omitempty"`    // Destination directory for imported files (import only)
-	Grants         bool       `yaml:"grants,omitempty"`        // Use S3 Access Grants for credentials (annex/export only)
-	Permissions    string     `yaml:"permissions,omitempty"`   // Permission preset for exospace: public, group, private
-	RsyncOptions   string     `yaml:"rsync_options,omitempty"` // Custom rsync options for exospace (advanced)
-	Host           string     `yaml:"host,omitempty"`          // Custom S3 host for import remotes (e.g., localhost:9000 for MinIO)
-	Port           string     `yaml:"port,omitempty"`          // Custom S3 port for import remotes
-	Protocol       string     `yaml:"protocol,omitempty"`      // S3 protocol for import remotes: http or https (default: https)
-	InstanceURL    string     `yaml:"instance_url,omitempty"`  // ArtifactDB instance URL (artifactdb remotes only)
-	PublishOn      string     `yaml:"publish_on,omitempty"`    // When to publish: "tag" (only on tags) or "always" (default)
-	ProjectID      string     `yaml:"project_id,omitempty"`    // Custom project ID override (defaults to repo name)
-	Mode           string     `yaml:"mode,omitempty"`          // Required for catalog remotes: "export" or "import"
-	DrivePath      string     `yaml:"drive_path,omitempty"`    // Drive folder path (drive remotes only)
+	Include        stringList `yaml:"include,omitempty"`        // Glob patterns for filtering (import/annex only)
+	Exclude        stringList `yaml:"exclude,omitempty"`        // Glob patterns for exclusion (import/annex only)
+	ImportDir      string     `yaml:"import_dir,omitempty"`     // Destination directory for imported files (import only)
+	Grants         bool       `yaml:"grants,omitempty"`         // Use S3 Access Grants for credentials (annex/export only)
+	Permissions    string     `yaml:"permissions,omitempty"`    // Permission preset for exospace: public, group, private
+	RsyncOptions   string     `yaml:"rsync_options,omitempty"`  // Custom rsync options for exospace (advanced)
+	Host           string     `yaml:"host,omitempty"`           // Custom S3 host for import remotes (e.g., localhost:9000 for MinIO)
+	Port           string     `yaml:"port,omitempty"`           // Custom S3 port for import remotes
+	Protocol       string     `yaml:"protocol,omitempty"`       // S3 protocol for import remotes: http or https (default: https)
+	InstanceURL    string     `yaml:"instance_url,omitempty"`   // ArtifactDB instance URL (artifactdb remotes only)
+	PublishOn      string     `yaml:"publish_on,omitempty"`     // When to publish: "tag" (only on tags) or "always" (default)
+	ProjectID      string     `yaml:"project_id,omitempty"`     // Custom project ID override (defaults to repo name)
+	Mode           string     `yaml:"mode,omitempty"`            // Required for catalog remotes: "export" or "import"
+	DrivePath      string     `yaml:"drive_path,omitempty"`     // Drive folder path (drive remotes only)
 }
 
 // stringList is a YAML type that accepts both single strings and string lists
@@ -384,6 +384,7 @@ func (rc *RemotesConfig) AddRemote(remote RemoteConfig) {
 	// Otherwise append
 	rc.Remotes = append(rc.Remotes, remote)
 }
+
 
 // IsGitRepo checks if current directory is a git repository
 func IsGitRepo() bool {

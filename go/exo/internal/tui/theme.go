@@ -49,21 +49,21 @@ func ThemeFromPalette(p *palette.Palette) Theme {
 		highlightFg = p.SearchHighlightFg.Light
 	}
 	return Theme{
-		Primary:           p.Accent,
-		PrimaryDim:        p.AccentDim,
-		PrimaryDull:       p.AccentDull,
-		PrimaryDimDull:    p.AccentDull, // reuse AccentDull as dimmest
-		Success:           p.Success,
-		SuccessDim:        p.SuccessDim,
-		SuccessVeryDim:    p.SuccessDim, // reuse SuccessDim
-		Highlight:         p.Highlight,
-		LogoBg:            p.LogoBg,
-		LogoFg:            p.LogoFg,
+		Primary:        p.Accent,
+		PrimaryDim:     p.AccentDim,
+		PrimaryDull:    p.AccentDull,
+		PrimaryDimDull: p.AccentDull, // reuse AccentDull as dimmest
+		Success:        p.Success,
+		SuccessDim:     p.SuccessDim,
+		SuccessVeryDim: p.SuccessDim, // reuse SuccessDim
+		Highlight:      p.Highlight,
+		LogoBg:         p.LogoBg,
+		LogoFg:         p.LogoFg,
 		StatusBarAccent:   p.StatusBarFg,
 		StatusBarAccentBg: p.StatusBarBg,
-		HighlightBg:       highlightBg,
-		HighlightFg:       highlightFg,
-		BadgeFg:           p.Badge,
+		HighlightBg:    highlightBg,
+		HighlightFg:    highlightFg,
+		BadgeFg:        p.Badge,
 	}
 }
 

@@ -1,0 +1,29 @@
+{
+  "author_name": "Dev User",
+  "repo_url": "git@github.com:example-org/sample-app.git",
+  "committer_email": "dev@example.com",
+  "subject": "Restore .gitignore: exclude releases/ and *.dmg",
+  "annex_files": [
+    "releases/SampleApp-1.1.dmg",
+    "releases/SampleApp-1.2.dmg",
+    "releases/SampleApp-1.3.dmg",
+    "releases/SampleApp-2.0.1.dmg",
+    "releases/SampleApp-2.0.dmg",
+    "releases/SampleApp-2.1.0.dmg"
+  ],
+  "git_files": [
+    ".gitignore"
+  ],
+  "committer_date": "2026-05-14T15:11:02-07:00",
+  "body": "",
+  "committer_name": "Dev User",
+  "path": "commits/0bfe86ac8f58cbcbb6add76b7848a09e95f44e43.json",
+  "ref": "081195e36381de44af9c125cf540164ba1cfb669",
+  "author_date": "2026-05-14T15:11:02-07:00",
+  "author_email": "dev@example.com",
+  "hash": "0bfe86ac8f58cbcbb6add76b7848a09e95f44e43",
+  "parents": [
+    "4374bc9aa4bc082270a03a8a6c6209ac1ff1374a"
+  ],
+  "$schema": "exohub-commit/v1.json"
+}

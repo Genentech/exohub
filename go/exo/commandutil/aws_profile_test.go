@@ -37,21 +37,19 @@ func TestInjectAWSProfileEnv_SetsDefault(t *testing.T) {
 	}
 }
 
-func TestInjectAWSProfileEnv_ReplacesExisting(t *testing.T) {
+func TestInjectAWSProfileEnv_RespectsExistingAWSProfile(t *testing.T) {
 	t.Setenv("EXOHUB_AWS_PROFILE", "")
+	t.Setenv("AWS_PROFILE", "user-profile")
 	cmd := exec.Command("echo")
-	cmd.Env = []string{"HOME=/tmp", "AWS_PROFILE=default", "PATH=/usr/bin"}
+	cmd.Env = []string{"HOME=/tmp", "AWS_PROFILE=user-profile", "PATH=/usr/bin"}
 	InjectAWSProfileEnv(cmd)
 
+	// The user's value must be preserved; exohub profile must not appear.
 	for _, e := range cmd.Env {
-		if e == "AWS_PROFILE=default" {
-			t.Error("AWS_PROFILE=default should have been replaced")
-		}
 		if e == "AWS_PROFILE=exohub" {
-			return // success
+			t.Error("AWS_PROFILE=exohub should not have been injected when user already set AWS_PROFILE")
 		}
 	}
-	t.Errorf("AWS_PROFILE=exohub not found in env: %v", cmd.Env)
 }
 
 func TestInjectAWSProfileEnv_UsesOverride(t *testing.T) {
@@ -111,6 +109,11 @@ func TestInjectAWSProfileEnv_NoDuplicates(t *testing.T) {
 
 func TestCommandInjectsAWSProfile(t *testing.T) {
 	t.Setenv("EXOHUB_AWS_PROFILE", "")
+	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+	t.Setenv("AWS_SESSION_TOKEN", "")
+	t.Setenv("EXO_NO_AWS_PROFILE_INJECT", "")
 	cmd := Command("echo", "hello")
 
 	found := false
@@ -120,6 +123,110 @@ func TestCommandInjectsAWSProfile(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Error("Command() should inject AWS_PROFILE=exohub")
+		t.Error("Command() should inject AWS_PROFILE=exohub when no user AWS vars are set")
+	}
+}
+
+func TestInjectAWSProfileEnv_SkipsWhenAccessKeyIDSet(t *testing.T) {
+	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_ACCESS_KEY_ID", "test-access-key-id")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+	t.Setenv("AWS_SESSION_TOKEN", "")
+	t.Setenv("EXO_NO_AWS_PROFILE_INJECT", "")
+	cmd := exec.Command("echo")
+	InjectAWSProfileEnv(cmd)
+
+	for _, e := range cmd.Env {
+		if strings.HasPrefix(e, "AWS_PROFILE=") {
+			t.Errorf("AWS_PROFILE should not be injected when AWS_ACCESS_KEY_ID is set, got %s", e)
+		}
+	}
+}
+
+func TestInjectAWSProfileEnv_SkipsWhenSecretKeySet(t *testing.T) {
+	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "supersecret")
+	t.Setenv("AWS_SESSION_TOKEN", "")
+	t.Setenv("EXO_NO_AWS_PROFILE_INJECT", "")
+	cmd := exec.Command("echo")
+	InjectAWSProfileEnv(cmd)
+
+	for _, e := range cmd.Env {
+		if strings.HasPrefix(e, "AWS_PROFILE=") {
+			t.Errorf("AWS_PROFILE should not be injected when AWS_SECRET_ACCESS_KEY is set, got %s", e)
+		}
+	}
+}
+
+func TestInjectAWSProfileEnv_SkipsWhenSessionTokenSet(t *testing.T) {
+	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+	t.Setenv("AWS_SESSION_TOKEN", "mytoken")
+	t.Setenv("EXO_NO_AWS_PROFILE_INJECT", "")
+	cmd := exec.Command("echo")
+	InjectAWSProfileEnv(cmd)
+
+	for _, e := range cmd.Env {
+		if strings.HasPrefix(e, "AWS_PROFILE=") {
+			t.Errorf("AWS_PROFILE should not be injected when AWS_SESSION_TOKEN is set, got %s", e)
+		}
+	}
+}
+
+func TestInjectAWSProfileEnv_SkipsWhenOptOutSet(t *testing.T) {
+	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+	t.Setenv("AWS_SESSION_TOKEN", "")
+	t.Setenv("EXO_NO_AWS_PROFILE_INJECT", "1")
+	cmd := exec.Command("echo")
+	InjectAWSProfileEnv(cmd)
+
+	for _, e := range cmd.Env {
+		if strings.HasPrefix(e, "AWS_PROFILE=") {
+			t.Errorf("AWS_PROFILE should not be injected when EXO_NO_AWS_PROFILE_INJECT=1, got %s", e)
+		}
+	}
+}
+
+func TestInjectAWSProfileEnv_SkipsCredentialsFileWhenUserSet(t *testing.T) {
+	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+	t.Setenv("AWS_SESSION_TOKEN", "")
+	t.Setenv("EXO_NO_AWS_PROFILE_INJECT", "")
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", "/home/user/.aws/credentials")
+	cmd := exec.Command("echo")
+	cmd.Env = []string{"HOME=/tmp", "AWS_SHARED_CREDENTIALS_FILE=/home/user/.aws/credentials"}
+	InjectAWSProfileEnv(cmd)
+
+	for _, e := range cmd.Env {
+		if strings.HasPrefix(e, "AWS_SHARED_CREDENTIALS_FILE=") && e != "AWS_SHARED_CREDENTIALS_FILE=/home/user/.aws/credentials" {
+			t.Errorf("AWS_SHARED_CREDENTIALS_FILE should not be overridden, got %s", e)
+		}
+	}
+}
+
+func TestInjectAWSProfileEnv_InjectsWhenNoUserAWSVars(t *testing.T) {
+	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+	t.Setenv("AWS_SESSION_TOKEN", "")
+	t.Setenv("EXO_NO_AWS_PROFILE_INJECT", "")
+	t.Setenv("EXOHUB_AWS_PROFILE", "grants-true-profile")
+	cmd := exec.Command("echo")
+	cmd.Env = []string{"HOME=/tmp"}
+	InjectAWSProfileEnv(cmd)
+
+	found := false
+	for _, e := range cmd.Env {
+		if e == "AWS_PROFILE=grants-true-profile" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("AWS_PROFILE=grants-true-profile should be injected when no user AWS vars are set, env: %v", cmd.Env)
 	}
 }

@@ -496,10 +496,10 @@ func TestRemoteConfigValidate(t *testing.T) {
 		{
 			name: "valid catalog remote (artifactdb export)",
 			remote: RemoteConfig{
-				Name:        "catalog",
-				Type:        "artifactdb",
-				Mode:        "export",
-				S3URL:       "s3://bucket/path/_artifactdb",
+				Name:  "catalog",
+				Type:  "artifactdb",
+				Mode:  "export",
+				S3URL: "s3://bucket/path/_artifactdb",
 				InstanceURL: "https://catalog.example.com/v1/cancerdb",
 			},
 			wantErr: false,

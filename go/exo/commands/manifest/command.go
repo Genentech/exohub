@@ -23,6 +23,8 @@ Notes:
   - "sync" is accepted as an alias for "annex".
   - YAML parsing uses the built-in parser.`
 
+
+
 const initWorkflowTemplate = `# Exo workflow manifest (used by run.py)
 name: my-dataset
 url: https://github.com/org/repo.git
@@ -130,3 +132,5 @@ func newInitCmd() *cobra.Command {
 	cmd.Flags().StringVar(&manifestType, "type", "", "Manifest type (annex, export, workflow, permissions, or bundle)")
 	return cmd
 }
+
+

@@ -336,10 +336,10 @@ func checkRegistryDrift(repoDir string, remotes []remoteEntry) []CheckResult {
 	var result struct {
 		InSync bool `json:"in_sync"`
 		Drift  struct {
-			RegistryDrift []json.RawMessage `json:"registry_drift"`
-			MetadataDrift []json.RawMessage `json:"metadata_drift"`
-			MissingGrants []json.RawMessage `json:"missing_grants"`
-			ExtraGrants   []json.RawMessage `json:"extra_grants"`
+			RegistryDrift  []json.RawMessage `json:"registry_drift"`
+			MetadataDrift  []json.RawMessage `json:"metadata_drift"`
+			MissingGrants  []json.RawMessage `json:"missing_grants"`
+			ExtraGrants    []json.RawMessage `json:"extra_grants"`
 		} `json:"drift"`
 	}
 	if err := json.Unmarshal(respBody, &result); err != nil {

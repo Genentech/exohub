@@ -26,9 +26,9 @@ import (
 
 	initcmd "github.com/Genentech/exohub/go/exo/commands/init"
 	"github.com/Genentech/exohub/go/exo/commandutil"
+	"github.com/Genentech/exohub/go/exo/configdir"
 	manifestutil "github.com/Genentech/exohub/go/exo/commandutil"
 	logging "github.com/Genentech/exohub/go/exo/commandutil/logging"
-	"github.com/Genentech/exohub/go/exo/configdir"
 	"github.com/Genentech/exohub/go/exo/internal/defaults"
 	"github.com/Genentech/exohub/go/exo/palette"
 )

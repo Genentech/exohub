@@ -12,6 +12,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/dustin/go-humanize"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/paginator"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -19,7 +20,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/log"
-	"github.com/dustin/go-humanize"
 
 	"github.com/Genentech/exohub/go/exo/palette"
 	"github.com/muesli/reflow/ansi"
@@ -815,21 +815,21 @@ func newStashModel(common *commonModel) stashModel {
 	}
 
 	m := stashModel{
-		common:            common,
-		spinner:           sp,
-		filterInput:       tih,
-		projectInput:      pi,
-		schemaList:        schemaList,
+		common:          common,
+		spinner:         sp,
+		filterInput:     tih,
+		projectInput:    pi,
+		schemaList:      schemaList,
 		schemaListVisible: false,
-		versionList:       versionList,
-		filteringFocus:    focusOnSearch,
-		schemasLoading:    false,
-		selectedSchema:    savedSchema,
-		selectedProject:   savedProject,
-		selectedVersion:   initialVersion,
-		serverPage:        1,
-		sections:          s,
-		selected:          make(map[int]bool),
+		versionList:     versionList,
+		filteringFocus:  focusOnSearch,
+		schemasLoading:  false,
+		selectedSchema:  savedSchema,
+		selectedProject: savedProject,
+		selectedVersion: initialVersion,
+		serverPage:      1,
+		sections:        s,
+		selected:        make(map[int]bool),
 	}
 
 	return m
@@ -1015,8 +1015,8 @@ func (m stashModel) update(msg tea.Msg) (stashModel, tea.Cmd) {
 				if vi, ok := item.(versionItem); ok && vi.value == msg.latest {
 					if i > 1 {
 						reordered := make([]list.Item, 0, len(items))
-						reordered = append(reordered, items[0]) // "All"
-						reordered = append(reordered, items[i]) // latest version
+						reordered = append(reordered, items[0])   // "All"
+						reordered = append(reordered, items[i])    // latest version
 						reordered = append(reordered, items[1:i]...)
 						reordered = append(reordered, items[i+1:]...)
 						items = reordered

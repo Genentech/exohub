@@ -52,12 +52,12 @@ func (s *stringValue) UnmarshalYAML(node *yaml.Node) error {
 }
 
 type manifest struct {
-	From        stringValue `yaml:"from"`
-	To          stringValue `yaml:"to"`
-	Ref         stringValue `yaml:"ref"`
-	Jobs        stringValue `yaml:"jobs"`
-	Paths       stringList  `yaml:"paths"`
-	WithRemotes stringList  `yaml:"with-remotes"`
+	From            stringValue `yaml:"from"`
+	To              stringValue `yaml:"to"`
+	Ref             stringValue `yaml:"ref"`
+	Jobs            stringValue `yaml:"jobs"`
+	Paths           stringList  `yaml:"paths"`
+	WithRemotes     stringList  `yaml:"with-remotes"`
 }
 
 func NewCommand() *cobra.Command {

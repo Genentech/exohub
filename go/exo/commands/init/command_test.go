@@ -1026,8 +1026,8 @@ uuid-9999 timestamp=789 name=export-remote exporttree=yes'`)
 	}
 
 	tests := []struct {
-		name string
-		want bool
+		name     string
+		want     bool
 	}{
 		{"test-remote", true},
 		{"another-remote", true},
@@ -1051,10 +1051,10 @@ uuid-9999 timestamp=789 name=export-remote exporttree=yes'`)
 // when constructing enableremote arguments
 func TestEnableOrInitRemoteFiltersInitParams(t *testing.T) {
 	tests := []struct {
-		name        string
-		initArgs    []string
-		wantEnable  []string
-		description string
+		name         string
+		initArgs     []string
+		wantEnable   []string
+		description  string
 	}{
 		{
 			name: "rsync remote",
@@ -1139,13 +1139,13 @@ func TestEnableOrInitRemoteWithUUID(t *testing.T) {
 	defer func() { command = oldCommand }()
 
 	tests := []struct {
-		name           string
-		remoteName     string
-		uuid           string
-		enableSucceeds bool
-		wantError      bool
-		wantEnableArgs []string // expected enableremote args (first 5 args)
-		description    string
+		name            string
+		remoteName      string
+		uuid            string
+		enableSucceeds  bool
+		wantError       bool
+		wantEnableArgs  []string // expected enableremote args (first 5 args)
+		description     string
 	}{
 		{
 			name:           "UUID specified, enableremote succeeds",
