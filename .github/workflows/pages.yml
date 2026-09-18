@@ -42,11 +42,15 @@ jobs:
           HUGO_VERSION="0.147.9"
           BASE_URL="https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}"
           TARBALL="hugo_extended_${HUGO_VERSION}_linux-amd64.tar.gz"
-          curl -sSfL "${BASE_URL}/${TARBALL}" -o /tmp/hugo.tar.gz
-          curl -sSfL "${BASE_URL}/hugo_${HUGO_VERSION}_checksums.txt" -o /tmp/hugo_checksums.txt
-          grep "${TARBALL}" /tmp/hugo_checksums.txt | sha256sum --check --status
-          tar -xz -C /usr/local/bin -f /tmp/hugo.tar.gz hugo
-          rm /tmp/hugo.tar.gz /tmp/hugo_checksums.txt
+          # Download and verify from /tmp using the archive's real filename, so
+          # `sha256sum --check` (which reads the name from the checksum line)
+          # finds the file in the current dir.
+          cd /tmp
+          curl -sSfL "${BASE_URL}/${TARBALL}" -o "${TARBALL}"
+          curl -sSfL "${BASE_URL}/hugo_${HUGO_VERSION}_checksums.txt" -o hugo_checksums.txt
+          grep "${TARBALL}" hugo_checksums.txt | sha256sum --check --status
+          tar -xz -C /usr/local/bin -f "${TARBALL}" hugo
+          rm "${TARBALL}" hugo_checksums.txt
           hugo version
 
       - name: Build Hugo site
