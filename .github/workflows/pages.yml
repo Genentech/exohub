@@ -53,6 +53,17 @@ jobs:
           rm "${TARBALL}" hugo_checksums.txt
           hugo version
 
+      # The Hugo theme (tailbliss) is a git submodule upstream and is not stored
+      # in this repo (it's a generated mirror). Fetch it at build time, pinned to
+      # the same commit the internal repo uses, so the build is reproducible.
+      - name: Fetch Hugo theme (tailbliss)
+        if: steps.check-website.outputs.exists == 'true'
+        run: |
+          THEME_SHA="d3cdd5c5ae12ecc78df971bff2d93e15a50b7c55"
+          rm -rf website/themes/tailbliss
+          git clone https://github.com/nusserstudios/tailbliss.git website/themes/tailbliss
+          git -C website/themes/tailbliss checkout "$THEME_SHA"
+
       - name: Build Hugo site
         if: steps.check-website.outputs.exists == 'true'
         run: hugo --environment oss --minify --baseURL "https://genentech.github.io/exohub/"
