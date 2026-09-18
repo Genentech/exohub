@@ -1,0 +1,17 @@
+baseURL = "https://genentech.github.io/exohub/"
+
+# Override staticDir so oss-static/ takes precedence over static/ for the OSS build.
+# oss-static/tips.json replaces static/tips.json (which contains internal deployment names).
+staticDir = ["static", "oss-static"]
+
+# ignoreFiles: list of regexes matched against absolute file paths.
+ignoreFiles = [
+  'content/confidentiality\.md$',
+  'content/docs/components/exogate(/|$)',
+  'content/docs/components/exoworkers(/|$)',
+  'content/docs/components/exogit(/|$)',
+  'content/use-cases/gwasdb(/|$)',
+  'content/use-cases/_index\.md$',
+  'content/tips(/|$)',
+  'content/api/_index\.md$',
+]

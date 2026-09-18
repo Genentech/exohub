@@ -1,0 +1,8 @@
+# -- Module Configuration --
+
+[hugoVersion]
+  extended = true
+  min = "0.87.0"
+  max = ""
+
+# Using theme via themes/ submodule; no module imports needed.

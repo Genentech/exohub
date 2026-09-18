@@ -1,0 +1,1130 @@
+/* ExoHub brand overrides
+   Source: openspec/changes/add-site-branding/exohub branding.png
+   Purpose: Map theme primary (indigo) scale to ExoHub Orange→Purple gradient and expose gradient vars. */
+
+/* Light mode tokens */
+:root {
+  /* Primary replaces theme indigo scale using orange→purple ramp */
+  --color-indigo-50:  #fff4e8;
+  --color-indigo-100: #ffe1c4;  /* light orange */
+  --color-indigo-200: #ffc184;  /* soft orange */
+  --color-indigo-300: #ff9a4d;  /* orange */
+  --color-indigo-400: #ff7a18;  /* brand orange */
+  --color-indigo-500: #ff4f7a;  /* orange→pink midpoint */
+  --color-indigo-600: #e23fb1;  /* magenta */
+  --color-indigo-700: #b433d9;  /* purple-magenta */
+  --color-indigo-800: #8a2be2;  /* vivid purple */
+  --color-indigo-900: #6b1fbf;  /* deep purple */
+  --color-indigo-950: #4a1691;  /* darkest purple */
+
+  /* Gradient stops for brand components */
+  /* Darker brand gradient per spec */
+  --brand-grad-start: #e96e1f;  /* dark orange */
+  --brand-grad-mid:   #b04b74;  /* mid blend */
+  --brand-grad-end:   #6a3697;  /* dark purple */
+
+  /* Map Tailbliss primary tokens so bg-primary-* picks up brand palette. */
+  --color-primary-400: var(--brand-grad-start);
+  --color-primary-500: #cc5a2d; /* slightly darker than start */
+  --color-primary-600: oklch(0.42 0.12 350.27); /* requested key brand shade */
+  --color-primary-700: #8c3e9d; /* near brand end */
+
+  /* Surfaces */
+  --brand-bg:       #0f1014;
+  --brand-surface:  #15161c;
+  --brand-text:     #e7e8ee;
+}
+
+/* Dark mode tokens */
+.dark {
+  /* Lifted, more luminous tones for dark UI */
+  --color-indigo-50:  #2a1300;
+  --color-indigo-100: #3b1700;  /* warm shadow */
+  --color-indigo-200: #5a2300;
+  --color-indigo-300: #7a2c00;
+  --color-indigo-400: #ff8e3d;  /* orange highlight */
+  --color-indigo-500: #ff6aa0;  /* pink midpoint */
+  --color-indigo-600: #f04bd2;  /* magenta */
+  --color-indigo-700: #c061f3;  /* purple-magenta */
+  --color-indigo-800: #a17bff;  /* vivid purple */
+  --color-indigo-900: #cbb3ff;  /* light purple */
+  --color-indigo-950: #efe7ff;  /* near-white purple */
+
+  --brand-grad-start: #e96e1f;
+  --brand-grad-mid:   #b04b74;
+  --brand-grad-end:   #6a3697;
+
+  /* Dark theme primary mappings (kept similar for consistency) */
+  --color-primary-400: var(--brand-grad-start);
+  --color-primary-500: #cc5a2d;
+  --color-primary-600: oklch(0.42 0.12 350.27);
+  --color-primary-700: #8c3e9d;
+
+  --brand-bg:       #0c0d11;
+  --brand-surface:  #14151b;
+  --brand-text:     #e6e7ed;
+}
+
+/* Optional helpers (can be used in content/templates) */
+.bg-brand { background-color: var(--brand-bg); }
+.surface-brand { background-color: var(--brand-surface); }
+.text-brand { color: var(--brand-text); }
+.text-accent { color: var(--brand-accent-500); }
+.bg-accent { background-color: var(--brand-accent-500); }
+
+/* Helper utility: gradient background using brand palette */
+.bg-brand-gradient {
+  background: linear-gradient(90deg, var(--brand-grad-start), var(--brand-grad-mid), var(--brand-grad-end));
+}
+
+/* Content width + image sizing tweaks */
+/* Widen prose by ~20% vs default 65ch */
+.prose { max-width: 78ch; }
+
+/* If author sets an explicit inline width on images, honor it fully */
+.prose img[style*="width"] { max-width: none; height: auto; }
+
+/* Ensure hero titles never get visually truncated */
+.bg-primary-600 h1 {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  hyphens: auto;
+}
+
+/* Table of Contents Styles */
+.toc {
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.toc ul {
+  list-style: none;
+  padding-left: 0;
+  margin: 0;
+}
+
+.toc > ul > li {
+  margin-bottom: 0.5rem;
+}
+
+/* Level 1 (h2) - Main sections */
+.toc > ul > li > a {
+  color: #374151;
+  font-weight: 600;
+  font-size: 1rem;
+  padding: 0.5rem 0;
+  border-left: 3px solid transparent;
+  padding-left: 1rem;
+  margin-left: 0;
+}
+
+/* Level 2 (h3) - Subsections */
+.toc ul ul {
+  padding-left: 1.5rem;
+  margin-top: 0.25rem;
+  border-left: 1px solid #e5e7eb;
+}
+
+.toc ul ul li {
+  margin-bottom: 0.25rem;
+}
+
+.toc ul ul > li > a {
+  color: #6b7280;
+  font-weight: 500;
+  font-size: 0.9rem;
+  padding: 0.3rem 0;
+  padding-left: 0.75rem;
+  position: relative;
+}
+
+.toc ul ul > li > a::before {
+  content: "→";
+  position: absolute;
+  left: -0.5rem;
+  color: #9ca3af;
+  font-size: 0.8rem;
+}
+
+/* Level 3 (h4) - Sub-subsections */
+.toc ul ul ul {
+  padding-left: 1.25rem;
+  border-left: 1px dotted #d1d5db;
+}
+
+.toc ul ul ul > li > a {
+  color: #9ca3af;
+  font-weight: 400;
+  font-size: 0.85rem;
+  padding: 0.2rem 0;
+  padding-left: 0.5rem;
+  font-style: italic;
+}
+
+.toc ul ul ul > li > a::before {
+  content: "•";
+  position: absolute;
+  left: -0.3rem;
+  color: #d1d5db;
+  font-size: 0.7rem;
+}
+
+/* Generic fallback for any ToC links */
+.toc a {
+  text-decoration: none;
+  display: block;
+  transition: all 0.2s ease;
+  text-indent: 0;
+}
+
+/* Hover states for different levels */
+.toc > ul > li > a:hover {
+  color: var(--color-primary-600);
+  border-left-color: var(--color-primary-600);
+  background-color: rgba(233, 110, 31, 0.05);
+}
+
+.toc ul ul > li > a:hover {
+  color: var(--color-primary-600);
+  background-color: rgba(233, 110, 31, 0.05);
+  padding-left: 1rem;
+}
+
+.toc ul ul ul > li > a:hover {
+  color: var(--color-primary-500);
+  background-color: rgba(233, 110, 31, 0.03);
+  font-style: normal;
+}
+
+/* Dark mode ToC styles - Nuclear approach to override any conflicts */
+.dark .toc a,
+.dark .toc-container a,
+.dark nav.toc a,
+.dark aside a,
+.dark [class*="toc"] a {
+  color: #d1d5db !important;
+}
+
+/* Level 1 - Main sections (direct children of first ul) */
+.dark .toc > ul > li > a,
+.dark .toc-container .toc > ul > li > a,
+.dark nav.toc > ul > li > a {
+  color: #f3f4f6 !important;
+  border-left-color: transparent;
+}
+
+/* Level 2 - Subsections */
+.dark .toc ul ul > li > a,
+.dark .toc-container .toc ul ul > li > a,
+.dark nav.toc ul ul > li > a {
+  color: #d1d5db !important;
+}
+
+/* Level 3 - Sub-subsections */
+.dark .toc ul ul ul > li > a,
+.dark .toc-container .toc ul ul ul > li > a,
+.dark nav.toc ul ul ul > li > a {
+  color: #9ca3af !important;
+}
+
+.dark .toc ul ul {
+  border-left-color: #374151;
+}
+
+.dark .toc ul ul ul {
+  border-left-color: #4b5563;
+}
+
+.dark .toc ul ul > li > a::before {
+  color: #6b7280;
+}
+
+.dark .toc ul ul ul > li > a::before {
+  color: #6b7280;
+}
+
+.dark .toc > ul > li > a:hover,
+.dark .toc-container .toc > ul > li > a:hover,
+.dark nav.toc > ul > li > a:hover {
+  color: var(--color-primary-400) !important;
+  border-left-color: var(--color-primary-400);
+  background-color: rgba(233, 110, 31, 0.1);
+}
+
+.dark .toc ul ul > li > a:hover,
+.dark .toc-container .toc ul ul > li > a:hover,
+.dark nav.toc ul ul > li > a:hover {
+  color: var(--color-primary-400) !important;
+  background-color: rgba(233, 110, 31, 0.1);
+}
+
+.dark .toc ul ul ul > li > a:hover,
+.dark .toc-container .toc ul ul ul > li > a:hover,
+.dark nav.toc ul ul ul > li > a:hover {
+  color: var(--color-primary-300) !important;
+  background-color: rgba(233, 110, 31, 0.08);
+}
+
+/* Active section highlighting */
+.toc > ul > li > a.active {
+  color: var(--color-primary-600);
+  border-left-color: var(--color-primary-600);
+  background-color: rgba(233, 110, 31, 0.1);
+  font-weight: 700;
+}
+
+.toc ul ul > li > a.active {
+  color: var(--color-primary-600);
+  background-color: rgba(233, 110, 31, 0.1);
+  font-weight: 600;
+}
+
+.toc ul ul ul > li > a.active {
+  color: var(--color-primary-500);
+  background-color: rgba(233, 110, 31, 0.08);
+  font-weight: 500;
+  font-style: normal;
+}
+
+.dark .toc > ul > li > a.active,
+.dark .toc-container .toc > ul > li > a.active,
+.dark nav.toc > ul > li > a.active {
+  color: var(--color-primary-400) !important;
+  border-left-color: var(--color-primary-400);
+}
+
+.dark .toc ul ul > li > a.active,
+.dark .toc-container .toc ul ul > li > a.active,
+.dark nav.toc ul ul > li > a.active {
+  color: var(--color-primary-400) !important;
+}
+
+.dark .toc ul ul ul > li > a.active,
+.dark .toc-container .toc ul ul ul > li > a.active,
+.dark nav.toc ul ul ul > li > a.active {
+  color: var(--color-primary-300) !important;
+}
+
+/* ToC Container Styles - Light/Dark Mode Support */
+.toc-container {
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 20px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.toc-title {
+  margin: 0 0 15px 0;
+  font-size: 18px;
+  font-weight: bold;
+  color: #374151;
+}
+
+/* Dark mode ToC container */
+.dark .toc-container {
+  background: #1f2937;
+  border: 1px solid #374151;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+}
+
+.dark .toc-title {
+  color: #f9fafb;
+}
+
+/* ToC Display Logic */
+/* Wide screens: show sidebar ToC, hide inline ToC */
+.toc-sidebar {
+  display: block !important;
+}
+
+.toc-inline {
+  display: none !important;
+}
+
+/* Narrow screens: hide sidebar ToC, show inline ToC */
+@media (max-width: 1200px) {
+  .toc-sidebar {
+    display: none !important;
+  }
+
+  .toc-inline {
+    display: block !important;
+    margin: 0 0 2rem 0;
+    padding: 0;
+  }
+
+  .toc-inline .toc-container {
+    max-width: none;
+  }
+}
+
+/* Dark Mode Code Block Improvements */
+.dark .prose code {
+  background-color: #1f2937 !important;
+  color: #e5e7eb !important;
+  border: 1px solid #374151;
+  border-radius: 4px;
+  padding: 2px 4px;
+}
+
+.dark .prose pre {
+  background-color: #1f2937 !important;
+  border: 1px solid #374151;
+}
+
+.dark .prose pre code {
+  background-color: transparent !important;
+  border: none;
+  padding: 0;
+}
+
+/* Syntax highlighting for dark mode */
+.dark .prose .highlight .c,
+.dark .prose .highlight .cm,
+.dark .prose .highlight .c1 {
+  color: #6b7280 !important; /* comments - gray */
+}
+
+.dark .prose .highlight .k,
+.dark .prose .highlight .kd,
+.dark .prose .highlight .kn {
+  color: #8b5cf6 !important; /* keywords - purple */
+}
+
+.dark .prose .highlight .s,
+.dark .prose .highlight .s1,
+.dark .prose .highlight .s2,
+.dark .prose .highlight .sb,
+.dark .prose .highlight .sc {
+  color: #10b981 !important; /* strings - green */
+}
+
+.dark .prose .highlight .m,
+.dark .prose .highlight .mf,
+.dark .prose .highlight .mi,
+.dark .prose .highlight .mo {
+  color: #f59e0b !important; /* numbers - amber */
+}
+
+.dark .prose .highlight .n,
+.dark .prose .highlight .nf {
+  color: #60a5fa !important; /* functions/variables - blue */
+}
+
+.dark .prose .highlight .o,
+.dark .prose .highlight .ow {
+  color: #f87171 !important; /* operators - red (improved visibility) */
+}
+
+.dark .prose .highlight .p {
+  color: #d1d5db !important; /* punctuation - light gray */
+}
+
+.dark .prose .highlight .na {
+  color: #34d399 !important; /* attributes - emerald */
+}
+
+.dark .prose .highlight .nb {
+  color: #a78bfa !important; /* builtins - violet */
+}
+
+/* Component links without underlines */
+.component-link {
+  text-decoration: none !important;
+}
+
+.component-link:hover {
+  text-decoration: none !important;
+}
+
+/* Image Lightbox Overlay System */
+.lightbox-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background-color: rgba(0, 0, 0, 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  opacity: 0;
+  visibility: hidden;
+  transition: all 0.3s ease;
+}
+
+.lightbox-overlay.active {
+  opacity: 1;
+  visibility: visible;
+}
+
+.lightbox-content {
+  position: relative;
+  max-width: none;
+  max-height: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  overflow: auto;
+  max-height: 95vh;
+  max-width: 95vw;
+}
+
+.lightbox-image {
+  width: auto;
+  height: auto;
+  min-width: 0;
+  min-height: 0;
+  object-fit: contain;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  border-radius: 8px;
+}
+
+.lightbox-caption {
+  color: white;
+  text-align: center;
+  margin-top: 1rem;
+  font-size: 1.1rem;
+  max-width: 80vw;
+}
+
+.lightbox-close {
+  position: absolute;
+  top: 15px;
+  right: 15px;
+  background: rgba(0, 0, 0, 0.7);
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  color: white;
+  font-size: 1.5rem;
+  cursor: pointer;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+  z-index: 1001;
+}
+
+.lightbox-close:hover {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.6);
+  transform: scale(1.1);
+}
+
+/* Clickable images styling */
+.clickable-image {
+  cursor: zoom-in;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.clickable-image:hover {
+  transform: scale(1.02);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+/* Dark mode adjustments */
+.dark .lightbox-close:hover {
+  background: rgba(255, 255, 255, 0.3);
+  border-color: rgba(255, 255, 255, 0.8);
+  transform: scale(1.1);
+}
+
+/* Pagefind Search UI Overrides */
+.pagefind-ui {
+  --pagefind-ui-scale: 0.75;
+  --pagefind-ui-primary: var(--brand-grad-start);
+  --pagefind-ui-text: #e7e8ee;
+  --pagefind-ui-background: #1a1b22;
+  --pagefind-ui-border: #374151;
+  --pagefind-ui-tag: #1f2937;
+  --pagefind-ui-border-width: 1px;
+  --pagefind-ui-border-radius: 8px;
+  --pagefind-ui-font: inherit;
+}
+
+.pagefind-ui .pagefind-ui__search-input {
+  background: #1f2937 !important;
+  color: #f3f4f6 !important;
+  border-color: #4b5563 !important;
+}
+
+.pagefind-ui .pagefind-ui__search-input::placeholder {
+  color: #9ca3af !important;
+}
+
+.pagefind-ui .pagefind-ui__result-link {
+  color: var(--brand-grad-start) !important;
+}
+
+.pagefind-ui .pagefind-ui__result-link:hover {
+  color: #ff9a4d !important;
+}
+
+.pagefind-ui .pagefind-ui__result-excerpt {
+  color: #d1d5db !important;
+}
+
+.pagefind-ui .pagefind-ui__message {
+  color: #9ca3af !important;
+}
+
+.pagefind-ui .pagefind-ui__result {
+  border-top-color: #374151 !important;
+}
+
+.pagefind-ui .pagefind-ui__button {
+  background: #374151 !important;
+  color: #e7e8ee !important;
+}
+
+.pagefind-ui .pagefind-ui__button:hover {
+  background: #4b5563 !important;
+}
+
+/* ========================================
+   Atlas Solar System
+   ======================================== */
+
+@keyframes atlas-orbit-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.atlas-orbit {
+  transform-origin: 18px 18px;
+}
+
+/* Paused by default — runs on hover or landing */
+.atlas-orbit-1 { animation: atlas-orbit-spin 3s linear infinite paused; }
+.atlas-orbit-2 { animation: atlas-orbit-spin 5s linear infinite paused; animation-direction: reverse; }
+.atlas-orbit-3 { animation: atlas-orbit-spin 8s linear infinite paused; }
+
+/* Hover activates orbits */
+a:hover .atlas-orbit,
+a:focus .atlas-orbit {
+  animation-play-state: running;
+}
+
+/* Landing page first-visit auto-play */
+.atlas-solar.atlas-active .atlas-orbit {
+  animation-play-state: running;
+}
+
+/* Atlas pill — gradient border to distinguish from regular menu items */
+.atlas-pill {
+  position: relative;
+  border: 1.5px solid transparent;
+  background-image: linear-gradient(var(--brand-bg, #0f1014), var(--brand-bg, #0f1014)),
+                     linear-gradient(135deg, #8b4a2a, #8b3254, #5a2a8b);
+  background-origin: border-box;
+  background-clip: padding-box, border-box;
+  transition: all 0.3s ease;
+}
+
+.atlas-pill:hover {
+  background-image: linear-gradient(rgba(30,15,25,0.9), rgba(20,10,30,0.9)),
+                     linear-gradient(135deg, #a85a35, #a84065, #6a3aab);
+}
+
+
+/* ========================================
+   Tips Page — Filterable List
+   ======================================== */
+
+/* ---------- Layout ---------- */
+.tips-page-layout {
+  display: grid;
+  grid-template-columns: 1fr 220px;
+  grid-template-areas: "main sidebar";
+  gap: 2.5rem;
+  align-items: start;
+}
+
+.tips-grid-area  { grid-area: main; }
+.tips-sidebar    { grid-area: sidebar; }
+
+/* ---------- Tip Cards ---------- */
+.tips-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.25rem;
+}
+
+.tip-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.75rem;
+  padding: 1.25rem 1.5rem;
+  box-shadow: 0 1px 4px rgba(0,0,0,.06);
+  transition: box-shadow 0.2s ease, transform 0.2s ease, opacity 0.25s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.tip-card:hover {
+  box-shadow: 0 4px 16px rgba(0,0,0,.12);
+  transform: translateY(-2px);
+}
+
+/* Show/hide with smooth fade */
+.tip-card-hidden {
+  display: none;
+}
+
+.tip-card-visible {
+  display: flex;
+}
+
+.dark .tip-card {
+  background: #1f2937;
+  border-color: #374151;
+  box-shadow: 0 1px 4px rgba(0,0,0,.3);
+}
+
+.dark .tip-card:hover {
+  box-shadow: 0 4px 16px rgba(0,0,0,.5);
+}
+
+.tip-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.tip-card-badges {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.tip-card-date {
+  font-size: 0.75rem;
+  color: #9ca3af;
+  white-space: nowrap;
+}
+
+.tip-card-title {
+  font-size: 1.15rem;
+  font-weight: 700;
+  line-height: 1.35;
+  margin: 0.25rem 0 0;
+  color: #111827;
+}
+
+.dark .tip-card-title {
+  color: #f3f4f6;
+}
+
+.tip-card-link {
+  text-decoration: none;
+  color: inherit;
+  transition: color 0.15s ease;
+}
+
+.tip-card-link:hover {
+  color: var(--color-primary-600);
+}
+
+.dark .tip-card-link:hover {
+  color: var(--color-primary-400);
+}
+
+.tip-card-preview {
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: #4b5563;
+  margin: 0;
+  flex: 1;
+}
+
+.dark .tip-card-preview {
+  color: #9ca3af;
+}
+
+.tip-card-read-more {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-primary-600);
+  text-decoration: none;
+  align-self: flex-start;
+  margin-top: 0.25rem;
+  transition: color 0.15s ease;
+}
+
+.tip-card-read-more:hover {
+  color: var(--color-primary-400);
+  text-decoration: underline;
+}
+
+.dark .tip-card-read-more {
+  color: var(--color-primary-400);
+}
+
+.dark .tip-card-read-more:hover {
+  color: var(--color-primary-300);
+}
+
+/* ---------- Badges (shared between list + single) ---------- */
+.tip-badge {
+  display: inline-block;
+  padding: 0.2rem 0.55rem;
+  border-radius: 9999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+
+/* Difficulty badges */
+.tip-badge-diff-beginner      { background: #dcfce7; color: #166534; }
+.tip-badge-diff-intermediate  { background: #fef9c3; color: #854d0e; }
+.tip-badge-diff-advanced      { background: #fee2e2; color: #991b1b; }
+
+.dark .tip-badge-diff-beginner      { background: #14532d; color: #bbf7d0; }
+.dark .tip-badge-diff-intermediate  { background: #713f12; color: #fef08a; }
+.dark .tip-badge-diff-advanced      { background: #7f1d1d; color: #fecaca; }
+
+/* Category badges */
+.tip-badge-command      { background: #ede9fe; color: #5b21b6; }
+.tip-badge-concept      { background: #e0f2fe; color: #075985; }
+.tip-badge-workflow     { background: #fce7f3; color: #9d174d; }
+.tip-badge-gotcha       { background: #fff7ed; color: #9a3412; }
+.tip-badge-integration  { background: #f0fdf4; color: #15803d; }
+.tip-badge-performance  { background: #f0f9ff; color: #0369a1; }
+
+.dark .tip-badge-command      { background: #3b0764; color: #ddd6fe; }
+.dark .tip-badge-concept      { background: #0c4a6e; color: #bae6fd; }
+.dark .tip-badge-workflow     { background: #500724; color: #fbcfe8; }
+.dark .tip-badge-gotcha       { background: #431407; color: #fed7aa; }
+.dark .tip-badge-integration  { background: #052e16; color: #bbf7d0; }
+.dark .tip-badge-performance  { background: #082f49; color: #bae6fd; }
+
+/* ---------- Filter Status Bar ---------- */
+.tips-filter-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(233, 110, 31, 0.08);
+  border: 1px solid rgba(233, 110, 31, 0.25);
+  border-radius: 0.5rem;
+  font-size: 0.85rem;
+  color: #6b7280;
+}
+
+.dark .tips-filter-status {
+  background: rgba(233, 110, 31, 0.12);
+  border-color: rgba(233, 110, 31, 0.3);
+  color: #9ca3af;
+}
+
+.tips-filter-count-text {
+  font-weight: 500;
+  color: #374151;
+}
+
+.dark .tips-filter-count-text {
+  color: #d1d5db;
+}
+
+.tips-clear-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--color-primary-600);
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 0;
+  text-decoration: underline;
+  transition: color 0.15s;
+}
+
+.tips-clear-btn:hover {
+  color: var(--color-primary-400);
+}
+
+/* ---------- Empty state ---------- */
+.tips-empty {
+  padding: 2rem;
+  text-align: center;
+  color: #6b7280;
+  font-size: 0.95rem;
+}
+
+.dark .tips-empty {
+  color: #9ca3af;
+}
+
+/* ---------- Sidebar ---------- */
+.tips-sidebar {
+  position: sticky;
+  top: 5rem;
+}
+
+.tips-sidebar-inner {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.75rem;
+  overflow: hidden;
+  box-shadow: 0 1px 4px rgba(0,0,0,.06);
+}
+
+.dark .tips-sidebar-inner {
+  background: #1f2937;
+  border-color: #374151;
+}
+
+.tips-sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem 0;
+}
+
+.tips-sidebar-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #111827;
+  margin: 0;
+  letter-spacing: 0.01em;
+}
+
+.dark .tips-sidebar-title {
+  color: #f3f4f6;
+}
+
+/* Toggle button — desktop: hidden, mobile: shown */
+.tips-sidebar-toggle {
+  display: none;
+  background: none;
+  border: none;
+  cursor: pointer;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #374151;
+  padding: 0.5rem 0;
+}
+
+.dark .tips-sidebar-toggle {
+  color: #d1d5db;
+}
+
+.tips-toggle-icon {
+  transition: transform 0.2s ease;
+}
+
+.tips-sidebar-body {
+  padding: 1rem 1.25rem 1.25rem;
+}
+
+.tips-sidebar-body-collapsed {
+  display: none;
+}
+
+.tips-reset-btn {
+  display: none;
+  margin-bottom: 1rem;
+  padding: 0.3rem 0.75rem;
+  background: none;
+  border: 1px solid var(--color-primary-600);
+  border-radius: 9999px;
+  color: var(--color-primary-600);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.tips-reset-btn:hover {
+  background: var(--color-primary-600);
+  color: #fff;
+}
+
+.dark .tips-reset-btn {
+  border-color: var(--color-primary-400);
+  color: var(--color-primary-400);
+}
+
+.dark .tips-reset-btn:hover {
+  background: var(--color-primary-400);
+  color: #111;
+}
+
+/* ---------- Filter Groups ---------- */
+.tips-filter-group {
+  margin-bottom: 1.25rem;
+}
+
+.tips-filter-group:last-child {
+  margin-bottom: 0;
+}
+
+.tips-filter-group-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #9ca3af;
+  margin: 0 0 0.6rem;
+}
+
+.tips-filter-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+/* ---------- Filter Buttons ---------- */
+.tips-filter-btn {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0.35rem 0.7rem;
+  border-radius: 9999px;
+  border: 1.5px solid transparent;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: capitalize;
+  cursor: pointer;
+  transition: opacity 0.15s, border-color 0.15s, box-shadow 0.15s;
+  background: none;
+  opacity: 0.7;
+}
+
+.tips-filter-btn:hover {
+  opacity: 1;
+}
+
+/* Active state — ring highlight */
+.tips-filter-btn-active {
+  opacity: 1 !important;
+  border-color: currentColor !important;
+  box-shadow: 0 0 0 2px rgba(233,110,31,0.25);
+}
+
+/* Difficulty filter button colours (match badges) */
+.tips-badge-diff-beginner      { background: #dcfce7; color: #166534; }
+.tips-badge-diff-intermediate  { background: #fef9c3; color: #854d0e; }
+.tips-badge-diff-advanced      { background: #fee2e2; color: #991b1b; }
+
+.dark .tips-badge-diff-beginner      { background: #14532d; color: #bbf7d0; }
+.dark .tips-badge-diff-intermediate  { background: #713f12; color: #fef08a; }
+.dark .tips-badge-diff-advanced      { background: #7f1d1d; color: #fecaca; }
+
+/* Category filter button colours (match badges) */
+.tips-badge-cat-command      { background: #ede9fe; color: #5b21b6; }
+.tips-badge-cat-concept      { background: #e0f2fe; color: #075985; }
+.tips-badge-cat-workflow     { background: #fce7f3; color: #9d174d; }
+.tips-badge-cat-gotcha       { background: #fff7ed; color: #9a3412; }
+.tips-badge-cat-integration  { background: #f0fdf4; color: #15803d; }
+.tips-badge-cat-performance  { background: #f0f9ff; color: #0369a1; }
+
+.dark .tips-badge-cat-command      { background: #3b0764; color: #ddd6fe; }
+.dark .tips-badge-cat-concept      { background: #0c4a6e; color: #bae6fd; }
+.dark .tips-badge-cat-workflow     { background: #500724; color: #fbcfe8; }
+.dark .tips-badge-cat-gotcha       { background: #431407; color: #fed7aa; }
+.dark .tips-badge-cat-integration  { background: #052e16; color: #bbf7d0; }
+.dark .tips-badge-cat-performance  { background: #082f49; color: #bae6fd; }
+
+/* ---------- Single tip page ---------- */
+.tip-single-badges {
+  display: flex;
+  justify-content: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.tip-single-command {
+  background: rgba(255,255,255,0.2);
+  color: #fff;
+  border-radius: 0.25rem;
+  padding: 0.1rem 0.4rem;
+  font-family: ui-monospace, monospace;
+  font-size: 0.85em;
+}
+
+.tip-back-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--color-primary-600);
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: color 0.15s;
+}
+
+.tip-back-link:hover {
+  color: var(--color-primary-400);
+  text-decoration: underline;
+}
+
+.dark .tip-back-link {
+  color: var(--color-primary-400);
+}
+
+.dark .tip-back-link:hover {
+  color: var(--color-primary-300);
+}
+
+/* ---------- Responsive ---------- */
+@media (max-width: 900px) {
+  .tips-page-layout {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "sidebar"
+      "main";
+  }
+
+  .tips-sidebar {
+    position: static;
+  }
+
+  .tips-sidebar-inner {
+    border-radius: 0.75rem;
+  }
+
+  /* Show toggle button on mobile */
+  .tips-sidebar-toggle {
+    display: flex;
+  }
+
+  /* Hide the desktop title (toggle button has label) */
+  .tips-sidebar-title {
+    display: none;
+  }
+
+  /* Collapse sidebar body by default on mobile */
+  #tips-sidebar-body {
+    display: none;
+  }
+
+  /* When expanded via JS, show it */
+  #tips-sidebar-body:not(.tips-sidebar-body-collapsed) {
+    display: block;
+  }
+
+  /* On mobile, filter buttons in a wrapping row */
+  .tips-filter-options {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .tips-filter-btn {
+    width: auto;
+  }
+}

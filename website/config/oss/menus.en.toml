@@ -1,0 +1,178 @@
+# OSS menu — removes internal-only entries from the default menu.
+# Replaces config/_default/menus.en.toml for --environment oss builds.
+
+[[main]]
+  name = "Getting Started"
+  pageRef = "getting-started"
+  weight = 5
+
+[[main]]
+  identifier = "tutorials"
+  name = "Tutorials"
+  pageRef = "tutorials"
+  pre = "dropdown"
+  weight = 10
+
+[[tutorials]]
+  name = "Building a MNIST Dataset"
+  pageRef = "tutorials/mnist"
+  weight = 10
+
+[[tutorials]]
+  name = "Consuming a Dataset"
+  pageRef = "tutorials/consuming-a-dataset"
+  weight = 20
+
+[[tutorials]]
+  name = "Exploring the Catalog with Atlas"
+  pageRef = "tutorials/exploring-atlas"
+  weight = 30
+
+[[tutorials]]
+  name = "Versioning Your Data"
+  pageRef = "tutorials/versioning-data"
+  weight = 40
+
+[[tutorials]]
+  name = "Sharing Data with Your Team"
+  pageRef = "tutorials/sharing-data"
+  weight = 50
+
+[[tutorials]]
+  name = "Exporting to Google Drive"
+  pageRef = "tutorials/google-drive-export"
+  weight = 60
+
+[[tutorials]]
+  name = "Using AI Agents (MCP)"
+  pageRef = "tutorials/mcp-server"
+  weight = 90
+
+[[main]]
+  identifier = "user-guide"
+  name = "User Guide"
+  pageRef = "docs/user-guide"
+  pre = "dropdown"
+  weight = 15
+
+[[user-guide]]
+  name = "Overview"
+  url = "/docs/user-guide/"
+  weight = -1
+
+[[user-guide]]
+  name = "Introduction"
+  pageRef = "docs/user-guide/introduction"
+  weight = 1
+
+[[user-guide]]
+  name = "Installation & Setup"
+  pageRef = "docs/user-guide/installation"
+  weight = 2
+
+[[user-guide]]
+  name = "Managing Credentials"
+  pageRef = "docs/user-guide/credentials"
+  weight = 3
+
+[[user-guide]]
+  name = "Working with Repositories"
+  pageRef = "docs/user-guide/repositories"
+  weight = 4
+
+[[user-guide]]
+  name = "Permissions & Access Control"
+  pageRef = "docs/user-guide/permissions"
+  weight = 5
+
+[[user-guide]]
+  name = "Syncing Data"
+  pageRef = "docs/user-guide/syncing"
+  weight = 6
+
+[[user-guide]]
+  name = "Versioning & Collaboration"
+  pageRef = "docs/user-guide/versioning"
+  weight = 7
+
+[[user-guide]]
+  name = "Running Jobs at Scale"
+  pageRef = "docs/user-guide/jobs-at-scale"
+  weight = 8
+
+[[user-guide]]
+  name = "Atlas & Downloads"
+  pageRef = "docs/user-guide/atlas-downloads"
+  weight = 9
+
+[[user-guide]]
+  name = "MCP Server"
+  pageRef = "docs/user-guide/mcp-server"
+  weight = 10
+
+[[user-guide]]
+  name = "Google Drive Remote"
+  pageRef = "docs/user-guide/drive-remote"
+  weight = 10
+
+[[user-guide]]
+  name = "Advanced Operations"
+  pageRef = "docs/user-guide/advanced"
+  weight = 11
+
+[[user-guide]]
+  name = "Troubleshooting"
+  pageRef = "docs/user-guide/troubleshooting"
+  weight = 12
+
+[[user-guide]]
+  name = "Environment Variables"
+  pageRef = "docs/user-guide/environment-variables"
+  weight = 13
+
+[[main]]
+  identifier = "docs"
+  name = "Documentation"
+  pageRef = "docs"
+  pre = "dropdown"
+  weight = 20
+
+[[docs]]
+  name = "Vision"
+  pageRef = "docs/vision"
+  weight = 10
+
+[[docs]]
+  name = "Architecture"
+  pageRef = "docs/architecture"
+  weight = 20
+
+[[docs]]
+  name = "Components"
+  pageRef = "docs/components"
+  weight = 30
+
+[[components]]
+  name = "ExoCLI"
+  pageRef = "docs/components/exocli"
+  weight = 20
+
+[[components]]
+  name = "ExoSpace"
+  pageRef = "docs/components/exospace"
+  weight = 30
+
+[[components]]
+  name = "ExoSafe"
+  pageRef = "docs/components/exosafe"
+  weight = 35
+
+[[components]]
+  name = "ExoAtlas"
+  pageRef = "docs/components/atlas"
+  weight = 45
+
+[[components]]
+  name = "Data Service"
+  pageRef = "docs/components/dataservice"
+  weight = 50

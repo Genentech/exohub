@@ -1,0 +1,243 @@
+{{ define "main" }}
+<main>
+  <!-- Page header -->
+  <header class="mb-4 bg-primary-600">
+    <div class="px-4 py-12 md:py-20">
+      <h1 class="mx-auto max-w-5xl text-center text-white text-4xl md:text-5xl font-black leading-tight break-words">
+        {{ .Title }}
+      </h1>
+      <p class="mx-auto mt-4 max-w-2xl text-center text-lg" style="color: rgba(255,255,255,0.85);">Short, practical tips to get more out of ExoHub — one command, concept, or workflow at a time.</p>
+    </div>
+  </header>
+
+  <!-- Main content: tips grid + sidebar -->
+  <div class="mx-auto max-w-7xl px-4 py-10">
+    <div class="tips-page-layout">
+
+      <!-- Tips grid -->
+      <section class="tips-grid-area">
+
+        <!-- Active filter summary + clear button -->
+        <div id="tips-filter-status" class="tips-filter-status" style="display:none;">
+          <span id="tips-filter-count" class="tips-filter-count-text"></span>
+          <button id="tips-clear-all" class="tips-clear-btn" onclick="tipsClearAll()">
+            Clear all filters
+          </button>
+        </div>
+
+        <!-- Empty state -->
+        <p id="tips-empty" class="tips-empty" style="display:none;">
+          No tips match the selected filters. <button class="tips-clear-btn" onclick="tipsClearAll()">Clear filters</button>
+        </p>
+
+        <!-- Tip cards -->
+        <div id="tips-list" class="tips-list">
+          {{ $tips := .Pages }}
+          {{ range sort $tips "Params.tip_number" "desc" }}
+          {{ $category := .Params.category | default "general" }}
+          {{ $difficulty := .Params.difficulty | default "beginner" }}
+          {{ $description := .Summary }}
+          <article
+            class="tip-card"
+            data-category="{{ $category }}"
+            data-difficulty="{{ $difficulty }}"
+          >
+            <div class="tip-card-header">
+              <div class="tip-card-badges">
+                <span class="tip-badge tip-badge-category tip-badge-{{ $category }}">{{ $category }}</span>
+                <span class="tip-badge tip-badge-difficulty tip-badge-diff-{{ $difficulty }}">{{ $difficulty }}</span>
+              </div>
+              <time class="tip-card-date" datetime="{{ .Date.Format "2006-01-02" }}">
+                {{ .Date.Format "Jan 2, 2006" }}
+              </time>
+            </div>
+
+            <h2 class="tip-card-title">
+              <a href="{{ .RelPermalink }}" class="tip-card-link">{{ .Title }}</a>
+            </h2>
+
+            <p class="tip-card-preview">{{ $description | plainify | truncate 160 }}</p>
+
+            <a href="{{ .RelPermalink }}" class="tip-card-read-more" aria-label="Read tip: {{ .Title }}">
+              Read tip →
+            </a>
+          </article>
+          {{ end }}
+        </div>
+      </section>
+
+      <!-- Right sidebar filter panel -->
+      <aside class="tips-sidebar" id="tips-sidebar">
+        <div class="tips-sidebar-inner">
+
+          <!-- Mobile toggle header -->
+          <div class="tips-sidebar-header">
+            <h2 class="tips-sidebar-title">Filter Tips</h2>
+            <button
+              class="tips-sidebar-toggle"
+              id="tips-sidebar-toggle"
+              onclick="tipsToggleSidebar()"
+              aria-expanded="false"
+              aria-controls="tips-sidebar-body"
+            >
+              <span>Filters</span>
+              <svg class="tips-toggle-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" width="18" height="18">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+              </svg>
+            </button>
+          </div>
+
+          <div id="tips-sidebar-body" class="tips-sidebar-body">
+            <!-- Clear button (desktop) -->
+            <button id="tips-reset-btn" class="tips-reset-btn" onclick="tipsClearAll()">
+              Reset all
+            </button>
+
+            <!-- Difficulty filter group -->
+            <div class="tips-filter-group">
+              <h3 class="tips-filter-group-label">Difficulty</h3>
+              <div class="tips-filter-options">
+                {{ range slice "beginner" "intermediate" "advanced" }}
+                <button
+                  class="tips-filter-btn tips-filter-difficulty tips-badge-diff-{{ . }}"
+                  data-filter-type="difficulty"
+                  data-filter-value="{{ . }}"
+                  onclick="tipsToggleFilter(this)"
+                  aria-pressed="false"
+                >{{ . }}</button>
+                {{ end }}
+              </div>
+            </div>
+
+            <!-- Category filter group -->
+            <div class="tips-filter-group">
+              <h3 class="tips-filter-group-label">Category</h3>
+              <div class="tips-filter-options">
+                {{ range slice "command" "concept" "workflow" "gotcha" "integration" "performance" }}
+                <button
+                  class="tips-filter-btn tips-filter-category tips-badge-cat-{{ . }}"
+                  data-filter-type="category"
+                  data-filter-value="{{ . }}"
+                  onclick="tipsToggleFilter(this)"
+                  aria-pressed="false"
+                >{{ . }}</button>
+                {{ end }}
+              </div>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+</main>
+
+<script>
+(function() {
+  // State: sets of active filter values per type
+  var activeFilters = { difficulty: new Set(), category: new Set() };
+
+  function applyFilters() {
+    var cards = document.querySelectorAll('.tip-card');
+    var diffActive = activeFilters.difficulty;
+    var catActive = activeFilters.category;
+    var anyActive = diffActive.size > 0 || catActive.size > 0;
+    var visibleCount = 0;
+
+    cards.forEach(function(card) {
+      var cardDiff = card.dataset.difficulty;
+      var cardCat  = card.dataset.category;
+
+      var diffMatch = diffActive.size === 0 || diffActive.has(cardDiff);
+      var catMatch  = catActive.size  === 0 || catActive.has(cardCat);
+
+      if (diffMatch && catMatch) {
+        card.classList.remove('tip-card-hidden');
+        card.classList.add('tip-card-visible');
+        visibleCount++;
+      } else {
+        card.classList.add('tip-card-hidden');
+        card.classList.remove('tip-card-visible');
+      }
+    });
+
+    // Update status bar
+    var status = document.getElementById('tips-filter-status');
+    var countEl = document.getElementById('tips-filter-count');
+    var emptyEl = document.getElementById('tips-empty');
+
+    if (anyActive) {
+      status.style.display = 'flex';
+      var total = cards.length;
+      countEl.textContent = 'Showing ' + visibleCount + ' of ' + total + ' tip' + (total !== 1 ? 's' : '');
+    } else {
+      status.style.display = 'none';
+    }
+
+    emptyEl.style.display = (anyActive && visibleCount === 0) ? 'block' : 'none';
+  }
+
+  window.tipsToggleFilter = function(btn) {
+    var type  = btn.dataset.filterType;
+    var value = btn.dataset.filterValue;
+    var set   = activeFilters[type];
+    var isActive = set.has(value);
+
+    if (isActive) {
+      set.delete(value);
+      btn.setAttribute('aria-pressed', 'false');
+      btn.classList.remove('tips-filter-btn-active');
+    } else {
+      set.add(value);
+      btn.setAttribute('aria-pressed', 'true');
+      btn.classList.add('tips-filter-btn-active');
+    }
+
+    applyFilters();
+    updateResetBtn();
+  };
+
+  window.tipsClearAll = function() {
+    activeFilters.difficulty.clear();
+    activeFilters.category.clear();
+
+    document.querySelectorAll('.tips-filter-btn').forEach(function(btn) {
+      btn.setAttribute('aria-pressed', 'false');
+      btn.classList.remove('tips-filter-btn-active');
+    });
+
+    applyFilters();
+    updateResetBtn();
+  };
+
+  function updateResetBtn() {
+    var resetBtn = document.getElementById('tips-reset-btn');
+    if (!resetBtn) return;
+    var anyActive = activeFilters.difficulty.size > 0 || activeFilters.category.size > 0;
+    resetBtn.style.display = anyActive ? 'inline-block' : 'none';
+  }
+
+  window.tipsToggleSidebar = function() {
+    var body   = document.getElementById('tips-sidebar-body');
+    var toggle = document.getElementById('tips-sidebar-toggle');
+    var icon   = toggle ? toggle.querySelector('.tips-toggle-icon') : null;
+    if (!body) return;
+
+    var isExpanded = toggle.getAttribute('aria-expanded') === 'true';
+    if (isExpanded) {
+      body.classList.add('tips-sidebar-body-collapsed');
+      toggle.setAttribute('aria-expanded', 'false');
+      if (icon) icon.style.transform = 'rotate(0deg)';
+    } else {
+      body.classList.remove('tips-sidebar-body-collapsed');
+      toggle.setAttribute('aria-expanded', 'true');
+      if (icon) icon.style.transform = 'rotate(180deg)';
+    }
+  };
+
+  // On load: hide reset btn, all cards visible
+  document.addEventListener('DOMContentLoaded', function() {
+    updateResetBtn();
+  });
+})();
+</script>
+{{ end }}

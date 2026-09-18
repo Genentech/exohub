@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="ExoHub logo">
+  <defs>
+    <linearGradient id="exo-gradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FF7A18"/>
+      <stop offset="60%" stop-color="#FF3D81"/>
+      <stop offset="100%" stop-color="#A100FF"/>
+    </linearGradient>
+    <filter id="soft-glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="1.2" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="64" height="64" rx="10" ry="10" fill="none"/>
+  <!-- layered stack icon -->
+  <g fill="none" stroke="url(#exo-gradient)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" filter="url(#soft-glow)">
+    <path d="M12 36l20 8 20-8-20-8-20 8z"/>
+    <path d="M12 28l20 8 20-8-20-8-20 8z"/>
+    <path d="M32 14v6"/>
+    <path d="M32 20c0 4-6 4-6 8m6-8c0 4 6 4 6 8"/>
+  </g>
+</svg>
