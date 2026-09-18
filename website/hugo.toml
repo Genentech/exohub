@@ -1,0 +1,124 @@
+baseURL = 'https://genentech.github.io/exohub/'
+languageCode = 'en-us'
+title = 'ExoHub Documentation Website'
+
+[params]
+# Top hero copy
+Moto = "The New Data Experience"
+Description = "Manage Data as Code. ExoHub standardizes how distributed datasets are versioned, synchronized, and governed across hybrid‑cloud and on‑premises systems using git‑based principles."
+
+[params.hero]
+image = "images/exohub-hero.png"
+alt = "ExoHub hero"
+
+# Section P1: Our mission
+[params.P1]
+Heading = "Harmonizing the Data Landscape"
+Image = "images/exohub-harmonize.png"
+
+[[params.P1.Content]]
+text = "ExoHub brings architectural rigor to fragmented hybrid environments by treating data as code—normalizing access, versioning, and lineage across cloud object stores, sHPC, and SaaS. Built on top of git‑annex with unified credential handling, it eliminates unsynchronized copies and stale catalogs while ensuring reproducible, auditable datasets."
+
+# Section P2: Why ExoHub
+[params.P2]
+Heading = "ExoHub Ecosystem"
+Image = "images/exohub-components.png"
+
+[[params.P2.Content]]
+text = "<a href='/docs/components/exogit/' class='text-primary-400 hover:text-primary-500 underline'>ExoGit</a> — Versions massive datasets with git‑annex pointers for an auditable history while data lives across cloud and on‑premises backends."
+icon = "exogit"
+[[params.P2.Content]]
+text = "<a href='/docs/components/exocli/' class='text-primary-400 hover:text-primary-500 underline'>exo CLI</a> — Declarative manifests that standardize pull, sync, and publish workflows as code."
+icon = "cli"
+[[params.P2.Content]]
+text = "<a href='/docs/components/exogate/' class='text-primary-400 hover:text-primary-500 underline'>ExoGate</a> — Secure on‑premises bridge so cloud workers can access protected sHPC/HPFS and S3 buckets without bespoke credentials."
+icon = "gate"
+[[params.P2.Content]]
+text = "<a href='/docs/components/exospace/' class='text-primary-400 hover:text-primary-500 underline'>ExoSpace</a> — Geo‑localized cache that reduces egress and speeds compute by serving hot data locally."
+icon = "space"
+[[params.P2.Content]]
+text = "<a href='/docs/components/exoworkers/' class='text-primary-400 hover:text-primary-500 underline'>ExoWorkers</a> — Resilient orchestration (based on Temporal) with high‑throughput transfers (e.g., s5cmd) for reliable data publishing."
+icon = "workers"
+[[params.P2.Content]]
+text = "<a href='/docs/components/exosafe/' class='text-primary-400 hover:text-primary-500 underline'>ExoSafe</a> — Cloud-backed credential store that provisions SSH keys and git tokens in agentic, headless, or ephemeral environments."
+icon = "safe"
+[[params.P2.Content]]
+text = "<a href='/docs/components/atlas/' class='text-primary-400 hover:text-primary-500 underline'>ExoAtlas</a> — Discovery and browsing layer for published datasets and artifacts, available both as the interactive `exo atlas` TUI and as a browser-based web interface."
+icon = "atlas"
+
+# Demo carousel — each entry becomes one slide.
+# src: filename inside static/images/demo/ (MP4 recommended)
+# label: short monospace tab label
+# caption: one-line description shown below the video
+[[params.DemoCarousel]]
+src = "clip-access.mp4"
+label = "Access"
+caption = 'Clone a dataset repository and access the data, see <a href="/getting-started/" class="text-primary-500 hover:underline">Getting Started</a> for more.'
+
+[[params.DemoCarousel]]
+src = "clip-build.mp4"
+label = "Build"
+caption = 'Track files with provenance, process them, and publish to S3. See <a href="/tutorials/mnist/" class="text-primary-500 hover:underline">Building a MNIST dataset</a> tutorial for more.'
+
+[[params.DemoCarousel]]
+src = "clip-permissions.mp4"
+label = "Share"
+caption = 'Grant read or write access to collaborators and propagate permissions. See <a href="/docs/user-guide/permissions/" class="text-primary-500 hover:underline">Permissions &amp; Access Control</a>.'
+
+[[params.DemoCarousel]]
+src = "clip-safe.mp4"
+label = "Secure"
+caption = 'Store SSH keys and tokens in <a href="/docs/components/exosafe/" class="text-primary-500 hover:underline">ExoSafe</a>. See <a href="/docs/user-guide/credentials/" class="text-primary-500 hover:underline">Managing Credentials</a> for more details.'
+
+# Section P3: Partners / Logos
+[params.P3]
+Heading = "Backed by the community"
+
+[[params.P3.Content]]
+text = "Built in the open with contributions from researchers and developers."
+
+[[params.P3.Links]]
+text = "Contribute on GitHub"
+url = "https://github.com/your-org/your-repo"
+
+# Example logos (optional). Place files under assets/images/global/
+[[params.P3.Logos]]
+image = "images/global/sample-logo.svg"
+alt = "Sample Logo"
+
+# Section P4: Blog intro
+[params.P4]
+Heading = "From the ExoHub blog"
+
+[[params.P4.Content]]
+text = "News, releases, and deep dives across data, tooling, and research."
+
+# Landing hero image (used by layouts/index.html and head preload). Place under assets/images/pages/
+
+[menu]
+  [[menu.main]]
+    identifier = "github"
+    name = "GitHub"
+    url = "https://github.com/exohub-io"
+    weight = 1
+
+# Disable all social media icons/links
+[params.Social_media]
+  [params.Social_media.Github]
+    Enabled = false
+    Url = ""
+  [params.Social_media.Twitter]
+    Enabled = false
+    Url = ""
+  [params.Social_media.Facebook]
+    Enabled = false
+    Url = ""
+  [params.Social_media.Instagram]
+    Enabled = false
+    Url = ""
+  [params.Social_media.Linkedin]
+    Enabled = false
+    Url = ""
+  [params.Social_media.Bluesky]
+    Enabled = false
+    Url = ""

@@ -1,0 +1,29 @@
+# Hugo build artifacts
+/public/
+/resources/_gen/
+/.hugo_build.lock
+
+# Theme
+/themes/
+
+# Temporary files
+.DS_Store
+*~
+*.swp
+*.swo
+
+# Editor files
+.vscode/
+.idea/
+*.code-workspace
+
+# Dependencies
+node_modules/
+package-lock.json
+yarn.lock
+
+# Environment
+.env
+.env.local
+
+.claude/worktrees/
