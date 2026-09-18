@@ -1,5 +1,10 @@
 baseURL = "https://genentech.github.io/exohub/"
 
+# canonifyURLs rewrites root-relative asset/link paths (e.g. /images/foo.png,
+# href="/...") against the build baseURL, so assets resolve under the
+# /exohub/ GitHub Pages subpath instead of the domain root.
+canonifyURLs = true
+
 # Override staticDir so oss-static/ takes precedence over static/ for the OSS build.
 # oss-static/tips.json replaces static/tips.json (which contains internal deployment names).
 staticDir = ["static", "oss-static"]

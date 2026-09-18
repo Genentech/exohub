@@ -46,30 +46,6 @@ icon = "safe"
 text = "<a href='/docs/components/atlas/' class='text-primary-400 hover:text-primary-500 underline'>ExoAtlas</a> — Discovery and browsing layer for published datasets and artifacts, available both as the interactive `exo atlas` TUI and as a browser-based web interface."
 icon = "atlas"
 
-# Demo carousel — each entry becomes one slide.
-# src: filename inside static/images/demo/ (MP4 recommended)
-# label: short monospace tab label
-# caption: one-line description shown below the video
-[[params.DemoCarousel]]
-src = "clip-access.mp4"
-label = "Access"
-caption = 'Clone a dataset repository and access the data, see <a href="/getting-started/" class="text-primary-500 hover:underline">Getting Started</a> for more.'
-
-[[params.DemoCarousel]]
-src = "clip-build.mp4"
-label = "Build"
-caption = 'Track files with provenance, process them, and publish to S3. See <a href="/tutorials/mnist/" class="text-primary-500 hover:underline">Building a MNIST dataset</a> tutorial for more.'
-
-[[params.DemoCarousel]]
-src = "clip-permissions.mp4"
-label = "Share"
-caption = 'Grant read or write access to collaborators and propagate permissions. See <a href="/docs/user-guide/permissions/" class="text-primary-500 hover:underline">Permissions &amp; Access Control</a>.'
-
-[[params.DemoCarousel]]
-src = "clip-safe.mp4"
-label = "Secure"
-caption = 'Store SSH keys and tokens in <a href="/docs/components/exosafe/" class="text-primary-500 hover:underline">ExoSafe</a>. See <a href="/docs/user-guide/credentials/" class="text-primary-500 hover:underline">Managing Credentials</a> for more details.'
-
 # Section P3: Partners / Logos
 [params.P3]
 Heading = "Backed by the community"
