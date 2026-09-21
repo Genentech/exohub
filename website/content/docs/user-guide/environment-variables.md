@@ -1,7 +1,7 @@
 ---
 title: "Environment Variables"
 description: "All environment variables supported by the exo CLI"
-weight: 14
+weight: 15
 ---
 
 This page lists all environment variables recognized by the `exo` CLI. Set them in your shell profile (`~/.bashrc` or `~/.zshrc`) or inline before a command.
@@ -86,6 +86,12 @@ Directory layout under `EXO_CONFIG_DIR`:
 | `EXOHUB_GRANTS_ACCOUNT_ID` | AWS account ID for S3 Access Grants. Required on open-source builds (no built-in default); the internal binary has a built-in production value. When not set on an OSS build, `exo doctor`'s S3 Control network probe is skipped. | _(none — set by internal binary on internal builds)_ |
 | `EXOHUB_GRANTS_REGION` | AWS region for S3 Access Grants. Required on open-source builds (no built-in default); the internal binary has a built-in production value. | _(none — set by internal binary on internal builds)_ |
 | `EXO_CREDENTIAL_HELPER_BIN` | Path to the credential helper binary | `exo-credential-helper` |
+
+## Local Standalone Catalog
+
+| Variable | Description | Default |
+|----------|-------------|---------||
+| `VERSITYGW_SECRET_KEY` | Root secret key for the managed versitygw S3-compatible object store launched by `exo standalone up`. Alternative to the `--secret-key` flag. | _(required — no default)_ |
 
 ## Debugging
 
