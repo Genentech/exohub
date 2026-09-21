@@ -24,7 +24,7 @@ func TestGiteaCreateRepository(t *testing.T) {
 				Org:         "testorg",
 				Name:        "testrepo",
 				Description: "Test description",
-				Private:     true,
+				Visibility:  "private",
 			},
 			responseStatus: http.StatusCreated,
 			responseBody: giteaRepository{
@@ -264,10 +264,10 @@ func TestGiteaCreateRepositoryFromTemplate(t *testing.T) {
 
 	provider := NewGiteaProvider(server.URL, "test-token")
 	repo, err := provider.CreateRepository(context.Background(), CreateRepoOptions{
-		Org:      "destorg",
-		Name:     "newrepo",
-		Private:  true,
-		Template: &RepoTemplate{Owner: "testorg", Name: "template-a"},
+		Org:        "destorg",
+		Name:       "newrepo",
+		Visibility: "private",
+		Template:   &RepoTemplate{Owner: "testorg", Name: "template-a"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -286,10 +286,10 @@ func TestGiteaCreateRepositoryFromTemplateValidationError(t *testing.T) {
 
 	provider := NewGiteaProvider(server.URL, "test-token")
 	_, err := provider.CreateRepository(context.Background(), CreateRepoOptions{
-		Org:      "destorg",
-		Name:     "newrepo",
-		Private:  true,
-		Template: &RepoTemplate{Owner: "testorg", Name: "template-a"},
+		Org:        "destorg",
+		Name:       "newrepo",
+		Visibility: "private",
+		Template:   &RepoTemplate{Owner: "testorg", Name: "template-a"},
 	})
 	if err == nil {
 		t.Fatalf("expected error")

@@ -149,7 +149,7 @@ func TestGitLabProvider_CreateRepository(t *testing.T) {
 				Org:         "mygroup",
 				Name:        "test-repo",
 				Description: "Test repository",
-				Private:     false,
+				Visibility:  "public",
 			},
 			setupServer: func() *httptest.Server {
 				return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -190,9 +190,9 @@ func TestGitLabProvider_CreateRepository(t *testing.T) {
 		{
 			name: "private repository",
 			opts: CreateRepoOptions{
-				Org:     "mygroup",
-				Name:    "private-repo",
-				Private: true,
+				Org:        "mygroup",
+				Name:       "private-repo",
+				Visibility: "private",
 			},
 			setupServer: func() *httptest.Server {
 				return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

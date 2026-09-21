@@ -180,6 +180,11 @@ test-all-coverage-html: test-all-coverage
 leak-scan:
 	@bash scripts/leak-scan.sh --skip-gitleaks
 
+# Bootstrap-only — not for ongoing use.
+# oss-export was used for the one-time initial public drop (oss-build-tags-and-export).
+# For regular publishing use oss-sync / oss-sync-dry-run below (internal→public,
+# owner-driven via scripts/oss-sync.sh).  oss-export is kept here for
+# disaster-recovery / re-bootstrap only.  See docs/oss-sync.md.
 oss-export:
 	@bash scripts/oss-export.sh
 

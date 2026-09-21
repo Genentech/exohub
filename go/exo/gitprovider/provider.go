@@ -32,8 +32,12 @@ type CreateRepoOptions struct {
 	Org         string
 	Name        string
 	Description string
-	Private     bool
-	Template    *RepoTemplate
+	// Visibility is "private", "internal" or "public". Empty selects the
+	// provider's default: internal on GitLab, private on GitHub and Gitea.
+	// Only GitLab has an "internal" level — GitHub and Gitea expose a private
+	// boolean only, and treat "internal" as private.
+	Visibility string
+	Template   *RepoTemplate
 }
 
 // Repository represents a git repository

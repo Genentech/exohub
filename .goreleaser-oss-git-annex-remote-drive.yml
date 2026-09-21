@@ -17,6 +17,12 @@ builds:
     ldflags:
       - -s -w
       - -X main.appVersion={{ .Version }}
-      # GOOGLE_DRIVE_CLIENT_ID and GOOGLE_DRIVE_CLIENT_SECRET must be set in CI
-      - -X main.builtinClientID={{ .Env.GOOGLE_DRIVE_CLIENT_ID }}
-      - -X main.builtinClientSecret={{ .Env.GOOGLE_DRIVE_CLIENT_SECRET }}
+archives:
+  - id: git-annex-remote-drive
+    builds: [git-annex-remote-drive]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format: tar.gz
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+release:
+  skip_upload: true

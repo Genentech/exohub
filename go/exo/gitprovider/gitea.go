@@ -72,7 +72,7 @@ func (g *GiteaProvider) CreateRepository(ctx context.Context, opts CreateRepoOpt
 	reqBody := giteaCreateRepoRequest{
 		Name:        opts.Name,
 		Description: opts.Description,
-		Private:     opts.Private,
+		Private:     opts.Visibility != "public",
 	}
 
 	body, err := json.Marshal(reqBody)
@@ -213,7 +213,7 @@ func (g *GiteaProvider) createRepositoryFromTemplate(ctx context.Context, opts C
 		Name:        opts.Name,
 		Owner:       opts.Org,
 		Description: opts.Description,
-		Private:     opts.Private,
+		Private:     opts.Visibility != "public",
 		GitContent:  true,
 		GitHooks:    true,
 		Labels:      true,

@@ -25,6 +25,12 @@ builds:
       - -X main.version={{ .Version }}
       - -X main.commit={{ .ShortCommit }}
       - -X main.date={{ .Date }}
-      # GOOGLE_DRIVE_CLIENT_ID and GOOGLE_DRIVE_CLIENT_SECRET must be set in CI
-      - -X github.com/Genentech/exohub/go/exo/commands/auth.builtinDriveClientID={{ .Env.GOOGLE_DRIVE_CLIENT_ID }}
-      - -X github.com/Genentech/exohub/go/exo/commands/auth.builtinDriveClientSecret={{ .Env.GOOGLE_DRIVE_CLIENT_SECRET }}
+archives:
+  - id: exo
+    builds: [exo]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format: tar.gz
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+release:
+  skip_upload: true

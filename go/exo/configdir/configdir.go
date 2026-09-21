@@ -79,3 +79,25 @@ func CredHelperCacheDir() (string, error) {
 	p := filepath.Join(dir, "exo-credential-helper")
 	return p, os.MkdirAll(p, 0700)
 }
+
+// PurgeCredHelperCache removes all cached S3 credentials (*.json) and lock
+// files (*.lock) from the exo-credential-helper cache directory. It is a
+// no-op when the cache directory does not exist.
+func PurgeCredHelperCache() error {
+	dir, err := CredHelperCacheDir()
+	if err != nil {
+		return err
+	}
+	for _, pattern := range []string{"*.json", "*.lock"} {
+		matches, err := filepath.Glob(filepath.Join(dir, pattern))
+		if err != nil {
+			return err
+		}
+		for _, f := range matches {
+			if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		}
+	}
+	return nil
+}

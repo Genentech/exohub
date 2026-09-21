@@ -2,12 +2,17 @@ package doctor
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/Genentech/exohub/go/exo/internal/credhelper"
 )
 
 // --- result model tests ---
@@ -641,6 +646,66 @@ func TestProbeAPIURL_UsesBasePath(t *testing.T) {
 	}
 	if strings.Contains(probeURL, "healthz") {
 		t.Errorf("probe URL must not contain /healthz, got %q", probeURL)
+	}
+}
+
+// --- grants write probe tests ---
+
+// TestProbeS3Write_SuccessOnPutAndDelete verifies probeS3Write returns nil when
+// both PutObject and DeleteObject succeed (genuine write access).
+func TestProbeS3Write_SuccessOnPutAndDelete(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Accept any PUT or DELETE (PutObject, DeleteObject)
+		if r.Method == http.MethodPut || r.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}))
+	defer server.Close()
+
+	creds := &credhelper.Credentials{
+		AccessKeyID:     "ASIATEST",
+		SecretAccessKey: "secret",
+		SessionToken:    "token",
+	}
+
+	// Point the S3 client at the test server by setting the endpoint via env.
+	// The AWS SDK respects AWS_ENDPOINT_URL for path-style addressing.
+	t.Setenv("AWS_ENDPOINT_URL", server.URL)
+	t.Setenv("EXOHUB_GRANTS_REGION", "us-east-1")
+
+	err := probeS3Write(context.Background(), creds, "s3://testbucket/prefix/")
+	if err != nil {
+		t.Errorf("expected nil error on successful write probe, got: %v", err)
+	}
+}
+
+// TestProbeS3Write_FailsOnAccessDenied verifies probeS3Write returns an error when
+// PutObject is denied (read-only credentials).
+func TestProbeS3Write_FailsOnAccessDenied(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(`<?xml version="1.0" encoding="UTF-8"?><Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>`))
+			return
+		}
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}))
+	defer server.Close()
+
+	creds := &credhelper.Credentials{
+		AccessKeyID:     "ASIAREADONLY",
+		SecretAccessKey: "secret",
+		SessionToken:    "token",
+	}
+
+	t.Setenv("AWS_ENDPOINT_URL", server.URL)
+	t.Setenv("EXOHUB_GRANTS_REGION", "us-east-1")
+
+	err := probeS3Write(context.Background(), creds, "s3://testbucket/prefix/")
+	if err == nil {
+		t.Error("expected error when PutObject is denied (read-only creds), got nil")
 	}
 }
 

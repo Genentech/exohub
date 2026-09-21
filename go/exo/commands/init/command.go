@@ -506,7 +506,8 @@ func handleRepoCreation(exohubConfig *ExohubConfig, remotesConfig *RemotesConfig
 			Org:         org,
 			Name:        repoName,
 			Description: fmt.Sprintf("Created by exo CLI"),
-			Private:     true,
+			// Visibility unset: the provider picks its default — internal on
+			// GitLab, private on GitHub and Gitea.
 		})
 		if err != nil {
 			if errors.Is(err, gitprovider.ErrAlreadyExists) {

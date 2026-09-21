@@ -214,10 +214,10 @@ func TestGitHubCreateRepositoryFromTemplate(t *testing.T) {
 
 	provider := NewGitHubProvider(server.URL, "test-token")
 	repo, err := provider.CreateRepository(context.Background(), CreateRepoOptions{
-		Org:      "destorg",
-		Name:     "newrepo",
-		Private:  true,
-		Template: &RepoTemplate{Owner: "testorg", Name: "template-a"},
+		Org:        "destorg",
+		Name:       "newrepo",
+		Visibility: "private",
+		Template:   &RepoTemplate{Owner: "testorg", Name: "template-a"},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

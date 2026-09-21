@@ -17,3 +17,12 @@ builds:
     ldflags:
       - -s -w
       - -X main.appVersion={{ .Version }}
+archives:
+  - id: git-annex-remote-s5cmd
+    builds: [git-annex-remote-s5cmd]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format: tar.gz
+checksum:
+  name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+release:
+  skip_upload: true

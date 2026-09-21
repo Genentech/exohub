@@ -123,6 +123,18 @@ func checkGetDataAccess(ctx context.Context, prefix, s3url, permission string) C
 		}
 	}
 
+	// For READWRITE, verify the vended credentials actually allow writes.
+	// Read-only credentials are vended successfully by GetDataAccess READWRITE
+	// when the grant is scoped to READ — the call succeeds but PutObject is denied.
+	if strings.EqualFold(permission, "READWRITE") {
+		if probeErr := probeS3Write(ctx, result.Credentials, s3url); probeErr != nil {
+			return fail(id, groupGrants,
+				fmt.Sprintf("GetDataAccess(%s): credentials vended but write probe denied — read-only creds", permission),
+				Redact(probeErr.Error()),
+				"Run 'exo init' to provision READWRITE grants, or ask a dataset owner to grant write access")
+		}
+	}
+
 	return pass(id, groupGrants,
 		fmt.Sprintf("GetDataAccess(%s) OK — role=%s%s", permission, result.GranteeType, expiry))
 }
@@ -139,7 +151,13 @@ func checkServerFallback(ctx context.Context, prefix, s3url string, tokenLoader 
 	// "arn:aws:sts::123:assumed-role/<identity-role>/lelongs").
 	creds, err := credhelper.GetCredsFromServer(ctx, s3url, "READWRITE", tokenLoader, nil)
 	if err == nil {
-		_ = creds
+		// Verify the vended READWRITE credentials actually allow writes.
+		if probeErr := probeS3Write(ctx, creds, s3url); probeErr != nil {
+			return fail(id, groupGrants,
+				"Server fallback READWRITE: credentials vended but write probe denied — read-only creds",
+				Redact(probeErr.Error()),
+				"Ask a dataset owner to grant you write access")
+		}
 		return pass(id, groupGrants,
 			"Server fallback READWRITE OK — vended principal: location role (write-capable)")
 	}
@@ -173,18 +191,66 @@ func checkServerFallback(ctx context.Context, prefix, s3url string, tokenLoader 
 		"Check VPN connection. The server fallback requires VPN access.")
 }
 
+// probeS3Write performs a zero-byte PutObject + DeleteObject canary write to
+// confirm that the provided credentials carry actual write permission.
+// It returns nil on success, or an error (including AccessDenied) if the write
+// is denied. The canary key is placed under the s3url prefix and cleaned up
+// immediately; any failure to delete is silently ignored (the canary is zero bytes).
+func probeS3Write(ctx context.Context, creds *credhelper.Credentials, s3url string) error {
+	bucket, keyPrefix, err := parseS3URL(s3url)
+	if err != nil {
+		return fmt.Errorf("cannot parse s3url: %w", err)
+	}
+
+	caller := currentUsername()
+	if caller == "" {
+		caller = "unknown"
+	}
+	ts := time.Now().UTC().Format("20060102T150405Z")
+	// path.Join (not filepath.Join) so the separator is always '/' even on Windows.
+	canaryKey := path.Join(keyPrefix, ".exo-doctor-canary-"+caller+"-"+ts)
+	canaryKey = strings.TrimPrefix(canaryKey, "/")
+
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
+		awsconfig.WithRegion(resolveEnv("EXOHUB_GRANTS_REGION", credhelper.DefaultRegion)),
+		awsconfig.WithCredentialsProvider(aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
+			return aws.Credentials{
+				AccessKeyID:     creds.AccessKeyID,
+				SecretAccessKey: creds.SecretAccessKey,
+				SessionToken:    creds.SessionToken,
+			}, nil
+		})),
+	)
+	if err != nil {
+		return fmt.Errorf("cannot build AWS config: %w", err)
+	}
+
+	s3Client := s3.NewFromConfig(awsCfg)
+
+	_, putErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(canaryKey),
+		Body:   bytes.NewReader([]byte{}),
+	})
+	if putErr != nil {
+		return fmt.Errorf("PutObject denied: %w", putErr)
+	}
+
+	// Best-effort cleanup — ignore delete errors.
+	_, _ = s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(canaryKey),
+	})
+
+	return nil
+}
+
 // checkWriteTest performs an opt-in zero-byte Put+Delete canary write under a
 // caller-owned prefix. repoDir must be the repo root (from --repo or CWD at
 // command invocation time) so the owner guard always reads the correct
 // .exohub/permissions regardless of the process CWD.
 func checkWriteTest(ctx context.Context, prefix, repoDir, s3url string) CheckResult {
 	id := prefix + ".write-test"
-
-	// Parse bucket and key prefix from s3url
-	bucket, keyPrefix, err := parseS3URL(s3url)
-	if err != nil {
-		return fail(id, groupGrants, "Write test: cannot parse s3url", err.Error(), "")
-	}
 
 	caller := currentUsername()
 	if caller == "" {
@@ -221,12 +287,6 @@ func checkWriteTest(ctx context.Context, prefix, repoDir, s3url string) CheckRes
 			"Only dataset owners can run --write-test")
 	}
 
-	// Construct the canary S3 key using path.Join (not filepath.Join) so the
-	// separator is always '/' even on Windows.
-	ts := time.Now().UTC().Format("20060102T150405Z")
-	canaryKey := path.Join(keyPrefix, ".exo-doctor-canary-"+caller+"-"+ts)
-	canaryKey = strings.TrimPrefix(canaryKey, "/")
-
 	// Get READWRITE credentials via GetDataAccess
 	creds, err := credhelper.GetDataAccess(ctx, "", "", s3url, "READWRITE", 900, nil)
 	if err != nil {
@@ -236,50 +296,23 @@ func checkWriteTest(ctx context.Context, prefix, repoDir, s3url string) CheckRes
 			"GetDataAccess READWRITE failed — see grants checks above")
 	}
 
-	// Build S3 client with the vended credentials
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
-		awsconfig.WithRegion(resolveEnv("EXOHUB_GRANTS_REGION", credhelper.DefaultRegion)),
-		awsconfig.WithCredentialsProvider(aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
-			return aws.Credentials{
-				AccessKeyID:     creds.Credentials.AccessKeyID,
-				SecretAccessKey: creds.Credentials.SecretAccessKey,
-				SessionToken:    creds.Credentials.SessionToken,
-			}, nil
-		})),
-	)
+	_, keyPrefix, err := parseS3URL(s3url)
 	if err != nil {
-		return fail(id, groupGrants, "Write test: cannot build AWS config", Redact(err.Error()), "")
+		return fail(id, groupGrants, "Write test: cannot parse s3url", err.Error(), "")
 	}
 
-	s3Client := s3.NewFromConfig(awsCfg)
-
-	// PUT zero-byte object
-	_, putErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(canaryKey),
-		Body:   bytes.NewReader([]byte{}),
-	})
-	if putErr != nil {
+	if probeErr := probeS3Write(ctx, creds.Credentials, s3url); probeErr != nil {
 		return fail(id, groupGrants,
 			"Write test: PutObject failed",
-			Redact(putErr.Error()),
+			Redact(probeErr.Error()),
 			"Write access is not functional — check grants and role vending")
 	}
 
-	// DELETE the canary object (cleanup)
-	_, delErr := s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(canaryKey),
-	})
-	if delErr != nil {
-		return warn(id, groupGrants,
-			"Write test: PutObject OK but DeleteObject failed (artifact left)",
-			Redact(delErr.Error()),
-			fmt.Sprintf("Manually delete s3://%s/%s", bucket, canaryKey))
-	}
-
 	return pass(id, groupGrants,
-		fmt.Sprintf("Write test OK (put+delete canary under s3://%s/%s, no artifacts left)", bucket, keyPrefix))
+		fmt.Sprintf("Write test OK (put+delete canary under s3://%s/%s, no artifacts left)", func() string {
+			bucket, _, _ := parseS3URL(s3url)
+			return bucket
+		}(), keyPrefix))
 }
 
 // parseS3URL parses s3://bucket/prefix/ into (bucket, prefix, error).

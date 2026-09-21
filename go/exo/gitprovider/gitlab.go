@@ -72,6 +72,17 @@ type gitlabCreateProjectRequest struct {
 	InitializeWithReadme            bool   `json:"initialize_with_readme,omitempty"`
 }
 
+// gitlabVisibility maps CreateRepoOptions.Visibility onto the GitLab API's
+// visibility field. GitLab accepts all three levels verbatim; an unset value
+// defaults to internal, so repositories created here are readable by any
+// authenticated user without being public.
+func gitlabVisibility(visibility string) string {
+	if visibility == "" {
+		return "internal"
+	}
+	return visibility
+}
+
 // gitlabProject represents a GitLab project response
 type gitlabProject struct {
 	ID                int    `json:"id"`
@@ -112,16 +123,11 @@ func (g *GitLabProvider) CreateRepository(ctx context.Context, opts CreateRepoOp
 
 	url := fmt.Sprintf("%s/projects", g.host)
 
-	visibility := "public"
-	if opts.Private {
-		visibility = "private"
-	}
-
 	reqBody := gitlabCreateProjectRequest{
 		Name:        opts.Name,
 		Description: opts.Description,
 		NamespaceID: namespaceID,
-		Visibility:  visibility,
+		Visibility:  gitlabVisibility(opts.Visibility),
 	}
 
 	body, err := json.Marshal(reqBody)
@@ -430,16 +436,11 @@ func (g *GitLabProvider) createRepositoryFromTemplate(ctx context.Context, opts 
 
 	url := fmt.Sprintf("%s/projects", g.host)
 
-	visibility := "public"
-	if opts.Private {
-		visibility = "private"
-	}
-
 	reqBody := gitlabCreateProjectRequest{
 		Name:                        opts.Name,
 		Description:                 opts.Description,
 		NamespaceID:                 namespaceID,
-		Visibility:                  visibility,
+		Visibility:                  gitlabVisibility(opts.Visibility),
 		UseCustomTemplate:           true,
 		TemplateProjectID:           templateProjectID,
 		GroupWithProjectTemplatesID:  templateGroupID,

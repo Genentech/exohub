@@ -508,6 +508,52 @@ func TestVerifyGrantsNoRegistryDriftOldAPI(t *testing.T) {
 	}
 }
 
+// TestHasGrantsWriteAccess_PassesVerifyAndNoCache verifies that hasGrantsWriteAccess
+// invokes the credential helper with both --verify and --no-cache flags.
+func TestHasGrantsWriteAccess_PassesVerifyAndNoCache(t *testing.T) {
+	// Create a fake credential helper script that records its arguments and exits 0.
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fake-cred-helper")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"$@\" > \""+dir+"/args.txt\"\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("EXO_CREDENTIAL_HELPER_BIN", script)
+
+	got := hasGrantsWriteAccess("s3://bucket/prefix/")
+	if !got {
+		t.Error("expected true when helper exits 0")
+	}
+
+	argsData, err := os.ReadFile(filepath.Join(dir, "args.txt"))
+	if err != nil {
+		t.Fatalf("helper was not called: %v", err)
+	}
+	args := strings.TrimSpace(string(argsData))
+	if !strings.Contains(args, "--verify") {
+		t.Errorf("expected --verify in helper args, got: %q", args)
+	}
+	if !strings.Contains(args, "--no-cache") {
+		t.Errorf("expected --no-cache in helper args, got: %q", args)
+	}
+}
+
+// TestHasGrantsWriteAccess_ReturnsFalseOnWriteProbeFailure verifies that
+// hasGrantsWriteAccess returns false when the credential helper exits non-zero
+// (as it will when --verify detects that the vended creds are read-only).
+func TestHasGrantsWriteAccess_ReturnsFalseOnWriteProbeFailure(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fake-cred-helper")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 1\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("EXO_CREDENTIAL_HELPER_BIN", script)
+
+	got := hasGrantsWriteAccess("s3://bucket/prefix/")
+	if got {
+		t.Error("expected false when helper exits 1 (write probe failure)")
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && searchString(s, substr)
 }

@@ -102,7 +102,7 @@ func (g *GitHubProvider) CreateRepository(ctx context.Context, opts CreateRepoOp
 	reqBody := githubCreateRepoRequest{
 		Name:        opts.Name,
 		Description: opts.Description,
-		Private:     opts.Private,
+		Private:     opts.Visibility != "public",
 	}
 
 	body, err := json.Marshal(reqBody)
@@ -270,7 +270,7 @@ func (g *GitHubProvider) createRepositoryFromTemplate(ctx context.Context, opts 
 		Name:        opts.Name,
 		Owner:       opts.Org,
 		Description: opts.Description,
-		Private:     opts.Private,
+		Private:     opts.Visibility != "public",
 	}
 
 	body, err := json.Marshal(reqBody)

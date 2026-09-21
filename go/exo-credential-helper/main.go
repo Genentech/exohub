@@ -17,6 +17,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3control"
 	"github.com/aws/aws-sdk-go-v2/service/s3control/types"
 	"gopkg.in/yaml.v3"
@@ -61,6 +62,7 @@ func main() {
 	status := flag.Bool("status", false, "Show credential status (cached, expiry time)")
 	verify := flag.Bool("verify", false, "Verify credentials work (exit 0 if OK, 1 if not)")
 	noCache := flag.Bool("no-cache", false, "Skip cache, always fetch fresh credentials")
+	clear := flag.Bool("clear", false, "Purge all cached credentials and exit")
 	debug := flag.Bool("debug", false, "Enable debug output")
 	showVersion := flag.Bool("version", false, "Show version")
 	showFull := flag.Bool("full", false, "Show version with feature tags (use with --version)")
@@ -83,6 +85,7 @@ Options:
   --status            Show credential status (cached, expiry time)
   --verify            Verify credentials work (exit 0 if OK, 1 if not)
   --no-cache          Skip cache, always fetch fresh credentials
+  --clear             Purge all cached credentials and exit
   --debug             Enable debug output
   --version           Show version
   --help              Show this help
@@ -112,6 +115,14 @@ Output format (default):
 `)
 	}
 	flag.Parse()
+
+	if *clear {
+		if err := purgeAllCache(); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: failed to purge credential cache: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	if *showVersion {
 		if *showFull {
@@ -273,11 +284,83 @@ Output format (default):
 	}
 
 	if *verify {
+		// For READWRITE, perform an actual write probe to confirm the vended
+		// credentials carry write permission (not just read-only creds).
+		if strings.EqualFold(*permission, "READWRITE") {
+			if err := probeWriteAccess(context.Background(), *s3URL, creds, debugf); err != nil {
+				fmt.Fprintf(os.Stderr, "Error: write probe failed — credentials are read-only or write is denied: %v\n", err)
+				os.Exit(1)
+			}
+		}
 		fmt.Println("OK")
 		return
 	}
 
 	outputCredentials(creds, *export)
+}
+
+// probeWriteAccess attempts a zero-byte PutObject + DeleteObject to a sentinel key
+// under the given s3url prefix, using the provided credentials. Returns nil if the
+// write succeeds (confirming real READWRITE access), or an error if denied.
+func probeWriteAccess(ctx context.Context, s3URL string, creds *credentialOutput, debugf func(string, ...any)) error {
+	s3URL = strings.TrimPrefix(s3URL, "s3://")
+	parts := strings.SplitN(s3URL, "/", 2)
+	if len(parts) == 0 || parts[0] == "" {
+		return fmt.Errorf("invalid s3url: %s", s3URL)
+	}
+	bucket := parts[0]
+	keyPrefix := ""
+	if len(parts) > 1 {
+		keyPrefix = strings.TrimSuffix(parts[1], "/")
+	}
+
+	caller := usernameFromToken()
+	if caller == "" {
+		caller = "unknown"
+	}
+	ts := time.Now().UTC().Format("20060102T150405Z")
+	canaryKey := ".exo-verify-" + caller + "-" + ts
+	if keyPrefix != "" {
+		canaryKey = keyPrefix + "/" + canaryKey
+	}
+
+	region := resolveEnvDefault("", "EXOHUB_GRANTS_REGION", defaultRegion)
+	awsCfg, err := config.LoadDefaultConfig(ctx,
+		config.WithRegion(region),
+		config.WithCredentialsProvider(aws.CredentialsProviderFunc(func(ctx context.Context) (aws.Credentials, error) {
+			return aws.Credentials{
+				AccessKeyID:     creds.AccessKeyID,
+				SecretAccessKey: creds.SecretAccessKey,
+				SessionToken:    creds.SessionToken,
+			}, nil
+		})),
+	)
+	if err != nil {
+		return fmt.Errorf("cannot build AWS config for write probe: %w", err)
+	}
+
+	s3Client := s3.NewFromConfig(awsCfg)
+
+	debugf("Write probe: PutObject s3://%s/%s", bucket, canaryKey)
+	_, putErr := s3Client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(canaryKey),
+		Body:   bytes.NewReader([]byte{}),
+	})
+	if putErr != nil {
+		return fmt.Errorf("PutObject denied: %w", putErr)
+	}
+
+	debugf("Write probe: DeleteObject s3://%s/%s", bucket, canaryKey)
+	_, delErr := s3Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(canaryKey),
+	})
+	if delErr != nil {
+		debugf("Warning: write probe DeleteObject failed (artifact left at s3://%s/%s): %v", bucket, canaryKey, delErr)
+	}
+
+	return nil
 }
 
 func resolveEnvDefault(flagVal, envVar, defaultVal string) string {
@@ -536,6 +619,26 @@ func loadCachedCredentials(s3URL, permission string, grants bool) (*credentialOu
 		}
 	}
 	return &creds, nil
+}
+
+// purgeAllCache removes all *.json and *.lock files from the credential cache directory.
+func purgeAllCache() error {
+	dir, err := cacheDir()
+	if err != nil {
+		return err
+	}
+	for _, pattern := range []string{"*.json", "*.lock"} {
+		matches, err := filepath.Glob(filepath.Join(dir, pattern))
+		if err != nil {
+			return err
+		}
+		for _, f := range matches {
+			if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func handleStatus(s3URL, permission string, grants bool) {

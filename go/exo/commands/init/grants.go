@@ -37,13 +37,17 @@ type grantsSyncRequest struct {
 }
 
 // hasGrantsWriteAccess probes the credential helper to check if the current
-// user has READWRITE access to the given s3url via S3 Access Grants.
+// user has genuine READWRITE access to the given s3url via S3 Access Grants.
+// It passes --verify and --no-cache so that:
+//   - stale read-only cached credentials are not mistakenly accepted, and
+//   - the helper performs a real PutObject+DeleteObject write probe (not just
+//     confirming that credentials were vended).
 func hasGrantsWriteAccess(s3url string) bool {
 	credHelper := os.Getenv("EXO_CREDENTIAL_HELPER_BIN")
 	if credHelper == "" {
 		credHelper = "exo-credential-helper"
 	}
-	cmd := command(credHelper, "--s3url", s3url, "--permission", "READWRITE")
+	cmd := command(credHelper, "--s3url", s3url, "--permission", "READWRITE", "--verify", "--no-cache")
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	if err := cmd.Run(); err != nil {

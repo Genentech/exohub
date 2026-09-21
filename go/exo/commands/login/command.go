@@ -7,6 +7,7 @@ import (
 
 "github.com/spf13/cobra"
 
+"github.com/Genentech/exohub/go/exo/configdir"
 "github.com/Genentech/exohub/go/exo/internal/defaults"
 "github.com/Genentech/exohub/go/exo/safe"
 )
@@ -88,6 +89,7 @@ func runLoginJSON() error {
 
 	if force {
 		_ = DeleteToken(tokenFile)
+		_ = configdir.PurgeCredHelperCache()
 	}
 
 	// Always try to refresh when a refresh token exists
@@ -140,6 +142,9 @@ fmt.Println("🗑️  Deleting cached credentials...")
 err := DeleteToken(tokenFile)
 if err != nil {
 return fmt.Errorf("failed to delete cached credentials: %w", err)
+}
+if err := configdir.PurgeCredHelperCache(); err != nil {
+fmt.Printf("⚠️  Failed to purge S3 credential cache: %v\n", err)
 }
 }
 
@@ -216,6 +221,10 @@ return fmt.Errorf("failed to get token file path: %w", err)
 err = DeleteToken(tokenFile)
 if err != nil {
 return fmt.Errorf("failed to delete credentials: %w", err)
+}
+
+if err := configdir.PurgeCredHelperCache(); err != nil {
+fmt.Printf("⚠️  Failed to purge S3 credential cache: %v\n", err)
 }
 
 // Clean up ExoSafe provisioned credentials

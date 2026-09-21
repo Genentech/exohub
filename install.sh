@@ -41,7 +41,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 # Resolve the exo release tag from GitHub Releases API.
-# Releases are tagged as exo/vX.Y.Z; the API returns the tag_name field.
+# Releases are tagged as v<semver> (e.g. v0.114.0).
 resolve_exo_tag() {
   if [ "$version" = "latest" ]; then
     tag=$(curl --silent "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" \
@@ -56,9 +56,9 @@ resolve_exo_tag() {
   fi
 }
 
-# Extract the semver portion from a tag like exo/v1.2.3 → 1.2.3
+# Extract the semver portion from a tag like v1.2.3 → 1.2.3
 tag_to_version() {
-  echo "$1" | sed 's|.*/v||; s|^v||'
+  echo "$1" | sed 's|^v||'
 }
 
 install_dir=""
