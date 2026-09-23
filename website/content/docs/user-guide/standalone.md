@@ -18,9 +18,15 @@ The responses are byte-compatible with the enterprise ArtifactDB API, so dataset
 
 ## Prerequisites
 
-- **`surreal`** — [Install SurrealDB](https://surrealdb.com/docs/surrealdb/installation)
-- **`adb-standalone`** — Install from ExoHub releases
-- **`versitygw`** — Downloaded automatically from GitHub Releases if not in PATH
+No manual binary installation is required. On first run, `exo standalone up` detects missing binaries and prompts:
+
+```
+Install the standalone stack (surreal, versitygw, adb-standalone)? [Y/n]
+```
+
+Confirming downloads all three into `<data-dir>/bin/` and caches them for later runs. Subsequent invocations skip the download entirely.
+
+> **Note:** Binaries are stored under `<data-dir>/bin/` (default: `$XDG_CONFIG_HOME/exo/standalone/bin/`).
 
 ## Starting the Stack
 
@@ -37,8 +43,10 @@ This starts all three processes in the foreground and writes a default `config.y
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--data-dir` | `$XDG_CONFIG_HOME/exo/standalone` | Directory for persistent data and PID files |
-| `--surreal-bin` | `surreal` | Path to the surreal binary |
-| `--adb-bin` | `adb-standalone` | Path to the adb-standalone binary |
+| `--yes`, `-y` | `false` | Skip the install prompt (non-interactive / scripted use) |
+| `--no-install` | `false` | Never download binaries — for pre-provisioned or CI hosts |
+| `--surreal-bin` | `surreal` | Path to an existing surreal binary (skips auto-download for surreal) |
+| `--adb-bin` | `adb-standalone` | Path to an existing adb-standalone binary (skips auto-download for adb-standalone) |
 | `--config` | `<data-dir>/config.yaml` | adb-standalone config file |
 | `--surreal-port` | `8000` | SurrealDB listen port |
 | `--versitygw-port` | `9100` | versitygw listen port |
@@ -54,6 +62,26 @@ Stack is up:
   surrealdb      ws://localhost:8000
   versitygw      http://localhost:9100
   adb-standalone http://localhost:8080
+```
+
+### Installation Options
+
+For scripted or CI environments, use `--yes` / `-y` to skip the confirmation prompt:
+
+```bash
+exo standalone up --yes --secret-key mysecret
+```
+
+To prevent any binary downloads (e.g. on pre-provisioned hosts where binaries are already in PATH or placed manually):
+
+```bash
+exo standalone up --no-install --secret-key mysecret
+```
+
+To use specific existing binaries instead of the auto-downloaded ones:
+
+```bash
+exo standalone up --surreal-bin /usr/local/bin/surreal --adb-bin /opt/bin/adb-standalone --secret-key mysecret
 ```
 
 ### Custom Configuration
