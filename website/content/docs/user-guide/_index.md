@@ -4,7 +4,7 @@ description: "Complete guide to using ExoHub with the exo CLI"
 weight: 10
 ---
 
-This guide walks you through using ExoHub to manage your datasets. This guide covers **exo CLI v0.116.0**. Whether you're downloading data for analysis, collaborating with your team, or setting up automated pipelines, this guide covers everything you need to know.
+This guide walks you through using ExoHub to manage your datasets. This guide covers **exo CLI v0.117.0**. Whether you're downloading data for analysis, collaborating with your team, or setting up automated pipelines, this guide covers everything you need to know.
 
 ## What You'll Learn
 

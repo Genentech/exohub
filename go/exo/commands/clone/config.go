@@ -67,13 +67,12 @@ func containsWhitespace(s string) bool {
 	return false
 }
 
-// ValidatePresets checks if the presets configuration is valid
+// ValidatePresets checks if the presets configuration is valid.
+// An empty preset list is allowed — it means "no presets configured",
+// which is equivalent to the .exohub/presets file being absent.
+// Individual preset entries are still fully validated.
 func (pc *PresetsConfig) ValidatePresets() error {
-	if len(pc.Presets) == 0 {
-		return fmt.Errorf("at least one preset is required")
-	}
-
-	// Check for duplicate preset names
+	// Check for duplicate preset names and validate each preset
 	names := make(map[string]bool)
 	for _, preset := range pc.Presets {
 		if err := preset.Validate(); err != nil {
@@ -88,7 +87,13 @@ func (pc *PresetsConfig) ValidatePresets() error {
 	return nil
 }
 
-// LoadPresetsConfig reads .exohub/presets from the specified directory
+// LoadPresetsConfig reads .exohub/presets from the specified directory.
+// Returns nil, nil when:
+//   - the file does not exist
+//   - the file is present but defines no active presets (e.g. fully commented out)
+//
+// Both cases mean "no presets configured" and let the caller fall through to a
+// full clone.  Individual preset entries that are present are still validated.
 func LoadPresetsConfig(repoPath string) (*PresetsConfig, error) {
 	path := filepath.Join(repoPath, ".exohub", "presets")
 	data, err := os.ReadFile(path)
@@ -104,9 +109,15 @@ func LoadPresetsConfig(repoPath string) (*PresetsConfig, error) {
 		return nil, fmt.Errorf("failed to parse .exohub/presets: %w", err)
 	}
 
-	// Validate the configuration
+	// Validate individual presets (duplicate names, bad fields, etc.)
 	if err := config.ValidatePresets(); err != nil {
 		return nil, fmt.Errorf("invalid presets configuration: %w", err)
+	}
+
+	// A file with no active presets is equivalent to no file at all.
+	// Return nil so the caller's hasPresets check does the right thing.
+	if len(config.Presets) == 0 {
+		return nil, nil
 	}
 
 	return &config, nil

@@ -104,10 +104,11 @@ func TestPresetsConfigValidatePresets(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			// An empty preset list is not a validation error — it means
+			// "no presets configured", equivalent to the file being absent.
 			name:    "empty presets",
 			config:  PresetsConfig{Presets: []ClonePreset{}},
-			wantErr: true,
-			errMsg:  "at least one preset is required",
+			wantErr: false,
 		},
 		{
 			name: "duplicate preset names",
@@ -224,6 +225,41 @@ func TestLoadPresetsConfig(t *testing.T) {
 			},
 			wantErr:    true,
 			errContain: "invalid presets configuration",
+		},
+		{
+			// A file present but fully commented out is valid YAML that
+			// produces an empty preset list.  It must succeed and return nil
+			// (equivalent to no file) so clone falls through to full-clone.
+			name: "fully commented-out presets file",
+			setupFunc: func(dir string) error {
+				exohubDir := filepath.Join(dir, ".exohub")
+				if err := os.MkdirAll(exohubDir, 0755); err != nil {
+					return err
+				}
+				content := `# presets:
+#   - name: example
+#     description: Example preset
+#     depth: 1
+`
+				return os.WriteFile(filepath.Join(exohubDir, "presets"), []byte(content), 0644)
+			},
+			wantErr: false,
+			wantNil: true, // same as file-absent
+		},
+		{
+			// An explicit empty list (presets: []) must also succeed and
+			// return nil so clone falls through to full-clone.
+			name: "explicit empty presets list",
+			setupFunc: func(dir string) error {
+				exohubDir := filepath.Join(dir, ".exohub")
+				if err := os.MkdirAll(exohubDir, 0755); err != nil {
+					return err
+				}
+				content := "presets: []\n"
+				return os.WriteFile(filepath.Join(exohubDir, "presets"), []byte(content), 0644)
+			},
+			wantErr: false,
+			wantNil: true,
 		},
 	}
 
