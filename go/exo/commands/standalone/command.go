@@ -5,7 +5,7 @@ import (
 )
 
 // NewCommand returns the root `exo standalone` cobra command.
-func NewCommand() *cobra.Command {
+func NewCommand(version string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "standalone",
 		Short: "Manage the local adb-standalone stack",
@@ -27,7 +27,7 @@ Subcommands:
 		},
 	}
 
-	cmd.AddCommand(newUpCommand())
+	cmd.AddCommand(newUpCommand(version))
 	cmd.AddCommand(newDownCommand())
 	cmd.AddCommand(newStatusCommand())
 	cmd.AddCommand(newSeedCommand())

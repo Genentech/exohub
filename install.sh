@@ -185,7 +185,7 @@ install_s5cmd() {
   fi
 
   url="https://github.com/${S5CMD_REPO}/releases/download/v${ver}/${archive}"
-  checksum_url="https://github.com/${S5CMD_REPO}/releases/download/v${ver}/s5cmd_${ver}_checksums.txt"
+  checksum_url="https://github.com/${S5CMD_REPO}/releases/download/v${ver}/s5cmd_checksums.txt"
 
   echo "Downloading s5cmd ${ver} (${OS}/${ARCH})"
   tmp_dir=$(mktemp -d)

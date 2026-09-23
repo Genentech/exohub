@@ -1,18 +1,20 @@
 package standalone
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 )
 
-func newUpCommand() *cobra.Command {
+func newUpCommand(version string) *cobra.Command {
 	var (
 		dataDir       string
 		surrealBin    string
@@ -24,6 +26,8 @@ func newUpCommand() *cobra.Command {
 		accessKey     string
 		secretKey     string
 		bucket        string
+		noInstall     bool
+		yes           bool
 	)
 
 	cmd := &cobra.Command{
@@ -45,6 +49,7 @@ Set --endpoint in config or use STORAGE_S3_ENDPOINT=managed to use managed versi
 				dataDir = filepath.Join(home, "exo", "standalone")
 			}
 			return runUp(runUpOpts{
+				version:       version,
 				dataDir:       dataDir,
 				surrealBin:    surrealBin,
 				adbBin:        adbBin,
@@ -55,6 +60,8 @@ Set --endpoint in config or use STORAGE_S3_ENDPOINT=managed to use managed versi
 				accessKey:     accessKey,
 				secretKey:     secretKey,
 				bucket:        bucket,
+				noInstall:     noInstall,
+				yes:           yes,
 			})
 		},
 	}
@@ -69,11 +76,14 @@ Set --endpoint in config or use STORAGE_S3_ENDPOINT=managed to use managed versi
 	cmd.Flags().StringVar(&accessKey, "access-key", "versitygw", "versitygw root access key")
 	cmd.Flags().StringVar(&secretKey, "secret-key", "", "versitygw root secret key (required)")
 	cmd.Flags().StringVar(&bucket, "bucket", "adb-standalone", "S3 bucket name to auto-create on startup")
+	cmd.Flags().BoolVar(&noInstall, "no-install", false, "Abort instead of downloading missing stack binaries")
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "Skip the install confirmation prompt")
 
 	return cmd
 }
 
 type runUpOpts struct {
+	version       string
 	dataDir       string
 	surrealBin    string
 	adbBin        string
@@ -84,11 +94,25 @@ type runUpOpts struct {
 	accessKey     string
 	secretKey     string
 	bucket        string
+	noInstall     bool
+	yes           bool
+}
+
+// resolvedBins holds the final executable paths for the three stack processes.
+type resolvedBins struct {
+	surreal    string
+	versitygw  string
+	adbStandalone string
 }
 
 func runUp(opts runUpOpts) error {
 	if err := os.MkdirAll(opts.dataDir, 0o700); err != nil {
 		return fmt.Errorf("create data dir %q: %w", opts.dataDir, err)
+	}
+
+	bins, err := ensureStackBinaries(opts)
+	if err != nil {
+		return err
 	}
 
 	surrealDataDir := filepath.Join(opts.dataDir, "surreal")
@@ -98,18 +122,6 @@ func runUp(opts runUpOpts) error {
 	}
 	if err := os.MkdirAll(versitygwDataDir, 0o700); err != nil {
 		return fmt.Errorf("create versitygw data dir: %w", err)
-	}
-
-	// Locate or download versitygw.
-	vgwBin, err := findOrDownloadBinary("versitygw", opts.dataDir)
-	if err != nil {
-		return fmt.Errorf("versitygw: %w", err)
-	}
-
-	// Locate adb-standalone binary.
-	adbBinPath, err := exec.LookPath(opts.adbBin)
-	if err != nil {
-		return fmt.Errorf("%q not found in PATH — install adb-standalone or set --adb-bin", opts.adbBin)
 	}
 
 	// Resolve adb-standalone config.
@@ -144,7 +156,7 @@ func runUp(opts runUpOpts) error {
 		"--pass=surreal-local",
 		fmt.Sprintf("file://%s/surreal.db", surrealDataDir),
 	}
-	surrealCmd := exec.Command(opts.surrealBin, surrealArgs...) //nolint:gosec
+	surrealCmd := exec.Command(bins.surreal, surrealArgs...) //nolint:gosec
 	surrealCmd.Stdout = os.Stdout
 	surrealCmd.Stderr = os.Stderr
 	if err := surrealCmd.Start(); err != nil {
@@ -160,7 +172,7 @@ func runUp(opts runUpOpts) error {
 		"posix",
 		versitygwDataDir,
 	}
-	vgwCmd := exec.Command(vgwBin, vgwArgs...) //nolint:gosec
+	vgwCmd := exec.Command(bins.versitygw, vgwArgs...) //nolint:gosec
 	vgwCmd.Stdout = os.Stdout
 	vgwCmd.Stderr = os.Stderr
 	if err := vgwCmd.Start(); err != nil {
@@ -174,7 +186,7 @@ func runUp(opts runUpOpts) error {
 
 	// 3. Start adb-standalone.
 	adbArgs := []string{"serve", "--config", cfgPath}
-	adbCmd := exec.Command(adbBinPath, adbArgs...) //nolint:gosec
+	adbCmd := exec.Command(bins.adbStandalone, adbArgs...) //nolint:gosec
 	adbCmd.Stdout = os.Stdout
 	adbCmd.Stderr = os.Stderr
 	if err := adbCmd.Start(); err != nil {
@@ -195,8 +207,8 @@ func runUp(opts runUpOpts) error {
 	}
 
 	fmt.Fprintf(os.Stderr, "\nStack is up:\n")
-	fmt.Fprintf(os.Stderr, "  surrealdb     ws://localhost:%d\n", opts.surrealPort)
-	fmt.Fprintf(os.Stderr, "  versitygw     http://localhost:%d\n", opts.versitygwPort)
+	fmt.Fprintf(os.Stderr, "  surrealdb      ws://localhost:%d\n", opts.surrealPort)
+	fmt.Fprintf(os.Stderr, "  versitygw      http://localhost:%d\n", opts.versitygwPort)
 	fmt.Fprintf(os.Stderr, "  adb-standalone http://localhost:%d\n", opts.adbPort)
 	fmt.Fprintf(os.Stderr, "\nPress Ctrl+C to stop.\n\n")
 
@@ -230,6 +242,126 @@ func runUp(opts runUpOpts) error {
 	removePIDFile(opts.dataDir)
 	fmt.Fprintln(os.Stderr, "stack stopped")
 	return nil
+}
+
+// ensureStackBinaries detects which binaries are missing, optionally prompts to
+// install them, downloads what's needed, and returns resolved paths for all three.
+func ensureStackBinaries(opts runUpOpts) (resolvedBins, error) {
+	type candidate struct {
+		name        string // binary name used for download
+		flagValue   string // value of the --surreal-bin / --adb-bin flag
+		defaultName string // the cobra default (e.g. "surreal", "adb-standalone")
+		version     string // version override for download (empty = use spec default)
+	}
+
+	candidates := []candidate{
+		{name: "surreal", flagValue: opts.surrealBin, defaultName: "surreal"},
+		{name: "versitygw", flagValue: "versitygw", defaultName: "versitygw"},
+		{name: "adb-standalone", flagValue: opts.adbBin, defaultName: "adb-standalone", version: opts.version},
+	}
+
+	// For binaries where the user supplied an explicit path (non-default flag), just
+	// verify the path exists — no download.
+	type resolved struct {
+		path    string
+		missing bool
+		name    string
+		version string
+	}
+	results := make([]resolved, len(candidates))
+
+	for i, c := range candidates {
+		explicit := c.flagValue != c.defaultName
+		if explicit {
+			// User gave an explicit path — must exist, no download.
+			if _, err := exec.LookPath(c.flagValue); err != nil {
+				return resolvedBins{}, fmt.Errorf("%q not found: use a valid path or omit --%-s to auto-download", c.flagValue, flagNameFor(c.name))
+			}
+			results[i] = resolved{path: c.flagValue}
+			continue
+		}
+		path, missing := isBinaryMissing(c.defaultName, opts.dataDir)
+		results[i] = resolved{path: path, missing: missing, name: c.name, version: c.version}
+	}
+
+	// Collect names of missing binaries.
+	var missing []int
+	for i, r := range results {
+		if r.missing {
+			missing = append(missing, i)
+		}
+	}
+
+	if len(missing) > 0 {
+		if opts.noInstall {
+			names := make([]string, len(missing))
+			for j, i := range missing {
+				names[j] = results[i].name
+			}
+			return resolvedBins{}, fmt.Errorf(
+				"missing stack binaries: %s\n\nPass explicit paths via --surreal-bin / --adb-bin, or remove --no-install to allow auto-download.",
+				strings.Join(names, ", "),
+			)
+		}
+
+		// Prompt if interactive TTY; proceed silently if not.
+		if !opts.yes && isTerminal(os.Stdin) {
+			fmt.Fprintf(os.Stderr, "Install the standalone stack (surreal, versitygw, adb-standalone)? [Y/n] ")
+			scanner := bufio.NewScanner(os.Stdin)
+			scanner.Scan()
+			answer := strings.TrimSpace(scanner.Text())
+			if answer != "" && strings.ToLower(answer) != "y" && strings.ToLower(answer) != "yes" {
+				return resolvedBins{}, fmt.Errorf(
+					"install declined — pass explicit binary paths via --surreal-bin / --adb-bin to skip auto-download",
+				)
+			}
+		} else if !opts.yes {
+			// Non-interactive, no --yes needed: proceed and log.
+			names := make([]string, len(missing))
+			for j, i := range missing {
+				names[j] = results[i].name
+			}
+			fmt.Fprintf(os.Stderr, "non-interactive mode: downloading missing stack binaries (%s)\n", strings.Join(names, ", "))
+		}
+
+		// Download all missing binaries.
+		for _, i := range missing {
+			r := &results[i]
+			path, err := downloadBinary(r.name, opts.dataDir, r.version)
+			if err != nil {
+				return resolvedBins{}, fmt.Errorf("install %s: %w", r.name, err)
+			}
+			r.path = path
+			r.missing = false
+		}
+	}
+
+	return resolvedBins{
+		surreal:       results[0].path,
+		versitygw:     results[1].path,
+		adbStandalone: results[2].path,
+	}, nil
+}
+
+// isTerminal reports whether f is connected to a terminal.
+func isTerminal(f *os.File) bool {
+	fi, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return (fi.Mode() & os.ModeCharDevice) != 0
+}
+
+// flagNameFor returns the cobra flag name for a binary name.
+func flagNameFor(name string) string {
+	switch name {
+	case "surreal":
+		return "surreal-bin"
+	case "adb-standalone":
+		return "adb-bin"
+	default:
+		return name
+	}
 }
 
 func killProcess(cmd *exec.Cmd) {

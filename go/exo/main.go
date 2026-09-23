@@ -133,7 +133,7 @@ func main() {
 	rootCmd.AddCommand(publishcmd.NewCommand())
 	rootCmd.AddCommand(pull.NewCommand())
 	rootCmd.AddCommand(safecmd.NewCommand())
-	rootCmd.AddCommand(standalonecmd.NewCommand())
+	rootCmd.AddCommand(standalonecmd.NewCommand(version))
 	serveVersion := version
 	if version == "dev" && commit != "" {
 		serveVersion = "dev-" + commit
