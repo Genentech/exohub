@@ -12,6 +12,11 @@
 <meta name="msapplication-TileColor" content="#0f1014">
 <meta name="theme-color" content="#0f1014">
 {{ partial "meta" . }}
+{{- /* llms.txt v2 discovery — user-guide pages only (the only section with a "markdown" output format). */ -}}
+{{- with .OutputFormats.Get "markdown" }}
+<link rel="alternate" type="text/markdown" href="{{ .Permalink }}">
+<link rel="describedby" href="{{ "llms.txt" | absURL }}">
+{{- end }}
 
 <link href="//cdn.jsdelivr.net" rel="dns-prefetch">
 <link href="https://cdn.jsdelivr.net" rel="preconnect" crossorigin="anonymous">

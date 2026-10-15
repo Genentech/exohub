@@ -1,0 +1,25 @@
+{{- $ug := site.GetPage "/docs/user-guide" -}}
+{{- /* Derive the documented exo CLI version from the "exo CLI vX.Y.Z" prose
+       stamp in the user-guide landing page, rather than a separate
+       front-matter field — the daily user-guide sync only updates that
+       stamp, so a front-matter copy would go stale. */ -}}
+{{- $version := "" -}}
+{{- with $ug -}}
+  {{- $matches := findRE `exo CLI v[0-9]+\.[0-9]+\.[0-9]+` .RawContent 1 -}}
+  {{- if $matches -}}
+    {{- $version = index $matches 0 | strings.TrimPrefix "exo CLI v" -}}
+  {{- end -}}
+{{- end -}}
+# ExoHub
+
+> {{ .Site.Home.Description }}
+
+This file follows the [llms.txt](https://llmstxt.org/) convention and covers the exo CLI {{ if $version }}user guide (v{{ $version }}){{ end }}, published here as per-page Markdown for LLMs and other automated tools.
+
+## User Guide
+
+{{- with $ug }}
+{{ range .Pages.ByWeight }}
+- [{{ .Title }}]({{ (.OutputFormats.Get "markdown").Permalink }}): {{ .Description }}
+{{- end }}
+{{- end }}

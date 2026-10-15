@@ -39,8 +39,18 @@ enableSearch = true
 [security.funcs]
   getenv = ["ENV"]
 
+# Custom output format for /llms.txt (llms.txt v2 — https://llmstxt.org/).
+# text/markdown's built-in "markdown" output format (baseName "index",
+# isPlainText, rel "alternate") is used as-is for per-page markdown copies;
+# it is enabled only for the user-guide section via the cascade in
+# content/docs/user-guide/_index.md, not globally here.
+[outputFormats.LLMS]
+  mediaType = "text/plain"
+  baseName = "llms"
+  isPlainText = true
+
 [outputs]
-  home = ["HTML", "RSS", "JSON"]
+  home = ["HTML", "RSS", "JSON", "LLMS"]
 
 [related]
   threshold = 0
