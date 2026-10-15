@@ -146,6 +146,52 @@ exo download "mnist@v0.1.0" --force
 exo download "mnist@v0.1.0" -o ./data
 ```
 
+## Remote Download via `--eds`
+
+By default, `exo download` fetches files to this machine. With `--eds`, it instead
+submits the download to a remote ExoHub Data Service (EDS) and the **EDS** fetches
+the dataset into its own storage — nothing is written locally. The CLI only submits
+the request and follows its progress.
+
+```bash
+exo download --eds <eds-id-or-url> <project | project@version>
+```
+
+`--eds` accepts either:
+
+- An **index id**, resolved via the ExoHub `/eds` index (e.g. `my-eds`)
+- A full **`https://` URL** to the EDS itself
+
+Only datasets (`project` or `project@version`) are accepted — artifact ids (e.g.
+`myproject:file.txt@v1`) are rejected, since EDS downloads operate on whole datasets.
+`--eds` is also mutually exclusive with `-o`/`--output-dir` and `-f`/`--force`, since
+those only apply to local downloads.
+
+### Options
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--eds <id-or-url>` | Data Service to download to (index id or `https://` URL) | _(none — local download)_ |
+| `--scope <scope>` | Scope for the remote download (e.g. `user`, `global`) | _(none — EDS applies its own default)_ |
+| `--no-wait` | Submit the download and exit without following progress | `false` |
+| `--max-wait <duration>` | Maximum time to follow the remote download before giving up (the download keeps running on the EDS regardless) | `6h` |
+| `--poll-interval <duration>` | How often to poll the operation status | `10s` |
+
+> **Note:** Ctrl-C does not cancel the remote download. The download keeps running on the EDS; the status URL is printed so it can be followed separately.
+
+### Examples
+
+```bash
+# Submit a dataset download to the "my-eds" EDS and follow its progress
+exo download --eds my-eds myproject@v1
+
+# Target an EDS directly by URL
+exo download --eds https://eds.example.com myproject
+
+# Submit and return immediately without following progress
+exo download --eds my-eds myproject@v1 --no-wait
+```
+
 ## Environment Variables
 
 See [Environment Variables]({{< ref "environment-variables" >}}) for the full list. The most relevant for Atlas is `EXOHUB_CATALOG_URL`.

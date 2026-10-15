@@ -519,9 +519,17 @@ Optional. Shared repository settings:
 annex:
   addunlocked: true  # Unlock annexed files automatically (default: true)
   thin: true         # Use hard links to save disk (see Advanced Operations)
+  routing:           # Repository-level git/annex routing rules for `exo add`
+    - path: "**/*.md"
+      to: git
+    - path: "**/*.csv"
+      larger_than: 1KB
+      to: annex
 ```
 
 > **Note:** In previous versions, `thin` was a top-level key (and before that, in `.exohub/context`). Starting with v0.83.0, annex settings live under the `annex:` key. The old top-level `thin: true` format is deprecated.
+
+`exo init` writes the `routing:` block, commented out, into a newly created `.exohub/config` as a starting point. See [Repository-Level File Routing]({{< ref "advanced#repository-level-file-routing" >}}) for the full rule syntax, evaluation order, and `exo add --explain`/`--reroute`.
 
 ### `.exohub/permissions`
 
