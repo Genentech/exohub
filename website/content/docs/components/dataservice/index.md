@@ -14,7 +14,7 @@ Two fundamental operations are supported:
 | Direction | Operation | Description |
 |-----------|-----------|-------------|
 | **Consume** | `request_dataset` | Download a dataset from ExoHub into the compute environment |
-| **Produce** | `save_dataset` | Save a local folder as a new dataset version in ExoHub |
+| **Produce** | `upload_dataset` | Upload a local folder in place as a new dataset version in ExoHub |
 
 ### Standalone Deployments
 
@@ -56,7 +56,7 @@ An interactive OpenAPI reference is served by every deployment at `/api/docs`.
 |--------|------|---------|-------------|
 | `GET` | `/` | `200` | Deployment discovery — service version, supported scopes, data root, endpoints. No auth. |
 | `POST` | `/api/datasets/download` | `202` | Start (or re-use) a dataset download |
-| `POST` | `/api/datasets/save` | `202` | Start (or re-use) a dataset save |
+| `POST` | `/api/datasets/upload` | `202` | Start (or re-use) a dataset upload |
 | `GET` | `/api/operations/{id}` | `200` | Poll operation status, progress, and result |
 
 The two `POST` endpoints return `202 Accepted` immediately — they start background work and never
@@ -145,27 +145,38 @@ Both return:
 > concrete version at request time, and that a repository request and a project request for the same
 > dataset converge on the same operation.
 
-### POST /api/datasets/save
+### POST /api/datasets/upload
 
-Saves a folder from the compute filesystem as a new dataset version in the requesting user's
-private workspace.
+Uploads a folder from the compute filesystem **in place**: the source directory itself becomes the
+dataset. It must already be inside the requesting user's own workspace. Uploads are user-scope only
+— there is no `scope` field. Files are left as ordinary writable files (not locked into read-only
+symlinks), so the same directory can be changed and uploaded again to publish an updated version.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `source_folder` | string | ✓ | Absolute path to the folder to save |
-| `name` | string | ✓ | Dataset name (creates a new dataset or a new version) |
-| `metadata` | object \| null | | Free-form key/value metadata attached to the dataset |
+| `source_folder` | string | ✓ | Absolute path to the directory to upload, as the worker sees it. Must be inside your own workspace. |
+| `project_id` | string | | Catalog project id (also the repository name). Defaults to the last path segment of `source_folder`. An id the catalog already holds is an update, allowed only to the project's owners. |
+| `read_access` | `"public"` \| `"authenticated"` \| `"viewers"` \| `"owners"` | | Who may read the dataset. Omit it to keep the project's current value, or the deployment's default on a new project. |
+| `owners` | array of string \| null | | Usernames/groups that may publish new versions and always read the dataset. **Replaces** the current owners; cannot be empty. Omit it to keep the current owners. |
+| `viewers` | array of string \| null | | Usernames/groups that may read the dataset when `read_access` is `"viewers"`. Replaces the current viewers; omit it to keep them. |
+| `commit_message` | string | | Message for the upload's commit. Omit it for `"feat: upload dataset <project_id>"`. |
 
 Returns the same `202` shape as download: `operation_id` and `operation_url`.
 
+By default the published dataset is **not** private: the repository is created with internal
+visibility and the dataset is readable by any authenticated ExoHub user. Narrow it with
+`read_access` and `viewers`, or widen it to anyone with `read_access: "public"`.
+
 ```bash
-curl -X POST "$EDS/api/datasets/save" \
+curl -X POST "$EDS/api/datasets/upload" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-        "source_folder": "/tmp/results",
-        "name": "mnist-analysis-alice-20260601",
-        "metadata": { "description": "MNIST classification results", "pipeline": "torch-cnn" }
+        "source_folder": "/data/users/alice/workspace/mnist-analysis-alice-20260601",
+        "project_id": "mnist-analysis-alice-20260601",
+        "read_access": "viewers",
+        "viewers": ["bob"],
+        "commit_message": "add MNIST classification results"
       }'
 ```
 
@@ -207,7 +218,7 @@ the work. Always branch on the `status` field.
 | `files_total` | integer \| null | Total files in this version (`null` when unknown) |
 | `bytes_total` | integer \| null | Total bytes in this version (`null` when unknown) |
 | `annex_files_total` | integer \| null | Total annexed files in this version (`null` when unknown) |
-| `files_added` | integer | Files staged so far (save operations) |
+| `files_added` | integer | Files staged so far (upload operations) |
 | `ts` | string \| null | Timestamp of the most recent progress report |
 | `activities` | array | Per-activity detail (below) |
 
@@ -272,14 +283,16 @@ A running download:
 | `error` | string | Empty on success |
 | `scope` | string | `user` or `global` (downloads) |
 | `repo_dir` | string | Where the dataset was materialised (downloads) — see [On-disk layout](#on-disk-layout) |
-| `repo_url` | string | Git URL of the created dataset (saves) |
+| `repo_url` | string | Git URL of the dataset's repository (uploads) |
 | `files_synced` | integer | Annexed files fetched (downloads) |
 | `bytes_synced` | integer | Bytes fetched (downloads) |
 | `files_total` | integer \| null | Total files in this version |
 | `bytes_total` | integer \| null | Total bytes in this version |
 | `annex_files_total` | integer \| null | Total annexed files in this version |
-| `files_added` | integer | Files committed (saves) |
-| `commit_sha` | string | Commit created (saves) |
+| `files_added` | integer | Files committed (uploads) |
+| `commit_sha` | string | Commit created (uploads) |
+| `version` | string | Branch published to (uploads) |
+| `catalog_job_url` | string | Cataloguing job that indexes the dataset after the operation finishes (uploads) |
 | `permission` | object \| null | Why read access was granted (downloads) |
 | `public_access` | object \| null | How publicness was established (`global` downloads only) |
 
@@ -374,11 +387,11 @@ done
 REPO_DIR=$(echo "$BODY" | jq -r .result.repo_dir)
 ls "$REPO_DIR"
 
-# 4. Save results back as a new dataset
-curl -s -X POST "$EDS/api/datasets/save" \
+# 4. Upload results back as a new dataset (source_folder must be inside your own workspace)
+curl -s -X POST "$EDS/api/datasets/upload" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{ "source_folder": "/tmp/results", "name": "mnist-analysis-alice-20260601" }' \
+  -d '{ "source_folder": "/data/users/alice/workspace/mnist-analysis-alice-20260601", "project_id": "mnist-analysis-alice-20260601" }' \
   | jq .
 ```
 
@@ -430,34 +443,60 @@ Downloads an ExoHub dataset into the compute environment for the requesting user
 | `repository` | string | ✓ | Full git URL of the dataset repository |
 | `ref` | string | | Git ref (branch, tag, or commit SHA). Defaults to the latest catalogued version. |
 | `scope` | `"user"` \| `"global"` | | Destination scope (see [Scopes](#4-scopes)). Defaults to `"user"`. |
+| `wait_seconds` | number | | Optional, default `0` (immediate return). A positive value waits up to that many seconds for a terminal state before returning the final payload inline, instead of a separate `get_operation`/`wait_for_operation` poll. MCP-only — there is no REST equivalent. |
 
-**Returns**: an `operation_id` and an `operation_url` — poll with `get_operation` for progress.
+**Returns**: an `operation_id` and an `operation_url` — poll with `get_operation` (or long-poll with
+`wait_for_operation`) for progress.
 
 > **Note:** the MCP tool identifies datasets by repository only. To download by catalog
 > `project_id` / `version`, use the [REST endpoint](#post-apidatasetsdownload), which supports both
 > request shapes.
 
-#### `save_dataset` — Save a folder as a new dataset
+#### `upload_dataset` — Upload a folder as a new dataset version
 
-Saves a local folder in the compute environment as a new ExoHub dataset version. The new dataset
-is **private by default** — there is no `scope` parameter, and saves never target the global path.
+Uploads a local folder in the compute environment **in place** as a new ExoHub dataset version: the
+source directory itself becomes the dataset. It must be inside the requester's own workspace —
+there is no `scope` parameter, and uploads never target the global path. By **default** the
+published dataset is **not** private: the repository is created with internal visibility and is
+readable by any authenticated ExoHub user. Narrow it with `read_access` and `viewers`, or widen it
+to anyone with `read_access: "public"`.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `source_folder` | string | ✓ | Absolute path to the folder to save |
-| `name` | string | ✓ | Dataset name (creates a new dataset or a new version) |
-| `metadata` | object | | Optional key/value metadata to attach to the dataset |
+| `source_folder` | string | ✓ | Absolute path to the directory to upload. Must be inside your own workspace. |
+| `project_id` | string | | Catalog project id (also the repository name). Defaults to the last path segment of `source_folder`. |
+| `read_access` | `"public"` \| `"authenticated"` \| `"viewers"` \| `"owners"` | | Who may read the dataset. Omit it to keep the current/default value. |
+| `owners` | array of string | | Usernames/groups that may publish new versions. Replaces the current owners; cannot be empty. |
+| `viewers` | array of string | | Usernames/groups that may read the dataset when `read_access` is `"viewers"`. |
+| `commit_message` | string | | Message for the upload's commit. Omit it for `"feat: upload dataset <project_id>"`. |
 
-**Returns**: an `operation_id` and an `operation_url` — poll with `get_operation` for progress.
+**Returns**: an `operation_id` and an `operation_url` — poll with `get_operation` (or long-poll with
+`wait_for_operation`) for progress.
 
 #### `get_operation` — Poll async operation status
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `operation_id` | string | ✓ | Operation ID returned by `request_dataset` or `save_dataset` |
+| `operation_id` | string | ✓ | Operation ID returned by `request_dataset` or `upload_dataset` |
 
 **Returns**: the same envelope as [`GET /api/operations/{id}`](#get-apioperationsid) — `status`,
 `progress`, `result`, and failure fields.
+
+#### `wait_for_operation` — Long-poll an operation to completion
+
+Long-polls an existing operation (from `request_dataset` or `upload_dataset`) until it reaches a
+terminal state or `timeout_seconds` elapses, instead of repeatedly calling `get_operation` yourself.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `operation_id` | string | ✓ | Operation ID returned by `request_dataset` or `upload_dataset` |
+| `timeout_seconds` | number | | How long to wait for a terminal state before returning. |
+
+**Returns**: the same terminal payload as `get_operation` if the operation finishes in time
+(`status: completed/failed/canceled/terminated` plus `result` or `error`). Otherwise returns a
+`status: "running"` payload carrying `next_action` — a ready-to-call
+`{tool: "wait_for_operation", arguments: {operation_id, timeout_seconds}}` — so you can call it again
+to keep waiting; the workflow keeps running server-side even if the connection drops.
 
 ### Example: Full Agent Workflow
 
@@ -482,20 +521,20 @@ is **private by default** — there is no `scope` parameter, and saves never tar
 }
 // → { "status": "completed", "path": "/data/users/<you>/datasets/reference-genome-hg38" }
 
-// 3. ... agent processes data, writes results to /tmp/results/ ...
+// 3. ... agent processes data, writes results into its own workspace at
+//    /data/users/<you>/workspace/hg38-analysis-results ...
 
-// 4. Save the results as a new dataset
+// 4. Upload the results as a new dataset (source_folder must be inside your own workspace)
 {
-  "tool": "save_dataset",
+  "tool": "upload_dataset",
   "arguments": {
-    "source_folder": "/tmp/results",
-    "name": "datasets/hg38-analysis-results",
-    "metadata": { "description": "HG38 alignment results", "pipeline": "bwa-mem2" }
+    "source_folder": "/data/users/<you>/workspace/hg38-analysis-results",
+    "project_id": "hg38-analysis-results"
   }
 }
 // → { "operation_id": "op_01HABC..." }
 
-// 5. Poll until saved
+// 5. Poll until uploaded
 {
   "tool": "get_operation",
   "arguments": { "operation_id": "op_01HABC..." }
@@ -554,7 +593,7 @@ workflows inside ExoWorkers. Operations may take seconds to minutes depending on
 ### Operation Lifecycle
 
 ```
-POST /api/datasets/download   (or /save)
+POST /api/datasets/download   (or /upload)
         │
         ▼
   202 Accepted — operation_id + operation_url returned immediately
@@ -577,7 +616,7 @@ Operation IDs are **deterministic**, derived from what is being downloaded and f
 |-----------|----------|
 | Download, `user` scope | project + version + username |
 | Download, `global` scope | project + version (shared across all users) |
-| Save | username + dataset name |
+| Upload | source directory + username (not the project id — the source directory is consumed in place, so two uploads must never run against it at once) |
 
 Re-issuing a request that is already in flight does **not** start a second workflow — it returns the
 existing `operation_id`. This makes retries safe, lets several agents converge on one shared global
@@ -649,7 +688,7 @@ the wildcard `"*"` is required to allow all users.
 
 ## 7. Provenance
 
-The Data Service records precise provenance for every save operation, ensuring datasets are always
+The Data Service records precise provenance for every upload operation, ensuring datasets are always
 traceable back to their origin.
 
 ### Download Provenance
@@ -665,18 +704,18 @@ deliberately not `exo sync`, which is bidirectional and would push local state b
 read-only contract of a download. This ensures the local workspace is a fully-valid ExoHub clone,
 not a bare file copy.
 
-### Save Provenance
+### Upload Provenance
 
-Every `save_dataset` operation records dual authorship in git:
+Every `upload_dataset` operation commits as the **requesting user**, not a service account:
 
 | Git field | Value |
 |-----------|-------|
-| `Author` | Requesting user (name + email from JWT) |
-| `Committer` | Data Service account |
-| `Co-authored-by` trailer | Data Service account |
+| `Author` | Requesting user (name + email from JWT, falling back to the service identity if those claims are absent) |
+| `Committer` | Requesting user (same name + email as `Author`) |
 
-This means the requesting user appears as the dataset author in ExoHub history, while the service
-account is recorded as the committer for audit purposes.
+There is no `Co-authored-by` trailer and no separate "Data Service account as committer" step: the
+upload sets both `GIT_AUTHOR_*` and `GIT_COMMITTER_*` to the uploading user's identity, so the
+requesting user is recorded as both the author and the committer of the resulting commit.
 
 ---
 

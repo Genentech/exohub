@@ -308,16 +308,23 @@ exo fsck --manifest fsck-manifest.yaml
 
 ### Mark Bad Files
 
-Mark files as bad in git-annex (prevents sync from trying them):
+Record a file's annex key against a remote in `.git/annex/bad.log`, for your own record-keeping:
 
 ```bash
-exo fsck --mark-bad data/corrupted-file.parquet
+exo fsck --mark-bad data/corrupted-file.parquet --remote s3-archive
 ```
+
+> **Note:** this is bookkeeping only — `.git/annex/bad.log` is not read back by anything else in
+> `exo`. In particular it does **not** prevent `exo sync` from retrying the file; a sync only ever
+> appends its own failures to `.git/exohub/bad` (the list `--scan-bad` builds), and never consults
+> `--mark-bad`'s marks to decide what to skip.
+
+If you omit `--remote`, `exo fsck` auto-picks an enabled git-annex remote for you.
 
 With confirmation prompt disabled:
 
 ```bash
-exo fsck --mark-bad data/corrupted-file.parquet --no-confirm
+exo fsck --mark-bad data/corrupted-file.parquet --remote s3-archive --no-confirm
 ```
 
 ### Drop Bad Files from Remote
@@ -328,11 +335,20 @@ Remove corrupted copies from a remote:
 exo fsck --drop-bad data/corrupted-file.parquet --remote s3-archive
 ```
 
-This removes the bad copy so you can re-upload a good version.
+> **Warning:** this runs `git annex drop --force --from <remote>`, which **bypasses numcopies** and
+> is **irreversible** — it does not check that the path was ever marked bad, so dropping the wrong
+> path (or the only remaining copy) can permanently lose data. Before running it:
+> - Verify the copy is actually bad: `exo fsck --deep <path> --remote <remote>`
+> - Confirm other copies exist: `git annex whereis <path>`
+>
+> Keep the `[y/N]` confirmation prompt (don't pass `--no-confirm`) unless you are scripting this
+> deliberately and have already verified the above.
 
 ### Clear Bad File List
 
-After fixing issues, clear the bad file list:
+`--clear-bad` deletes `.git/exohub/bad` — the scan list built by `--scan-bad` — **not** any marks
+recorded by `--mark-bad` (those live separately in `.git/annex/bad.log` and are not removed by this
+command):
 
 ```bash
 exo fsck --clear-bad
@@ -388,9 +404,12 @@ exo fsck --deep
    exo fsck --show-bad
    ```
 
-2. **Drop bad copies:**
+2. **Verify, then drop the bad copies.** `--drop-bad` bypasses numcopies and is irreversible, so
+   confirm first and keep the `[y/N]` prompt (don't add `--no-confirm`):
    ```bash
-   exo fsck --drop-bad --remote s3-archive --no-confirm
+   exo fsck --deep data/ --remote s3-archive   # confirm it's actually bad
+   git annex whereis data/corrupted-file.parquet   # confirm other copies exist
+   exo fsck --drop-bad --remote s3-archive
    ```
 
 3. **Try to get good copies from other remotes:**
@@ -564,9 +583,9 @@ If you're still stuck:
 
 | Command | Description |
 |---------|-------------|
-| `exo fsck --scan-bad` | Scan logs for bad files |
-| `exo fsck --show-bad` | List recorded bad files |
-| `exo fsck --clear-bad` | Clear bad file list |
+| `exo fsck --scan-bad` | Scan logs for bad files, recording them to `.git/exohub/bad` |
+| `exo fsck --show-bad` | List the recorded `.git/exohub/bad` scan list |
+| `exo fsck --clear-bad` | Clear the `.git/exohub/bad` scan list (not `--mark-bad` marks) |
 | `exo fsck --deep <path>` | Verify file checksums |
-| `exo fsck --mark-bad <path>` | Mark files as bad |
-| `exo fsck --drop-bad <path> --remote <name>` | Remove bad copies |
+| `exo fsck --mark-bad <path> [--remote <name>]` | Record a key as bad in `.git/annex/bad.log` (bookkeeping only — nothing reads it back) |
+| `exo fsck --drop-bad <path> --remote <name>` | **Irreversible, bypasses numcopies** — drop copies from a remote; verify first |

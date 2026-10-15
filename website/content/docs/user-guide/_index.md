@@ -2,6 +2,9 @@
 title: "User Guide"
 description: "Complete guide to using ExoHub with the exo CLI"
 weight: 10
+outputs: ["html", "markdown"]
+cascade:
+  outputs: ["html", "markdown"]
 ---
 
 This guide walks you through using ExoHub to manage your datasets. This guide covers **exo CLI v0.121.0**. Whether you're downloading data for analysis, collaborating with your team, or setting up automated pipelines, this guide covers everything you need to know.
