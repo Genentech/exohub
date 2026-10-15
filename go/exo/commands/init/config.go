@@ -9,15 +9,153 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bmatcuk/doublestar/v4"
+	"github.com/dustin/go-humanize"
 	"gopkg.in/yaml.v3"
 
 	"github.com/Genentech/exohub/go/exo/commands/clone"
 )
 
+// routingRuleKnownKeys lists the only keys allowed in an annex.routing
+// rule. Unlike the rest of .exohub/config, routing rules are always
+// strict (see design "Routing configuration validation"): an unknown key
+// here is a configuration mistake worth failing loudly on, independent of
+// whatever leniency the rest of the document has.
+var routingRuleKnownKeys = map[string]bool{
+	"path": true, "larger_than": true, "smaller_than": true, "content": true, "to": true,
+}
+
+// RoutingRule is one entry in annex.routing (see design doc D2). It must
+// have a required destination (To) and at least one match key (Path,
+// LargerThan, SmallerThan, Content); all match keys present must match for
+// the rule to match.
+type RoutingRule struct {
+	Path        string `yaml:"path,omitempty"`
+	LargerThan  string `yaml:"larger_than,omitempty"`
+	SmallerThan string `yaml:"smaller_than,omitempty"`
+	Content     string `yaml:"content,omitempty"`
+	To          string `yaml:"to"`
+
+	// unknownKeys records any mapping keys found while decoding this rule
+	// that are not in routingRuleKnownKeys. Decoding itself never fails on
+	// them (so a lenient LoadExohubConfig can still load the rest of the
+	// document); Validate turns them into an error at validation time,
+	// which design D9 scopes to NewRouter/add/explain/reroute/MCP/doctor,
+	// not the shared config loader.
+	unknownKeys []string
+}
+
+// UnmarshalYAML decodes a routing rule and records any keys outside
+// routingRuleKnownKeys, without failing the decode itself.
+func (r *RoutingRule) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("routing rule must be a mapping")
+	}
+	var raw struct {
+		Path        string `yaml:"path,omitempty"`
+		LargerThan  string `yaml:"larger_than,omitempty"`
+		SmallerThan string `yaml:"smaller_than,omitempty"`
+		Content     string `yaml:"content,omitempty"`
+		To          string `yaml:"to"`
+	}
+	if err := node.Decode(&raw); err != nil {
+		return err
+	}
+	r.Path = raw.Path
+	r.LargerThan = raw.LargerThan
+	r.SmallerThan = raw.SmallerThan
+	r.Content = raw.Content
+	r.To = raw.To
+
+	r.unknownKeys = nil
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		key := node.Content[i].Value
+		if !routingRuleKnownKeys[key] {
+			r.unknownKeys = append(r.unknownKeys, key)
+		}
+	}
+	return nil
+}
+
+// ParsedRoutingRule is a RoutingRule after Validate has parsed its sizes,
+// so callers (the routing engine) don't need to parse larger_than and
+// smaller_than a second time.
+type ParsedRoutingRule struct {
+	Rule        RoutingRule
+	HasLarger   bool
+	LargerThan  uint64
+	HasSmaller  bool
+	SmallerThan uint64
+}
+
+// Validate checks a single annex.routing rule per design D9 and returns
+// the rule with its sizes parsed. The caller is responsible for naming the
+// rule's index in any returned error.
+func (r RoutingRule) Validate() (ParsedRoutingRule, error) {
+	if len(r.unknownKeys) > 0 {
+		return ParsedRoutingRule{}, fmt.Errorf("unknown key %q", r.unknownKeys[0])
+	}
+
+	hasMatchKey := r.Path != "" || r.LargerThan != "" || r.SmallerThan != "" || r.Content != ""
+	if !hasMatchKey {
+		return ParsedRoutingRule{}, fmt.Errorf("rule has no match keys (path, larger_than, smaller_than, or content)")
+	}
+	if r.To == "" {
+		return ParsedRoutingRule{}, fmt.Errorf("missing required key 'to'")
+	}
+	if r.To != "git" && r.To != "annex" {
+		return ParsedRoutingRule{}, fmt.Errorf("invalid 'to' value %q (must be 'git' or 'annex')", r.To)
+	}
+	if r.Content != "" && r.Content != "text" && r.Content != "binary" {
+		return ParsedRoutingRule{}, fmt.Errorf("invalid 'content' value %q (must be 'text' or 'binary')", r.Content)
+	}
+	if r.Path != "" && !doublestar.ValidatePattern(r.Path) {
+		return ParsedRoutingRule{}, fmt.Errorf("invalid 'path' glob %q", r.Path)
+	}
+
+	parsed := ParsedRoutingRule{Rule: r}
+	if r.LargerThan != "" {
+		v, err := humanize.ParseBytes(r.LargerThan)
+		if err != nil {
+			return ParsedRoutingRule{}, fmt.Errorf("invalid 'larger_than' size %q: %w", r.LargerThan, err)
+		}
+		parsed.LargerThan, parsed.HasLarger = v, true
+	}
+	if r.SmallerThan != "" {
+		v, err := humanize.ParseBytes(r.SmallerThan)
+		if err != nil {
+			return ParsedRoutingRule{}, fmt.Errorf("invalid 'smaller_than' size %q: %w", r.SmallerThan, err)
+		}
+		parsed.SmallerThan, parsed.HasSmaller = v, true
+	}
+	if parsed.HasLarger && parsed.HasSmaller && parsed.LargerThan >= parsed.SmallerThan {
+		return ParsedRoutingRule{}, fmt.Errorf("'larger_than' (%s) must be less than 'smaller_than' (%s)", r.LargerThan, r.SmallerThan)
+	}
+	return parsed, nil
+}
+
 // AnnexConfig holds git-annex settings configurable via .exohub/config
 type AnnexConfig struct {
-	Thin        *bool `yaml:"thin,omitempty"`
-	AddUnlocked *bool `yaml:"addunlocked,omitempty"`
+	Thin        *bool         `yaml:"thin,omitempty"`
+	AddUnlocked *bool         `yaml:"addunlocked,omitempty"`
+	Routing     []RoutingRule `yaml:"routing,omitempty"`
+}
+
+// ValidateRouting validates every rule in Routing per design D9. Errors
+// name the 1-based rule index and the offending key. It is not called by
+// LoadExohubConfig: per design D9, routing is validated by NewRouter and
+// by exo add/--explain/--reroute/the MCP add tool/exo doctor, not by the
+// shared config loader used by exo init and profile refresh.
+func (a *AnnexConfig) ValidateRouting() error {
+	if a == nil {
+		return nil
+	}
+	for i, rule := range a.Routing {
+		if _, err := rule.Validate(); err != nil {
+			return fmt.Errorf("annex.routing rule %d: %w", i+1, err)
+		}
+	}
+	return nil
 }
 
 // ExohubConfig represents .exohub/config file for shared repository settings
@@ -28,7 +166,12 @@ type ExohubConfig struct {
 // LoadExohubConfig reads .exohub/config from the current directory.
 // Returns nil, nil if the file doesn't exist.
 func LoadExohubConfig() (*ExohubConfig, error) {
-	path := filepath.Join(".exohub", "config")
+	return LoadExohubConfigAt(".")
+}
+
+// LoadExohubConfigAt reads shared configuration from the repository root.
+func LoadExohubConfigAt(root string) (*ExohubConfig, error) {
+	path := filepath.Join(root, ".exohub", "config")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -38,11 +181,51 @@ func LoadExohubConfig() (*ExohubConfig, error) {
 	}
 
 	var cfg ExohubConfig
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("failed to parse .exohub/config: %w", err)
+	if strings.TrimSpace(string(data)) != "" {
+		if err := yaml.Unmarshal(data, &cfg); err != nil {
+			return nil, fmt.Errorf("failed to parse .exohub/config: %w", err)
+		}
 	}
 
 	return &cfg, nil
+}
+
+// routingConfigExample is entirely inactive until the owner opts in.
+const routingConfigExample = `
+# Routing rules for exo add (new files only).
+# The first match wins (top-down), opposite to .gitignore / .gitattributes.
+# Uncomment to opt in; if annex already exists above, put routing under it
+# instead of adding a second annex key. Sizes use >= for larger_than.
+# annex:
+#   routing:
+#     - path: "**/*.md"
+#       to: git
+#     - path: "**/*.csv"
+#       larger_than: 1KB
+#       to: annex
+#     - path: "**/*.json"
+#       larger_than: 1MB
+#       to: annex
+`
+
+// ensureConfigTemplate creates a config only when none exists.
+func ensureConfigTemplate() error {
+	if err := os.MkdirAll(".exohub", 0755); err != nil {
+		return fmt.Errorf("failed to create .exohub: %w", err)
+	}
+	f, err := os.OpenFile(filepath.Join(".exohub", "config"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+	if os.IsExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to create .exohub/config: %w", err)
+	}
+	_, writeErr := f.WriteString(routingConfigExample)
+	closeErr := f.Close()
+	if writeErr != nil {
+		return fmt.Errorf("failed to write .exohub/config: %w", writeErr)
+	}
+	return closeErr
 }
 
 // SaveExohubConfig writes .exohub/config to the current directory.
@@ -57,6 +240,11 @@ func SaveExohubConfig(cfg *ExohubConfig) error {
 	}
 
 	path := filepath.Join(".exohub", "config")
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		data = append(data, routingConfigExample...)
+	} else if err != nil {
+		return fmt.Errorf("failed to stat .exohub/config: %w", err)
+	}
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		return fmt.Errorf("failed to write .exohub/config: %w", err)
 	}
@@ -139,29 +327,29 @@ func sshHostToHTTPS(hostname string) string {
 // RemoteConfig represents a single remote configuration
 type RemoteConfig struct {
 	Name           string     `yaml:"name"`
-	Type           string     `yaml:"type"` // annex, export, import, exospace, artifactdb, drive
-	UUID           string     `yaml:"uuid,omitempty"`           // git-annex UUID (tracked for documentation)
+	Type           string     `yaml:"type"`           // annex, export, import, exospace, artifactdb, drive
+	UUID           string     `yaml:"uuid,omitempty"` // git-annex UUID (tracked for documentation)
 	S3URL          string     `yaml:"s3url,omitempty"`
-	Bucket         string     `yaml:"bucket,omitempty"`         // For S3 type remotes
-	Prefix         string     `yaml:"prefix,omitempty"`         // For S3 type remotes (fileprefix)
-	Datacenter     string     `yaml:"datacenter,omitempty"`     // For S3 type remotes (AWS region)
+	Bucket         string     `yaml:"bucket,omitempty"`     // For S3 type remotes
+	Prefix         string     `yaml:"prefix,omitempty"`     // For S3 type remotes (fileprefix)
+	Datacenter     string     `yaml:"datacenter,omitempty"` // For S3 type remotes (AWS region)
 	RsyncURL       string     `yaml:"rsyncurl,omitempty"`
 	TrackingBranch string     `yaml:"tracking_branch,omitempty"`
 	Chunk          string     `yaml:"chunk,omitempty"`
-	Include        stringList `yaml:"include,omitempty"`        // Glob patterns for filtering (import/annex only)
-	Exclude        stringList `yaml:"exclude,omitempty"`        // Glob patterns for exclusion (import/annex only)
-	ImportDir      string     `yaml:"import_dir,omitempty"`     // Destination directory for imported files (import only)
-	Grants         bool       `yaml:"grants,omitempty"`         // Use S3 Access Grants for credentials (annex/export only)
-	Permissions    string     `yaml:"permissions,omitempty"`    // Permission preset for exospace: public, group, private
-	RsyncOptions   string     `yaml:"rsync_options,omitempty"`  // Custom rsync options for exospace (advanced)
-	Host           string     `yaml:"host,omitempty"`           // Custom S3 host for import remotes (e.g., localhost:9000 for MinIO)
-	Port           string     `yaml:"port,omitempty"`           // Custom S3 port for import remotes
-	Protocol       string     `yaml:"protocol,omitempty"`       // S3 protocol for import remotes: http or https (default: https)
-	InstanceURL    string     `yaml:"instance_url,omitempty"`   // ArtifactDB instance URL (artifactdb remotes only)
-	PublishOn      string     `yaml:"publish_on,omitempty"`     // When to publish: "tag" (only on tags) or "always" (default)
-	ProjectID      string     `yaml:"project_id,omitempty"`     // Custom project ID override (defaults to repo name)
-	Mode           string     `yaml:"mode,omitempty"`            // Required for catalog remotes: "export" or "import"
-	DrivePath      string     `yaml:"drive_path,omitempty"`     // Drive folder path (drive remotes only)
+	Include        stringList `yaml:"include,omitempty"`       // Glob patterns for filtering (import/annex only)
+	Exclude        stringList `yaml:"exclude,omitempty"`       // Glob patterns for exclusion (import/annex only)
+	ImportDir      string     `yaml:"import_dir,omitempty"`    // Destination directory for imported files (import only)
+	Grants         bool       `yaml:"grants,omitempty"`        // Use S3 Access Grants for credentials (annex/export only)
+	Permissions    string     `yaml:"permissions,omitempty"`   // Permission preset for exospace: public, group, private
+	RsyncOptions   string     `yaml:"rsync_options,omitempty"` // Custom rsync options for exospace (advanced)
+	Host           string     `yaml:"host,omitempty"`          // Custom S3 host for import remotes (e.g., localhost:9000 for MinIO)
+	Port           string     `yaml:"port,omitempty"`          // Custom S3 port for import remotes
+	Protocol       string     `yaml:"protocol,omitempty"`      // S3 protocol for import remotes: http or https (default: https)
+	InstanceURL    string     `yaml:"instance_url,omitempty"`  // ArtifactDB instance URL (artifactdb remotes only)
+	PublishOn      string     `yaml:"publish_on,omitempty"`    // When to publish: "tag" (only on tags) or "always" (default)
+	ProjectID      string     `yaml:"project_id,omitempty"`    // Custom project ID override (defaults to repo name)
+	Mode           string     `yaml:"mode,omitempty"`          // Required for catalog remotes: "export" or "import"
+	DrivePath      string     `yaml:"drive_path,omitempty"`    // Drive folder path (drive remotes only)
 }
 
 // stringList is a YAML type that accepts both single strings and string lists
@@ -384,7 +572,6 @@ func (rc *RemotesConfig) AddRemote(remote RemoteConfig) {
 	// Otherwise append
 	rc.Remotes = append(rc.Remotes, remote)
 }
-
 
 // IsGitRepo checks if current directory is a git repository
 func IsGitRepo() bool {

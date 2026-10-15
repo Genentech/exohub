@@ -16,6 +16,7 @@ import (
 	"github.com/Genentech/exohub/go/exo/commands/context"
 	"github.com/Genentech/exohub/go/exo/internal/defaults"
 	"github.com/Genentech/exohub/go/exo/internal/download"
+	"github.com/Genentech/exohub/go/exo/internal/eds"
 	"github.com/Genentech/exohub/go/exo/palette"
 )
 
@@ -30,6 +31,8 @@ func initDlStyles() {
 		countStyle = lipgloss.NewStyle().Foreground(p.LabelAlt.Adaptive())
 		skipStyle = lipgloss.NewStyle().Foreground(p.LabelAlt.Adaptive())
 		errorStyle = lipgloss.NewStyle().Foreground(p.Error.Adaptive()).Bold(true)
+		dimStyle = lipgloss.NewStyle().Foreground(p.Dim.Adaptive())
+		warnStyle = lipgloss.NewStyle().Foreground(p.Warning.Adaptive())
 	})
 }
 
@@ -40,15 +43,21 @@ var (
 	countStyle    = lipgloss.NewStyle().Foreground(branding.GradientPurple)
 	skipStyle     = lipgloss.NewStyle().Foreground(branding.GradientPurple)
 	errorStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#FF0000")).Bold(true)
+	dimStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
+	warnStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFB347"))
 )
-
-
 
 func NewCommand() *cobra.Command {
 	var (
 		urlFlag   string
 		outputDir string
 		force     bool
+
+		edsArg       string
+		scope        string
+		noWait       bool
+		maxWait      time.Duration
+		pollInterval time.Duration
 	)
 
 	cmd := &cobra.Command{
@@ -65,12 +74,39 @@ Download all files in a project/version:
 The catalog URL is resolved in this order:
   1. --url flag
   2. EXOHUB_CATALOG_URL environment variable
-  3. catalog_url field in the active exo context`,
+  3. catalog_url field in the active exo context
+
+Remote download via --eds:
+  exo download --eds my-eds myproject@v1
+  exo download --eds https://eds.example.com myproject
+
+With --eds, nothing is downloaded to this machine. The named Data Service
+(EDS) fetches the dataset into its own storage; this command only submits
+the request and follows its progress. --eds accepts either an index id
+(resolved via the ExoHub /eds index) or a full https:// URL to the EDS.
+It is mutually exclusive with -o/--output-dir and -f/--force, and only
+accepts a dataset (project or project@version), not an artifact id.
+Ctrl-C does not cancel the remote download; the download keeps running on
+the EDS and the status URL is printed so it can be followed separately.`,
 		Args: cobra.ExactArgs(1),
 		PreRun: func(cmd *cobra.Command, args []string) {
 			initDlStyles()
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if edsArg != "" {
+				opts := edsOptions{
+					eds:              edsArg,
+					arg:              args[0],
+					scope:            scope,
+					noWait:           noWait,
+					maxWait:          maxWait,
+					pollInterval:     pollInterval,
+					outputDirChanged: cmd.Flags().Changed("output-dir"),
+					force:            force,
+				}
+				return runEDSDownload(opts)
+			}
+
 			catalogURL, err := resolveCatalogURL(urlFlag)
 			if err != nil {
 				return fmt.Errorf("%s %s", errorStyle.Render("✗"), err)
@@ -146,6 +182,12 @@ The catalog URL is resolved in this order:
 	cmd.Flags().StringVar(&urlFlag, "url", "", "ArtifactDB catalog URL")
 	cmd.Flags().StringVarP(&outputDir, "output-dir", "o", ".", "Output directory for downloaded files")
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "Re-download even if file already exists with matching size")
+
+	cmd.Flags().StringVar(&edsArg, "eds", "", "Trigger a remote download on this Data Service (index id or https:// URL) instead of downloading locally")
+	cmd.Flags().StringVar(&scope, "scope", "", "Scope for the remote download (e.g. user, global); omitted by default so the EDS applies its own default")
+	cmd.Flags().BoolVar(&noWait, "no-wait", false, "With --eds, submit the download and exit without following progress")
+	cmd.Flags().DurationVar(&maxWait, "max-wait", 6*time.Hour, "With --eds, maximum time to follow the remote download before giving up (it keeps running on the EDS regardless)")
+	cmd.Flags().DurationVar(&pollInterval, "poll-interval", eds.DefaultPollInterval, "With --eds, how often to poll the operation status (must be positive; the EDS only refreshes progress every 30-120s, so polling faster doesn't help)")
 
 	return cmd
 }

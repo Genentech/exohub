@@ -1642,3 +1642,44 @@ func TestProfileFlagParsing(t *testing.T) {
 		}
 	})
 }
+
+func TestRunInitCreatesRoutingTemplateOnlyOnSuccess(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		git    bool
+		dryRun bool
+	}{
+		{name: "existing git repo", git: true},
+		{name: "dry run", git: true, dryRun: true},
+		{name: "failed init"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			oldWd, _ := os.Getwd()
+			if err := os.Chdir(t.TempDir()); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chdir(oldWd) })
+			t.Setenv("EXOHUB_PROFILE", "")
+			oldDryRun := flagDryRun
+			flagDryRun = tc.dryRun
+			t.Cleanup(func() { flagDryRun = oldDryRun })
+			if tc.git {
+				if err := os.Mkdir(".git", 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := runInit(nil)
+			if (err != nil) == tc.git {
+				t.Fatalf("unexpected init result: %v", err)
+			}
+			data, readErr := os.ReadFile(filepath.Join(".exohub", "config"))
+			if tc.git && !tc.dryRun {
+				if readErr != nil || string(data) != routingConfigExample {
+					t.Fatalf("missing init template: %s err=%v", data, readErr)
+				}
+			} else if !os.IsNotExist(readErr) {
+				t.Fatalf("init should not write config: %v", readErr)
+			}
+		})
+	}
+}

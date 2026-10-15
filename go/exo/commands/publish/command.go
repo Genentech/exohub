@@ -12,6 +12,8 @@ import (
 	initcmd "github.com/Genentech/exohub/go/exo/commands/init"
 )
 
+var resolveCloneURL = commandutil.ResolveCloneURL
+
 var (
 	stepStyle = lipgloss.NewStyle().Foreground(commandutil.ColorDarkOrange).Bold(true)
 	warnStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
@@ -54,6 +56,11 @@ Use --sync to override step 1 and sync only to specified remotes.`,
 func runPublish(syncRemotes []string) error {
 	if _, err := os.Stat(".git"); os.IsNotExist(err) {
 		return fmt.Errorf("not a git repository")
+	}
+
+	if _, err := resolveCloneURL(); err != nil {
+		return fmt.Errorf("no usable git remote — the catalog entry would have no clone URL (%v).\n"+
+			"Add one with: git remote add origin <url>   (then re-run exo publish)", err)
 	}
 
 	remotesConfig, err := initcmd.LoadRemotesConfig()

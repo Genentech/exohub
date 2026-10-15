@@ -1954,3 +1954,264 @@ func TestCatalogBinaryNotExecCommand(t *testing.T) {
 		t.Error("commandutil.Command MUST inject AWS_PROFILE=exohub for catalog remote subprocess")
 	}
 }
+
+// setupCatalogSyncEnv creates a temp repo dir with a bundle.json containing
+// the given repoURL, a fake catalog binary on PATH that records invocations,
+// and a remotesConfig with a single artifactdb-type remote named "atlas".
+func setupCatalogSyncEnv(t *testing.T, repoURL string) (remotesConfig *initcmd.RemotesConfig, calls *[]string, cleanup func()) {
+	t.Helper()
+
+	repoDir := t.TempDir()
+	bundleDir := filepath.Join(repoDir, ".exohub", "bundles", "main")
+	if err := os.MkdirAll(bundleDir, 0o755); err != nil {
+		t.Fatalf("mkdir bundle dir: %v", err)
+	}
+	manifest := bundleManifest{RefName: "main", Ref: "abc123", RepoURL: repoURL}
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(bundleDir, "bundle.json"), data, 0o644); err != nil {
+		t.Fatalf("write bundle.json: %v", err)
+	}
+
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	// Install a fake catalog binary on PATH that records its invocation.
+	binDir := t.TempDir()
+	recorded := &[]string{}
+	logFile := filepath.Join(binDir, "calls.log")
+	binPath := filepath.Join(binDir, "fake-catalog")
+	script := "#!/bin/sh\necho \"$@\" >> " + logFile + "\nexit 0\n"
+	if err := os.WriteFile(binPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake catalog binary: %v", err)
+	}
+	oldPath := os.Getenv("PATH")
+	os.Setenv("PATH", binDir+":"+oldPath)
+
+	remotesConfig = &initcmd.RemotesConfig{
+		Remotes: []initcmd.RemoteConfig{
+			{Name: "atlas", Type: "artifactdb", S3URL: "s3://bucket/atlas"},
+		},
+	}
+
+	cleaned := false
+	cleanup = func() {
+		if cleaned {
+			return
+		}
+		cleaned = true
+		if data, err := os.ReadFile(logFile); err == nil {
+			for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+				if line != "" {
+					*recorded = append(*recorded, line)
+				}
+			}
+		}
+		os.Setenv("PATH", oldPath)
+		os.Chdir(oldDir) //nolint:errcheck
+	}
+	t.Cleanup(cleanup)
+	return remotesConfig, recorded, cleanup
+}
+
+// TestSyncCatalogRemoteRejectsEmptyRepoURL verifies that syncCatalogRemote
+// errors out and never invokes the catalog binary when the bundle's
+// repo_url is empty (no git remote configured when the bundle was built).
+func TestSyncCatalogRemoteRejectsEmptyRepoURL(t *testing.T) {
+	remotesConfig, calls, cleanup := setupCatalogSyncEnv(t, "")
+
+	err := syncCatalogRemote("atlas", remotesConfig, "fake-catalog")
+	cleanup()
+
+	if err == nil {
+		t.Fatal("expected syncCatalogRemote to return an error for empty repo_url")
+	}
+	if !strings.Contains(err.Error(), "repo_url") {
+		t.Errorf("expected error to mention repo_url, got: %v", err)
+	}
+	if len(*calls) != 0 {
+		t.Errorf("expected catalog binary not to be invoked, got calls: %v", *calls)
+	}
+}
+
+// TestSyncCatalogRemoteProceedsWithRepoURL verifies that syncCatalogRemote
+// invokes the catalog binary normally when the bundle's repo_url is set.
+func TestSyncCatalogRemoteProceedsWithRepoURL(t *testing.T) {
+	remotesConfig, calls, cleanup := setupCatalogSyncEnv(t, "https://example.com/repo.git")
+
+	err := syncCatalogRemote("atlas", remotesConfig, "fake-catalog")
+	cleanup()
+
+	if err != nil {
+		t.Fatalf("syncCatalogRemote: %v", err)
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("expected catalog binary to be invoked once, got calls: %v", *calls)
+	}
+	if !strings.Contains((*calls)[0], "--bundle-dir .exohub/bundles/main") {
+		t.Fatalf("automatic selection changed: %v", *calls)
+	}
+}
+
+func writeSelectedBundle(t *testing.T, dir, version string) {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(bundleManifest{RefName: version, Ref: "old-commit", RepoURL: "https://example.com/repo.git"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bundle.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCatalogExplicitBundleSelection(t *testing.T) {
+	for _, custom := range []string{".exohub/bundles/older", "custom/output", "absolute"} {
+		t.Run(custom, func(t *testing.T) {
+			config, calls, cleanup := setupCatalogSyncEnv(t, "https://example.com/current.git")
+			dir := custom
+			if custom == "absolute" {
+				dir = filepath.Join(t.TempDir(), "external")
+			}
+			writeSelectedBundle(t, dir, "v-old")
+			// HEAD has a matching automatic bundle, but the requested manifest is older.
+			for _, args := range [][]string{{"init"}, {"symbolic-ref", "HEAD", "refs/heads/main"}, {"-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "init"}} {
+				if out, err := exec.Command("git", args...).CombinedOutput(); err != nil {
+					t.Fatalf("git: %v: %s", err, out)
+				}
+			}
+			config.Remotes[0].Grants = true
+			config.Remotes[0].InstanceURL = "https://catalog.example.com"
+			config.Remotes[0].ProjectID = "project"
+			if err := os.Mkdir(".artifactdb", 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := syncCatalogRemote("atlas", config, "fake-catalog", dir); err != nil {
+				t.Fatal(err)
+			}
+			cleanup()
+			if len(*calls) != 1 {
+				t.Fatalf("expected exactly one publish: %v", *calls)
+			}
+			for _, arg := range []string{"--bundle-dir " + dir, "--s3url s3://bucket/atlas", "--grants", "--instance-url https://catalog.example.com", "--project-id project", "--artifactdb-dir .artifactdb", "--api-url"} {
+				if !strings.Contains((*calls)[0], arg) {
+					t.Errorf("missing %q in %s", arg, (*calls)[0])
+				}
+			}
+			if strings.Contains((*calls)[0], "--bundle-dir .exohub/bundles/main") {
+				t.Fatal("published automatic bundle")
+			}
+		})
+	}
+}
+
+func TestCatalogExplicitInvalidBundleNoFallback(t *testing.T) {
+	for _, content := range []string{"missing", "not-dir", "missing-manifest", "manifest-dir", "{", "null", "[]", `{}`, `{"ref_name":"old","ref":"abc","repo_url":""}`} {
+		t.Run(content, func(t *testing.T) {
+			config, calls, cleanup := setupCatalogSyncEnv(t, "https://example.com/repo.git")
+			dir := "selected"
+			if content == "not-dir" {
+				if err := os.WriteFile(dir, []byte("file"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			} else if content != "missing" {
+				if err := os.Mkdir(dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if content == "manifest-dir" {
+					if err := os.Mkdir(filepath.Join(dir, "bundle.json"), 0o755); err != nil {
+						t.Fatal(err)
+					}
+				} else if content != "missing-manifest" {
+					if err := os.WriteFile(filepath.Join(dir, "bundle.json"), []byte(content), 0o644); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			err := syncCatalogRemote("atlas", config, "fake-catalog", dir)
+			cleanup()
+			if err == nil || len(*calls) != 0 {
+				t.Fatalf("expected failure without publish, err=%v calls=%v", err, *calls)
+			}
+		})
+	}
+}
+
+func TestCatalogExplicitDryRun(t *testing.T) {
+	config, calls, cleanup := setupCatalogSyncEnv(t, "https://example.com/repo.git")
+	writeSelectedBundle(t, "selected", "historical-version")
+	oldStdout := os.Stdout
+	output, err := os.CreateTemp(t.TempDir(), "preview")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = output
+	err = runDryRun([]string{"atlas"}, nil, false, "1", "", config, "selected")
+	os.Stdout = oldStdout
+	output.Close()
+	data, readErr := os.ReadFile(output.Name())
+	cleanup()
+	if err != nil || readErr != nil {
+		t.Fatalf("preview: %v, %v", err, readErr)
+	}
+	for _, value := range []string{"selected", "historical-version", "old-commit"} {
+		if !strings.Contains(string(data), value) {
+			t.Errorf("missing %s in preview: %s", value, data)
+		}
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("dry-run invoked publisher: %v", *calls)
+	}
+}
+
+func TestBundleSelectionRequiresCatalog(t *testing.T) {
+	config := &initcmd.RemotesConfig{Remotes: []initcmd.RemoteConfig{{Name: "backup", Type: "annex"}}}
+	for _, remotes := range [][]string{nil, {"backup"}} {
+		if err := validateBundleSelection(remotes, config, "missing"); err == nil || !strings.Contains(err.Error(), "catalog remote") {
+			t.Fatalf("expected catalog-only error, got %v", err)
+		}
+	}
+}
+
+func TestBundleFlagHelp(t *testing.T) {
+	flag := NewCommand().Flags().Lookup("bundle-dir")
+	if flag == nil || !strings.Contains(flag.Usage, "catalog") {
+		t.Fatal("missing catalog-only flag help")
+	}
+}
+
+func TestCatalogExplicitJSONDryRunFailsClearly(t *testing.T) {
+	config, calls, cleanup := setupCatalogSyncEnv(t, "https://example.com/repo.git")
+	writeSelectedBundle(t, "selected", "old")
+	err := runDryRun([]string{"atlas"}, nil, true, "1", "", config, "selected")
+	cleanup()
+	if err == nil || !strings.Contains(err.Error(), "--json") || len(*calls) != 0 {
+		t.Fatalf("expected clear JSON error without publication: %v, %v", err, *calls)
+	}
+}
+
+func TestCatalogExplicitUnreadableManifest(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read permission-denied manifests")
+	}
+	config, calls, cleanup := setupCatalogSyncEnv(t, "https://example.com/repo.git")
+	writeSelectedBundle(t, "selected", "old")
+	if err := os.Chmod(filepath.Join("selected", "bundle.json"), 0); err != nil {
+		cleanup()
+		t.Fatal(err)
+	}
+	err := syncCatalogRemote("atlas", config, "fake-catalog", "selected")
+	cleanup()
+	if err == nil || len(*calls) != 0 {
+		t.Fatalf("expected unreadable manifest error without fallback: %v, %v", err, *calls)
+	}
+}

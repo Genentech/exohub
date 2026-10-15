@@ -192,7 +192,7 @@ func exit(err error) {
 }
 
 // runInit is the main logic for 'exo init'
-func runInit(args []string) error {
+func runInit(args []string) (err error) {
 	// Handle UUID cleanup operations (mutually exclusive with other operations)
 	if flagDead != "" {
 		return markUUIDasDead(flagDead, flagDryRun)
@@ -222,6 +222,13 @@ func runInit(args []string) error {
 	if remotesConfigErr != nil {
 		remotesConfig = &RemotesConfig{}
 	}
+
+	// Successful initialization leaves an opt-in example, never overwriting config.
+	defer func() {
+		if err == nil && !flagDryRun {
+			err = ensureConfigTemplate()
+		}
+	}()
 
 	// Check for legacy .exohub/context and warn about thin
 	checkLegacyContext(exohubConfig)

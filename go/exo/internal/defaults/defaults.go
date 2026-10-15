@@ -32,6 +32,10 @@ var builtinDryRunReportSchema = ""
 // Overridden to an internal URL by defaults_internal.go when built with -tags internal.
 var builtinUpgradeURL = ""
 
+// builtinInstallCmd is the built-in fallback for EXOHUB_INSTALL_CMD.
+// Overridden to an internal install command by defaults_internal.go when built with -tags internal.
+var builtinInstallCmd = "curl -fsSL https://github.com/Genentech/exohub/releases/latest/download/install.sh | sh"
+
 // APIBase returns the ExoHub API base URL.
 // Precedence: EXOHUB_API_URL env → built-in.
 func APIBase() string {
@@ -39,6 +43,17 @@ func APIBase() string {
 		return v
 	}
 	return builtinAPIBase
+}
+
+// BaseURL returns the ExoHub host root URL (no /api suffix), used for
+// endpoints that live outside /api such as /eds.
+// Precedence: EXOHUB_BASE_URL env → APIBase() with a trailing /api stripped.
+func BaseURL() string {
+	if v := strings.TrimSpace(os.Getenv("EXOHUB_BASE_URL")); v != "" {
+		return strings.TrimRight(v, "/")
+	}
+	base := strings.TrimRight(APIBase(), "/")
+	return strings.TrimSuffix(base, "/api")
 }
 
 // CatalogURL returns the ArtifactDB catalog URL.
@@ -92,4 +107,13 @@ func UpgradeURL() string {
 		return v
 	}
 	return builtinUpgradeURL
+}
+
+// InstallCmd returns the shell command shown to users for installing exo.
+// Precedence: EXOHUB_INSTALL_CMD env → built-in.
+func InstallCmd() string {
+	if v := strings.TrimSpace(os.Getenv("EXOHUB_INSTALL_CMD")); v != "" {
+		return v
+	}
+	return builtinInstallCmd
 }

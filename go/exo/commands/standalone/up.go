@@ -165,13 +165,7 @@ func runUp(opts runUpOpts) error {
 	fmt.Fprintf(os.Stderr, "surrealdb started (pid %d)\n", surrealCmd.Process.Pid)
 
 	// 2. Start versitygw.
-	vgwArgs := []string{
-		fmt.Sprintf("--access=%s", opts.accessKey),
-		fmt.Sprintf("--secret=%s", secretKey),
-		fmt.Sprintf("--port=%d", opts.versitygwPort),
-		"posix",
-		versitygwDataDir,
-	}
+	vgwArgs := versitygwArgs(opts.accessKey, secretKey, opts.versitygwPort, versitygwDataDir)
 	vgwCmd := exec.Command(bins.versitygw, vgwArgs...) //nolint:gosec
 	vgwCmd.Stdout = os.Stdout
 	vgwCmd.Stderr = os.Stderr
@@ -445,4 +439,25 @@ server:
 		opts.adbPort, opts.adbPort,
 	)
 	return os.WriteFile(path, []byte(content), 0o600)
+}
+
+// versitygwArgs builds the argv for the managed versitygw process.
+//
+// NOTE: --port takes a listen ADDRESS ("<ip>:<port>" or ":<port>"), NOT a bare
+// port number. A bare number fails in two different, equally user-hostile ways:
+//
+//	v1.0.x: exits immediately with "missing port in address"
+//	v1.8.x: starts but binds nothing, so the stack later fails with confusing
+//	        S3 connection errors
+//
+// Both behaviours were verified against the real upstream binaries; see
+// up_port_test.go.
+func versitygwArgs(accessKey, secretKey string, port int, dataDir string) []string {
+	return []string{
+		fmt.Sprintf("--access=%s", accessKey),
+		fmt.Sprintf("--secret=%s", secretKey),
+		fmt.Sprintf("--port=:%d", port),
+		"posix",
+		dataDir,
+	}
 }

@@ -1,12 +1,14 @@
 package publish
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/Genentech/exohub/go/exo/commandutil"
 	initcmd "github.com/Genentech/exohub/go/exo/commands/init"
 )
 
@@ -138,8 +140,13 @@ func setupPublishEnv(t *testing.T, exoExitCode int) (calls *[]string, cleanup fu
 		return exec.Command("sh", "-c", "exit "+itoa(exoExitCode))
 	}
 
+	// Simulate a configured git remote so the git-remote precondition passes.
+	oldResolveCloneURL := resolveCloneURL
+	resolveCloneURL = func() (string, error) { return "https://example.com/repo.git", nil }
+
 	cleanup = func() {
 		command = oldCommand
+		resolveCloneURL = oldResolveCloneURL
 		os.Setenv("PATH", oldPath)
 		os.Chdir(oldDir) //nolint:errcheck
 	}
@@ -209,6 +216,78 @@ func TestBroadcastNotCalledOnEarlierFailure(t *testing.T) {
 	}
 	if hasBroadcast(*calls) {
 		t.Errorf("broadcast should not be called after earlier failure, got: %v", *calls)
+	}
+}
+
+// TestNoGitRemoteAborts verifies that runPublish aborts before any step runs
+// when the repo has a .git directory but no usable git remote.
+func TestNoGitRemoteAborts(t *testing.T) {
+	calls, cleanup := setupPublishEnv(t, 0)
+	defer cleanup()
+
+	// Override the default (configured-remote) stub installed by
+	// setupPublishEnv to simulate no usable git remote.
+	resolveCloneURL = func() (string, error) { return "", fmt.Errorf("no git remote configured") }
+
+	err := runPublish(nil)
+	if err == nil {
+		t.Fatal("expected runPublish to return an error")
+	}
+	if !strings.Contains(err.Error(), "git remote") {
+		t.Errorf("expected error to mention 'git remote', got: %v", err)
+	}
+	if len(*calls) != 0 {
+		t.Errorf("expected no exo subcommands to run, got: %v", *calls)
+	}
+}
+
+// TestLocalPathOnlyOriginAbortsBeforeAnyStep is an end-to-end check (using
+// the real commandutil.ResolveCloneURL against an actual git repo, not a
+// stub) that a repo whose only remote is a local path aborts before any
+// step runs — regression test for #100 case 4.
+func TestLocalPathOnlyOriginAbortsBeforeAnyStep(t *testing.T) {
+	repoDir := t.TempDir()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = repoDir
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "HOME="+repoDir)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("command %v failed: %v\n%s", args, err, out)
+		}
+	}
+	run("git", "init")
+	run("git", "remote", "add", "origin", "/srv/git/repo.git")
+
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer os.Chdir(oldDir) //nolint:errcheck
+
+	recorded := &[]string{}
+	oldCommand := command
+	command = func(name string, args ...string) *exec.Cmd {
+		*recorded = append(*recorded, name+" "+strings.Join(args, " "))
+		return exec.Command("true")
+	}
+	oldResolveCloneURL := resolveCloneURL
+	resolveCloneURL = commandutil.ResolveCloneURL
+	defer func() {
+		command = oldCommand
+		resolveCloneURL = oldResolveCloneURL
+	}()
+
+	if err := runPublish(nil); err == nil {
+		t.Fatal("expected runPublish to error on a local-path-only origin")
+	} else if !strings.Contains(err.Error(), "git remote") {
+		t.Errorf("expected error to mention 'git remote', got: %v", err)
+	}
+	if len(*recorded) != 0 {
+		t.Errorf("expected no exo subcommands to run, got: %v", *recorded)
 	}
 }
 

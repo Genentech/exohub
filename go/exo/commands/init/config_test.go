@@ -3,6 +3,7 @@ package init
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -496,10 +497,10 @@ func TestRemoteConfigValidate(t *testing.T) {
 		{
 			name: "valid catalog remote (artifactdb export)",
 			remote: RemoteConfig{
-				Name:  "catalog",
-				Type:  "artifactdb",
-				Mode:  "export",
-				S3URL: "s3://bucket/path/_artifactdb",
+				Name:        "catalog",
+				Type:        "artifactdb",
+				Mode:        "export",
+				S3URL:       "s3://bucket/path/_artifactdb",
 				InstanceURL: "https://catalog.example.com/v1/cancerdb",
 			},
 			wantErr: false,
@@ -906,6 +907,280 @@ func TestExohubConfigInvalidYAML(t *testing.T) {
 	}
 }
 
+// TestExohubConfigLoadIsLenientForUnknownKeys ensures LoadExohubConfig
+// never fails because of an unknown top-level or annex-level key: per the
+// spec, strictness is scoped to annex.routing rules only, so a config
+// written by a newer exo (or a hand-added key) must not break every
+// caller of LoadExohubConfig, including exo init and profile refresh.
+func TestExohubConfigLoadIsLenientForUnknownKeys(t *testing.T) {
+	tmpDir := t.TempDir()
+	oldWd, _ := os.Getwd()
+	defer os.Chdir(oldWd)
+	os.Chdir(tmpDir)
+
+	os.Mkdir(".exohub", 0755)
+
+	tests := []struct {
+		name string
+		yaml string
+	}{
+		{
+			name: "unknown top-level key",
+			yaml: "bogus: true\nannex:\n  thin: true\n",
+		},
+		{
+			name: "unknown annex key",
+			yaml: "annex:\n  thin: true\n  bogus: true\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := os.WriteFile(filepath.Join(".exohub", "config"), []byte(tt.yaml), 0644); err != nil {
+				t.Fatalf("WriteFile() error = %v", err)
+			}
+			cfg, err := LoadExohubConfig()
+			if err != nil {
+				t.Fatalf("LoadExohubConfig() unexpected error = %v", err)
+			}
+			if cfg == nil || cfg.Annex == nil || cfg.Annex.Thin == nil || !*cfg.Annex.Thin {
+				t.Errorf("LoadExohubConfig() = %+v, want known keys (annex.thin) still loaded despite the unknown key", cfg)
+			}
+		})
+	}
+}
+
+// TestExohubConfigLoadDoesNotValidateRouting ensures a malformed
+// annex.routing rule does not break LoadExohubConfig: per design D9,
+// routing is validated by NewRouter and by exo add/--explain/--reroute/
+// the MCP add tool/exo doctor, not by the shared loader used by exo init
+// and profile refresh (a typo in one rule must not make exo init silently
+// lose thin/addunlocked).
+func TestExohubConfigLoadDoesNotValidateRouting(t *testing.T) {
+	tmpDir := t.TempDir()
+	oldWd, _ := os.Getwd()
+	defer os.Chdir(oldWd)
+	os.Chdir(tmpDir)
+
+	os.Mkdir(".exohub", 0755)
+	yaml := "annex:\n  thin: true\n  routing:\n    - path: \"**/*.csv\"\n      to: bogus\n"
+	if err := os.WriteFile(filepath.Join(".exohub", "config"), []byte(yaml), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg, err := LoadExohubConfig()
+	if err != nil {
+		t.Fatalf("LoadExohubConfig() unexpected error = %v, want it to load despite the invalid rule", err)
+	}
+	if cfg.Annex.Thin == nil || !*cfg.Annex.Thin {
+		t.Errorf("LoadExohubConfig() lost annex.thin because of an unrelated invalid routing rule")
+	}
+	if len(cfg.Annex.Routing) != 1 || cfg.Annex.Routing[0].To != "bogus" {
+		t.Errorf("Routing = %+v, want the raw (invalid) rule still loaded", cfg.Annex.Routing)
+	}
+
+	// Validation, when something actually calls it (e.g. NewRouter later
+	// in the add package, or exo doctor), must still catch the error.
+	if err := cfg.Annex.ValidateRouting(); err == nil {
+		t.Error("ValidateRouting() expected error for invalid 'to' value")
+	}
+}
+
+// TestRoutingRuleUnknownKeyRejectedByValidate ensures an unknown key in a
+// routing rule is caught (named with its rule index and the offending
+// key) once something validates the config, even though LoadExohubConfig
+// itself stays lenient.
+func TestRoutingRuleUnknownKeyRejectedByValidate(t *testing.T) {
+	tmpDir := t.TempDir()
+	oldWd, _ := os.Getwd()
+	defer os.Chdir(oldWd)
+	os.Chdir(tmpDir)
+
+	os.Mkdir(".exohub", 0755)
+	yaml := "annex:\n  routing:\n    - path: \"**/*.md\"\n      to: git\n    - path: \"**/*.csv\"\n      to: annex\n      bogus: true\n"
+	if err := os.WriteFile(filepath.Join(".exohub", "config"), []byte(yaml), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg, err := LoadExohubConfig()
+	if err != nil {
+		t.Fatalf("LoadExohubConfig() unexpected error = %v", err)
+	}
+
+	err = cfg.Annex.ValidateRouting()
+	if err == nil {
+		t.Fatal("ValidateRouting() expected error for unknown rule key")
+	}
+	want := `annex.routing rule 2: unknown key "bogus"`
+	if err.Error() != want {
+		t.Errorf("ValidateRouting() error = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestExohubConfigRoutingRoundTrip(t *testing.T) {
+	tmpDir := t.TempDir()
+	oldWd, _ := os.Getwd()
+	defer os.Chdir(oldWd)
+	os.Chdir(tmpDir)
+
+	os.Mkdir(".exohub", 0755)
+
+	cfg := &ExohubConfig{
+		Annex: &AnnexConfig{
+			Routing: []RoutingRule{
+				{Path: "**/*.md", To: "git"},
+				{Path: "**/*.csv", LargerThan: "1KB", To: "annex"},
+				{Content: "binary", To: "annex"},
+			},
+		},
+	}
+	if err := SaveExohubConfig(cfg); err != nil {
+		t.Fatalf("SaveExohubConfig() error = %v", err)
+	}
+
+	loaded, err := LoadExohubConfig()
+	if err != nil {
+		t.Fatalf("LoadExohubConfig() error = %v", err)
+	}
+	if loaded == nil || loaded.Annex == nil {
+		t.Fatalf("expected loaded config with Annex, got %+v", loaded)
+	}
+	if len(loaded.Annex.Routing) != len(cfg.Annex.Routing) {
+		t.Fatalf("Routing length = %d, want %d", len(loaded.Annex.Routing), len(cfg.Annex.Routing))
+	}
+	for i, want := range cfg.Annex.Routing {
+		if !reflect.DeepEqual(loaded.Annex.Routing[i], want) {
+			t.Errorf("Routing[%d] = %+v, want %+v", i, loaded.Annex.Routing[i], want)
+		}
+	}
+}
+
+func TestRoutingRuleValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		rule    RoutingRule
+		wantErr string
+	}{
+		{
+			name:    "no match keys",
+			rule:    RoutingRule{To: "git"},
+			wantErr: "no match keys",
+		},
+		{
+			name:    "missing to",
+			rule:    RoutingRule{Path: "**/*.md"},
+			wantErr: "missing required key 'to'",
+		},
+		{
+			name:    "unknown to value",
+			rule:    RoutingRule{Path: "**/*.md", To: "anex"},
+			wantErr: "invalid 'to' value",
+		},
+		{
+			name:    "unknown content value",
+			rule:    RoutingRule{Content: "weird", To: "git"},
+			wantErr: "invalid 'content' value",
+		},
+		{
+			name:    "invalid glob",
+			rule:    RoutingRule{Path: "[", To: "git"},
+			wantErr: "invalid 'path' glob",
+		},
+		{
+			name:    "unparseable larger_than",
+			rule:    RoutingRule{LargerThan: "lots", To: "annex"},
+			wantErr: "invalid 'larger_than' size",
+		},
+		{
+			name:    "unparseable smaller_than",
+			rule:    RoutingRule{SmallerThan: "lots", To: "git"},
+			wantErr: "invalid 'smaller_than' size",
+		},
+		{
+			name:    "larger_than not less than smaller_than",
+			rule:    RoutingRule{LargerThan: "1MB", SmallerThan: "1KB", To: "annex"},
+			wantErr: "must be less than",
+		},
+		{
+			name:    "larger_than equal to smaller_than",
+			rule:    RoutingRule{LargerThan: "1MB", SmallerThan: "1MB", To: "annex"},
+			wantErr: "must be less than",
+		},
+		{
+			name: "valid rule",
+			rule: RoutingRule{Path: "**/*.csv", LargerThan: "1KB", To: "annex"},
+		},
+		{
+			name: "valid size range",
+			rule: RoutingRule{LargerThan: "1KB", SmallerThan: "1MB", To: "git"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.rule.Validate()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Errorf("Validate() unexpected error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("Validate() error = %v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestRoutingRuleValidateReturnsParsedSizes(t *testing.T) {
+	parsed, err := RoutingRule{LargerThan: "1KB", SmallerThan: "1MB", To: "annex"}.Validate()
+	if err != nil {
+		t.Fatalf("Validate() unexpected error = %v", err)
+	}
+	if !parsed.HasLarger || parsed.LargerThan != 1000 {
+		t.Errorf("parsed.LargerThan = %v (has=%v), want 1000 (has=true)", parsed.LargerThan, parsed.HasLarger)
+	}
+	if !parsed.HasSmaller || parsed.SmallerThan != 1_000_000 {
+		t.Errorf("parsed.SmallerThan = %v (has=%v), want 1000000 (has=true)", parsed.SmallerThan, parsed.HasSmaller)
+	}
+}
+
+func TestRoutingRuleUnmarshalYAMLRecordsUnknownKeys(t *testing.T) {
+	var r RoutingRule
+	data := []byte("path: \"**/*.csv\"\nto: annex\nbogus: true\nother: 1\n")
+	if err := yaml.Unmarshal(data, &r); err != nil {
+		t.Fatalf("Unmarshal() unexpected error = %v", err)
+	}
+	if r.Path != "**/*.csv" || r.To != "annex" {
+		t.Errorf("known fields not decoded: %+v", r)
+	}
+	_, err := r.Validate()
+	if err == nil || !strings.Contains(err.Error(), `unknown key "bogus"`) {
+		t.Errorf("Validate() error = %v, want it to name the first unknown key", err)
+	}
+}
+
+func TestAnnexConfigValidateRoutingNamesRuleIndex(t *testing.T) {
+	a := &AnnexConfig{
+		Routing: []RoutingRule{
+			{Path: "**/*.md", To: "git"},
+			{Path: "**/*.csv", To: "bogus"},
+		},
+	}
+	err := a.ValidateRouting()
+	if err == nil {
+		t.Fatalf("ValidateRouting() expected error")
+	}
+	if !strings.Contains(err.Error(), "rule 2") {
+		t.Errorf("ValidateRouting() error = %v, want it to name rule 2", err)
+	}
+}
+
+func TestAnnexConfigValidateRoutingNilReceiver(t *testing.T) {
+	var a *AnnexConfig
+	if err := a.ValidateRouting(); err != nil {
+		t.Errorf("ValidateRouting() on nil receiver error = %v, want nil", err)
+	}
+}
+
 func TestParseRepoURL(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1129,5 +1404,83 @@ func TestParseS3URL(t *testing.T) {
 				t.Errorf("parseS3URL() prefix = %q, want %q", prefix, tt.wantPrefix)
 			}
 		})
+	}
+}
+
+func TestEnsureConfigTemplate(t *testing.T) {
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWd) })
+	if err := ensureConfigTemplate(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(".exohub", "config"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != routingConfigExample {
+		t.Fatalf("unexpected template: %s", data)
+	}
+	cfg, err := LoadExohubConfig()
+	if err != nil || cfg == nil || cfg.Annex != nil {
+		t.Fatalf("example must be valid inactive YAML: cfg=%+v err=%v", cfg, err)
+	}
+	// Verify that opting in produces valid rules with the documented boundaries.
+	var active strings.Builder
+	for _, line := range strings.Split(routingConfigExample, "\n") {
+		if strings.HasPrefix(line, "# annex:") || strings.HasPrefix(line, "#   ") {
+			active.WriteString(strings.TrimPrefix(line, "# ") + "\n")
+		}
+	}
+	var enabled ExohubConfig
+	if err := yaml.Unmarshal([]byte(active.String()), &enabled); err != nil {
+		t.Fatal(err)
+	}
+	if enabled.Annex == nil || len(enabled.Annex.Routing) != 3 {
+		t.Fatalf("unexpected active rules: %+v", enabled)
+	}
+	if err := enabled.Annex.ValidateRouting(); err != nil {
+		t.Fatal(err)
+	}
+	for _, existing := range []string{
+		"", "# custom configuration\nannex:\n  thin: true\n",
+		"annex:\n  routing:\n    - path: '*.csv'\n      to: git\n",
+	} {
+		if err := os.WriteFile(filepath.Join(".exohub", "config"), []byte(existing), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := ensureConfigTemplate(); err != nil {
+			t.Fatal(err)
+		}
+		got, err := os.ReadFile(filepath.Join(".exohub", "config"))
+		if err != nil || string(got) != existing {
+			t.Fatalf("existing config changed: %q err=%v", got, err)
+		}
+	}
+}
+
+func TestSaveNewConfigIncludesInactiveRoutingExample(t *testing.T) {
+	oldWd, _ := os.Getwd()
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWd) })
+	thin, unlocked := true, false
+	cfg := &ExohubConfig{Annex: &AnnexConfig{Thin: &thin, AddUnlocked: &unlocked}}
+	if err := SaveExohubConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(".exohub", "config"))
+	if err != nil || !strings.Contains(string(data), routingConfigExample) {
+		t.Fatalf("missing example: %s err=%v", data, err)
+	}
+	loaded, err := LoadExohubConfig()
+	if err != nil || !reflect.DeepEqual(loaded, cfg) {
+		t.Fatalf("example changed settings: %+v err=%v", loaded, err)
 	}
 }

@@ -291,6 +291,13 @@ func renderAndWrite(spec *ProfileSpec, data profileTplData, dryRun, force bool) 
 		if err != nil {
 			return err
 		}
+		if filepath.Base(filename) == "config" {
+			if _, err := os.Stat(filepath.Join(".exohub", "config")); os.IsNotExist(err) {
+				content = strings.TrimRight(content, "\n") + "\n" + routingConfigExample
+			} else if err != nil {
+				return fmt.Errorf("failed to stat .exohub/config: %w", err)
+			}
+		}
 		if err := validateRenderedFile(filename, content); err != nil {
 			return err
 		}

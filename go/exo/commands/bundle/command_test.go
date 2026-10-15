@@ -1020,9 +1020,9 @@ func TestBuildBlobInfoMap(t *testing.T) {
 	os.Chdir(dir)
 	defer os.Chdir(origDir)
 
-	m, err := buildBlobInfoMap(nil)
+	m, err := buildBlobInfoMap("", nil)
 	if err != nil {
-		t.Fatalf("buildBlobInfoMap(nil) error: %v", err)
+		t.Fatalf("buildBlobInfoMap(\"\", nil) error: %v", err)
 	}
 
 	// Verify both files are present
@@ -1407,7 +1407,7 @@ func TestGenerateGitArtifactsBasic(t *testing.T) {
 	defer os.Chdir(origDir)
 
 	filesDir := filepath.Join(dir, "output", "files")
-	blobInfoMap, err := buildBlobInfoMap(nil)
+	blobInfoMap, err := buildBlobInfoMap("", nil)
 	if err != nil {
 		t.Fatalf("buildBlobInfoMap error: %v", err)
 	}
@@ -1478,7 +1478,7 @@ func TestGenerateGitArtifactsResume(t *testing.T) {
 	defer os.Chdir(origDir)
 
 	filesDir := filepath.Join(dir, "output", "files")
-	blobInfoMap, _ := buildBlobInfoMap(nil)
+	blobInfoMap, _ := buildBlobInfoMap("", nil)
 	pathCommits := map[string][]string{"a.txt": {"h1"}, "b.txt": {"h1"}}
 	commitMap := map[string]Commit{"h1": {Hash: "h1"}}
 
@@ -1643,7 +1643,7 @@ func TestGenerateMarkdownArtifacts(t *testing.T) {
 	os.Chdir(dir)
 	defer os.Chdir(origDir)
 
-	blobInfoMap, err := buildBlobInfoMap(nil)
+	blobInfoMap, err := buildBlobInfoMap("", nil)
 	if err != nil {
 		t.Fatalf("buildBlobInfoMap error: %v", err)
 	}
@@ -1782,7 +1782,7 @@ func TestMarkdownUnderAnnexScope(t *testing.T) {
 	os.Chdir(dir)
 	defer os.Chdir(origDir)
 
-	blobInfoMap, err := buildBlobInfoMap(nil)
+	blobInfoMap, err := buildBlobInfoMap("", nil)
 	if err != nil {
 		t.Fatalf("buildBlobInfoMap error: %v", err)
 	}
@@ -1857,7 +1857,7 @@ func TestMarkdownUnderAnnexScope(t *testing.T) {
 		os.Chdir(noMdDir)
 		defer os.Chdir(origDir2)
 
-		blobInfoMapNoMd, err := buildBlobInfoMap(nil)
+		blobInfoMapNoMd, err := buildBlobInfoMap("", nil)
 		if err != nil {
 			t.Fatalf("buildBlobInfoMap error: %v", err)
 		}
@@ -2083,5 +2083,459 @@ func TestCheckCommitReachabilityDiverged(t *testing.T) {
 	}
 	if result.RemoteOnly != 1 {
 		t.Errorf("expected RemoteOnly=1, got %d", result.RemoteOnly)
+	}
+}
+
+func setupCleanTreeTestRepo(t *testing.T) (dir string, run func(args ...string)) {
+	t.Helper()
+	dir = t.TempDir()
+	run = func(args ...string) {
+		t.Helper()
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "HOME="+dir)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("command %v failed: %v\n%s", args, err, out)
+		}
+	}
+	run("git", "init")
+	run("git", "config", "user.email", "test@test.com")
+	run("git", "config", "user.name", "Test")
+	return dir, run
+}
+
+func TestCheckWorkingTreeCleanOnCleanTree(t *testing.T) {
+	dir, run := setupCleanTreeTestRepo(t)
+	os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("hello\n"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-m", "init")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	if err := checkWorkingTreeClean(".exohub/bundles/main"); err != nil {
+		t.Errorf("expected clean tree to pass, got error: %v", err)
+	}
+}
+
+func TestCheckWorkingTreeCleanAbortsOnModifiedTrackedFile(t *testing.T) {
+	dir, run := setupCleanTreeTestRepo(t)
+	os.MkdirAll(filepath.Join(dir, ".exohub"), 0o755)
+	os.WriteFile(filepath.Join(dir, ".exohub", "permissions"), []byte("authenticated\n"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-m", "init")
+
+	// Edit the tracked file without committing
+	os.WriteFile(filepath.Join(dir, ".exohub", "permissions"), []byte("public\n"), 0o644)
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	err := checkWorkingTreeClean(".exohub/bundles/main")
+	if err == nil {
+		t.Fatal("expected error for dirty tracked file, got nil")
+	}
+	if !strings.Contains(err.Error(), ".exohub/permissions") {
+		t.Errorf("error should name the offending path, got: %v", err)
+	}
+}
+
+func TestCheckWorkingTreeCleanIgnoresUntrackedFiles(t *testing.T) {
+	dir, run := setupCleanTreeTestRepo(t)
+	os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("hello\n"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-m", "init")
+
+	// Add an untracked file
+	os.WriteFile(filepath.Join(dir, "untracked.txt"), []byte("scratch\n"), 0o644)
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	if err := checkWorkingTreeClean(".exohub/bundles/main"); err != nil {
+		t.Errorf("untracked files should not trigger the guard, got error: %v", err)
+	}
+}
+
+func TestCheckWorkingTreeCleanExcludesOutputDir(t *testing.T) {
+	dir, run := setupCleanTreeTestRepo(t)
+	os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("hello\n"), 0o644)
+	outputDir := filepath.Join(".exohub", "bundles", "main")
+	os.MkdirAll(filepath.Join(dir, outputDir), 0o755)
+	os.WriteFile(filepath.Join(dir, outputDir, "bundle.json"), []byte("{}\n"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-m", "init")
+
+	// Simulate a prior bundle run's own output being modified (tracked, under outputDir)
+	os.WriteFile(filepath.Join(dir, outputDir, "bundle.json"), []byte(`{"changed":true}`+"\n"), 0o644)
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	if err := checkWorkingTreeClean(outputDir); err != nil {
+		t.Errorf("changes under outputDir should not trigger the guard, got error: %v", err)
+	}
+}
+
+func TestResolveTargetHashDefaultsToHEAD(t *testing.T) {
+	dir, run := setupCleanTreeTestRepo(t)
+	os.WriteFile(filepath.Join(dir, "file.txt"), []byte("v1\n"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-m", "init")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	headCmd := exec.Command("git", "rev-parse", "HEAD")
+	headOut, err := headCmd.Output()
+	if err != nil {
+		t.Fatalf("git rev-parse HEAD failed: %v", err)
+	}
+	want := strings.TrimSpace(string(headOut))
+
+	got, err := resolveTargetHash("")
+	if err != nil {
+		t.Fatalf("resolveTargetHash(\"\") error: %v", err)
+	}
+	if got != want {
+		t.Errorf("resolveTargetHash(\"\") = %q, want %q", got, want)
+	}
+}
+
+func TestResolveTargetHashWithExplicitRef(t *testing.T) {
+	dir, run := setupCleanTreeTestRepo(t)
+	os.WriteFile(filepath.Join(dir, "file.txt"), []byte("v1\n"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-m", "first")
+	run("git", "tag", "v1.0.0")
+
+	os.WriteFile(filepath.Join(dir, "file.txt"), []byte("v2\n"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-m", "second")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	tagCmd := exec.Command("git", "rev-parse", "v1.0.0")
+	tagOut, err := tagCmd.Output()
+	if err != nil {
+		t.Fatalf("git rev-parse v1.0.0 failed: %v", err)
+	}
+	wantTag := strings.TrimSpace(string(tagOut))
+
+	got, err := resolveTargetHash("v1.0.0")
+	if err != nil {
+		t.Fatalf("resolveTargetHash(\"v1.0.0\") error: %v", err)
+	}
+	if got != wantTag {
+		t.Errorf("resolveTargetHash(\"v1.0.0\") = %q, want %q", got, wantTag)
+	}
+
+	headCmd := exec.Command("git", "rev-parse", "HEAD")
+	headOut, _ := headCmd.Output()
+	if strings.TrimSpace(string(headOut)) == wantTag {
+		t.Fatal("test setup invalid: HEAD should differ from v1.0.0")
+	}
+}
+
+func TestBuildBlobInfoMapAtNonHEADRef(t *testing.T) {
+	dir, run := setupCleanTreeTestRepo(t)
+	os.WriteFile(filepath.Join(dir, "file.txt"), []byte("version one\n"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-m", "first")
+	run("git", "tag", "v1.0.0")
+
+	os.WriteFile(filepath.Join(dir, "file.txt"), []byte("version two, longer content\n"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-m", "second")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	headMap, err := buildBlobInfoMap("", nil)
+	if err != nil {
+		t.Fatalf("buildBlobInfoMap(\"\", nil) error: %v", err)
+	}
+	tagMap, err := buildBlobInfoMap("v1.0.0", nil)
+	if err != nil {
+		t.Fatalf("buildBlobInfoMap(\"v1.0.0\", nil) error: %v", err)
+	}
+
+	if headMap["file.txt"].Hash == tagMap["file.txt"].Hash {
+		t.Error("expected different blob hashes at HEAD vs v1.0.0")
+	}
+	if headMap["file.txt"].Size == tagMap["file.txt"].Size {
+		t.Error("expected different blob sizes at HEAD vs v1.0.0")
+	}
+	if tagMap["file.txt"].Size != int64(len("version one\n")) {
+		t.Errorf("v1.0.0 file.txt size = %d, want %d", tagMap["file.txt"].Size, len("version one\n"))
+	}
+
+	// Working tree/HEAD must be unaffected by reading the older ref.
+	branchCmd := exec.Command("git", "symbolic-ref", "--short", "HEAD")
+	if _, err := branchCmd.Output(); err != nil {
+		t.Errorf("expected HEAD to remain on a branch (not detached) after reading v1.0.0, symbolic-ref failed: %v", err)
+	}
+}
+
+func TestReadGitBlobsBatch(t *testing.T) {
+	dir, run := setupCleanTreeTestRepo(t)
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("content of a\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "b.txt"), []byte("content of b, which is longer\n"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-m", "init")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	blobs, err := buildBlobInfoMap("", nil)
+	if err != nil {
+		t.Fatalf("buildBlobInfoMap error: %v", err)
+	}
+
+	contents, err := readGitBlobsBatch([]string{blobs["a.txt"].Hash, blobs["b.txt"].Hash})
+	if err != nil {
+		t.Fatalf("readGitBlobsBatch error: %v", err)
+	}
+	if string(contents[blobs["a.txt"].Hash]) != "content of a\n" {
+		t.Errorf("a.txt content = %q, want %q", contents[blobs["a.txt"].Hash], "content of a\n")
+	}
+	if string(contents[blobs["b.txt"].Hash]) != "content of b, which is longer\n" {
+		t.Errorf("b.txt content = %q, want %q", contents[blobs["b.txt"].Hash], "content of b, which is longer\n")
+	}
+}
+
+func TestReadGitBlobsBatchEmpty(t *testing.T) {
+	contents, err := readGitBlobsBatch(nil)
+	if err != nil {
+		t.Fatalf("readGitBlobsBatch(nil) error: %v", err)
+	}
+	if len(contents) != 0 {
+		t.Errorf("expected empty map, got %d entries", len(contents))
+	}
+}
+
+func TestCheckWorkingTreeCleanOutputDirOutsideRepo(t *testing.T) {
+	dir, run := setupCleanTreeTestRepo(t)
+	os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("hello\n"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-m", "init")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	outsideDir := t.TempDir() // outside the repo entirely (e.g. --output /tmp/bundle)
+	if err := checkWorkingTreeClean(outsideDir); err != nil {
+		t.Errorf("clean tree with --output outside the repo should not error, got: %v", err)
+	}
+}
+
+func TestCheckWorkingTreeCleanOutputDirOutsideRepoStillCatchesDirtyFiles(t *testing.T) {
+	dir, run := setupCleanTreeTestRepo(t)
+	os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("hello\n"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-m", "init")
+
+	// Dirty a tracked file
+	os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("changed\n"), 0o644)
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	outsideDir := t.TempDir()
+	err := checkWorkingTreeClean(outsideDir)
+	if err == nil {
+		t.Fatal("expected error for dirty tracked file even with --output outside the repo")
+	}
+	if !strings.Contains(err.Error(), "tracked.txt") {
+		t.Errorf("error should name the offending path, got: %v", err)
+	}
+}
+
+func TestCheckWorkingTreeCleanNoCommitsYet(t *testing.T) {
+	dir, _ := setupCleanTreeTestRepo(t)
+	// No commits at all — HEAD does not resolve.
+	os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("hello\n"), 0o644)
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	if err := checkWorkingTreeClean(".exohub/bundles/main"); err != nil {
+		t.Errorf("repo with no commits should not error out of checkWorkingTreeClean, got: %v", err)
+	}
+}
+
+func TestExcludePathspecInsideRepo(t *testing.T) {
+	dir, run := setupCleanTreeTestRepo(t)
+	os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("hello\n"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-m", "init")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	excl, ok := excludePathspec(filepath.Join(".exohub", "bundles", "main"))
+	if !ok {
+		t.Fatal("expected ok=true for a path inside the repo")
+	}
+	if excl != ":(exclude)"+filepath.Join(".exohub", "bundles", "main") {
+		t.Errorf("excludePathspec = %q, want %q", excl, ":(exclude)"+filepath.Join(".exohub", "bundles", "main"))
+	}
+}
+
+func TestExcludePathspecOutsideRepo(t *testing.T) {
+	dir, run := setupCleanTreeTestRepo(t)
+	os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("hello\n"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-m", "init")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	_, ok := excludePathspec(t.TempDir())
+	if ok {
+		t.Error("expected ok=false for a path outside the repo")
+	}
+}
+
+func TestGetRepoURLConfigured(t *testing.T) {
+	dir, run := setupCleanTreeTestRepo(t)
+	run("git", "remote", "add", "origin", "https://example.com/repo.git")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	url, err := getRepoURL()
+	if err != nil {
+		t.Fatalf("getRepoURL: %v", err)
+	}
+	if url != "https://example.com/repo.git" {
+		t.Errorf("url = %q, want %q", url, "https://example.com/repo.git")
+	}
+}
+
+func TestGetRepoURLNotConfigured(t *testing.T) {
+	dir, _ := setupCleanTreeTestRepo(t)
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	_, err := getRepoURL()
+	if err == nil {
+		t.Fatal("expected an error when no git remote is set")
+	}
+}
+
+// TestGetRepoURLPrefersHTTPSOverLocalOrigin verifies the #100 regression: when
+// "origin" is a local path (not reachable by anyone else) but another remote
+// has a real clone URL, getRepoURL must return the usable one, never the
+// local path.
+func TestGetRepoURLPrefersHTTPSOverLocalOrigin(t *testing.T) {
+	dir, run := setupCleanTreeTestRepo(t)
+	run("git", "remote", "add", "origin", "/srv/git/repo.git")
+	run("git", "remote", "add", "gitlab", "https://example.com/org/repo.git")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	url, err := getRepoURL()
+	if err != nil {
+		t.Fatalf("getRepoURL: %v", err)
+	}
+	if url != "https://example.com/org/repo.git" {
+		t.Errorf("url = %q, want the https remote, never the local path", url)
+	}
+}
+
+// TestGetRepoURLNonOriginRemote verifies that a usable non-"origin" remote
+// (e.g. "upstream") is accepted when origin does not exist.
+func TestGetRepoURLNonOriginRemote(t *testing.T) {
+	dir, run := setupCleanTreeTestRepo(t)
+	run("git", "remote", "add", "upstream", "https://example.com/org/repo.git")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	url, err := getRepoURL()
+	if err != nil {
+		t.Fatalf("getRepoURL: %v", err)
+	}
+	if url != "https://example.com/org/repo.git" {
+		t.Errorf("url = %q, want %q", url, "https://example.com/org/repo.git")
+	}
+}
+
+// TestGetRepoURLScpStyleNonGitUser verifies that scp-style remotes with a
+// user other than "git" are accepted (e.g. "gitlab@host:org/repo.git").
+func TestGetRepoURLScpStyleNonGitUser(t *testing.T) {
+	dir, run := setupCleanTreeTestRepo(t)
+	run("git", "remote", "add", "origin", "gitlab@example.com:org/repo.git")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	url, err := getRepoURL()
+	if err != nil {
+		t.Fatalf("getRepoURL: %v", err)
+	}
+	if url != "gitlab@example.com:org/repo.git" {
+		t.Errorf("url = %q, want %q", url, "gitlab@example.com:org/repo.git")
+	}
+}
+
+// TestGetRepoURLInsteadOfAlias verifies that an origin configured via a
+// url.<base>.insteadOf alias resolves to the real clone URL, since
+// getRepoURL goes through `git remote get-url` rather than reading
+// remote.origin.url directly.
+func TestGetRepoURLInsteadOfAlias(t *testing.T) {
+	dir, run := setupCleanTreeTestRepo(t)
+	run("git", "config", "url.https://example.com/.insteadOf", "gl:")
+	run("git", "remote", "add", "origin", "gl:org/repo.git")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	url, err := getRepoURL()
+	if err != nil {
+		t.Fatalf("getRepoURL: %v", err)
+	}
+	if url != "https://example.com/org/repo.git" {
+		t.Errorf("url = %q, want the insteadOf-expanded URL", url)
+	}
+}
+
+// TestGetRepoURLLocalPathOnlyErrors verifies that a repo whose only remote
+// is a local path returns an error rather than that path.
+func TestGetRepoURLLocalPathOnlyErrors(t *testing.T) {
+	dir, run := setupCleanTreeTestRepo(t)
+	run("git", "remote", "add", "origin", "/srv/git/repo.git")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	url, err := getRepoURL()
+	if err == nil {
+		t.Fatalf("expected an error for a local-path-only remote, got url=%q", url)
 	}
 }

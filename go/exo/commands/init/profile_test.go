@@ -916,3 +916,58 @@ func TestRunProfileInitFreshNonGitDir(t *testing.T) {
 		t.Error("git-annex was not initialized after profile init in fresh dir")
 	}
 }
+
+func TestProfileConfigRoutingExample(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		existing bool
+		dryRun   bool
+	}{
+		{name: "new config"},
+		{name: "dry run", dryRun: true},
+		{name: "existing config", existing: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			oldWd, _ := os.Getwd()
+			if err := os.Chdir(t.TempDir()); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chdir(oldWd) })
+			content := "annex:\n  thin: true\n  routing:\n    - path: '*.csv'\n      to: git\n"
+			path := filepath.Join(".exohub", "config")
+			if tc.existing {
+				if err := os.MkdirAll(".exohub", 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			spec := &ProfileSpec{Templates: map[string]string{"config": content}}
+			if err := renderAndWrite(spec, profileTplData{}, tc.dryRun, tc.existing); err != nil {
+				t.Fatal(err)
+			}
+			if tc.dryRun {
+				if _, err := os.Stat(".exohub"); !os.IsNotExist(err) {
+					t.Fatalf("dry run wrote files: %v", err)
+				}
+				return
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.existing {
+				if string(data) != content {
+					t.Fatalf("existing config altered: %s", data)
+				}
+			} else if !strings.Contains(string(data), routingConfigExample) {
+				t.Fatalf("new profile config lacks example: %s", data)
+			}
+			cfg, err := LoadExohubConfig()
+			if err != nil || cfg.Annex == nil || cfg.Annex.Thin == nil || !*cfg.Annex.Thin || len(cfg.Annex.Routing) != 1 || cfg.Annex.Routing[0].To != "git" {
+				t.Fatalf("profile settings changed: %+v err=%v", cfg, err)
+			}
+		})
+	}
+}

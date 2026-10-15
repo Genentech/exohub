@@ -66,6 +66,9 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	// 4. Repo config (SKIP outside a repo)
 	results = append(results, runRepoChecks(repoDir)...)
 
+	// 4b. annex.routing validation and shadowed-rule warnings
+	results = append(results, runRoutingChecks(repoDir)...)
+
 	// 5. Grants & S3 access (per grants-enabled remote)
 	results = append(results, runGrantsChecks(repoDir, flagRemote, flagWriteTest)...)
 
