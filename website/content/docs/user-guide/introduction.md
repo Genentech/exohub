@@ -100,7 +100,7 @@ The `exo` command is your interface to ExoHub. Here are the commands you'll use 
 | `exo init` | Initialize a new repository or configure remotes |
 | `exo sync` | Bidirectional data synchronization with remotes |
 | `exo get` | Download specific files without a full sync |
-| `exo add` | Stage files with automatic text/binary routing |
+| `exo add` | Stage files with repository-level git/annex routing rules |
 | `exo broadcast` | Share metadata updates with remotes (no data transfer) |
 | `exo context` | Manage git host configurations (create, list, show, update, delete) |
 | `exo info` | Show repository and remote information |

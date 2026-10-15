@@ -33,6 +33,7 @@ import (
 
 var (
 	statusStyle   = lipgloss.NewStyle().Foreground(commandutil.ColorDarkOrange).Bold(true)
+	warnStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 	progressFull  = lipgloss.NewStyle().Foreground(commandutil.ColorPink).Render("█")
 	progressEmpty = lipgloss.NewStyle().Foreground(commandutil.ColorDim).Render("░")
 )
@@ -370,23 +371,26 @@ func runBundle(scope, fromRef, presetName, outputDir, targetRef string, includeH
 		}
 	}
 
+	// Bundle freezes ref = HEAD (or --ref) into bundle.json. If the working
+	// tree has uncommitted changes to tracked files, the bundle would publish
+	// state that differs from the recorded ref — abort before doing anything.
+	if err := checkWorkingTreeClean(outputDir); err != nil {
+		return err
+	}
+
 	// Dry-run: resolve all parameters, print summary, exit early
 	if dryRun {
-		var refHash, refName, refType string
-		if targetRef != "" {
-			cmd := commandutil.Command("git", "rev-parse", "--verify", targetRef)
-			out, err := cmd.Output()
-			if err != nil {
+		var refName, refType string
+		refHash, err := resolveTargetHash(targetRef)
+		if err != nil {
+			if targetRef != "" {
 				return fmt.Errorf("--ref %q does not resolve to a valid commit", targetRef)
 			}
-			refHash = strings.TrimSpace(string(out))
+			return fmt.Errorf("failed to resolve HEAD: %w", err)
+		}
+		if targetRef != "" {
 			refName, refType = resolveRefInfoFor(targetRef)
 		} else {
-			var err error
-			refHash, err = resolveHEAD()
-			if err != nil {
-				return fmt.Errorf("failed to resolve HEAD: %w", err)
-			}
 			refName, refType = resolveRefInfo()
 		}
 
@@ -453,44 +457,9 @@ func runBundle(scope, fromRef, presetName, outputDir, targetRef string, includeH
 		}
 	}
 
-	// Checkout target ref if needed (after all prompts and validation)
-	if targetRef != "" {
-		cmd := commandutil.Command("git", "rev-parse", "--verify", targetRef)
-		targetHash, err := cmd.Output()
-		if err != nil {
-			return fmt.Errorf("--ref %q does not resolve to a valid commit", targetRef)
-		}
-
-		cmd = commandutil.Command("git", "rev-parse", "HEAD")
-		currentHash, err := cmd.Output()
-		if err != nil {
-			return fmt.Errorf("failed to resolve HEAD: %w", err)
-		}
-
-		if strings.TrimSpace(string(targetHash)) != strings.TrimSpace(string(currentHash)) {
-			originalRef := ""
-			cmd = commandutil.Command("git", "symbolic-ref", "--short", "HEAD")
-			if out, err := cmd.Output(); err == nil {
-				originalRef = strings.TrimSpace(string(out))
-			} else {
-				originalRef = strings.TrimSpace(string(currentHash))
-			}
-
-			logStatus(fmt.Sprintf("Checking out %s...", targetRef))
-			cmd = commandutil.Command("git", "checkout", "--quiet", targetRef)
-			if out, err := cmd.CombinedOutput(); err != nil {
-				return fmt.Errorf("failed to checkout --ref %q: %s", targetRef, strings.TrimSpace(string(out)))
-			}
-
-			defer func() {
-				logStatus(fmt.Sprintf("Restoring %s...", originalRef))
-				cmd := commandutil.Command("git", "checkout", "--quiet", originalRef)
-				if out, err := cmd.CombinedOutput(); err != nil {
-					fmt.Fprintf(os.Stderr, "Warning: failed to restore %s: %s\n", originalRef, strings.TrimSpace(string(out)))
-				}
-			}()
-		}
-	}
+	// bundle reads committed state directly (git ls-tree / git cat-file at
+	// targetRef) rather than checking out the ref, so the working tree is
+	// never touched here — see buildBlobInfoMap and resolveTargetHash.
 
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create output directory: %w", err)
@@ -507,14 +476,21 @@ func runBundle(scope, fromRef, presetName, outputDir, targetRef string, includeH
 		var g errgroup.Group
 		g.Go(func() error {
 			var err error
-			headHash, err = resolveHEAD()
+			headHash, err = resolveTargetHash(targetRef)
 			if err != nil {
+				if targetRef != "" {
+					return fmt.Errorf("--ref %q does not resolve to a valid commit", targetRef)
+				}
 				return fmt.Errorf("failed to resolve HEAD: %w", err)
 			}
 			return nil
 		})
 		g.Go(func() error {
-			repoURL = getRepoURL()
+			var urlErr error
+			repoURL, urlErr = getRepoURL()
+			if urlErr != nil {
+				fmt.Fprintf(os.Stderr, "%s no usable git remote found — repo_url will be empty in bundle metadata (%v)\n", warnStyle.Render("⚠"), urlErr)
+			}
 			return nil
 		})
 		g.Go(func() error {
@@ -631,7 +607,7 @@ func runBundle(scope, fromRef, presetName, outputDir, targetRef string, includeH
 	// Always built because generateMarkdownArtifacts needs blob hashes/sizes
 	// regardless of scope.
 	var blobInfoMap map[string]blobInfo
-	blobInfoMap, err = buildBlobInfoMap(pathFilters)
+	blobInfoMap, err = buildBlobInfoMap(targetRef, pathFilters)
 	if err != nil {
 		return fmt.Errorf("failed to build blob info map: %w", err)
 	}
@@ -807,9 +783,13 @@ func resolveScopeDir() (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// resolveHEAD returns the full commit hash of HEAD.
-func resolveHEAD() (string, error) {
-	cmd := commandutil.Command("git", "rev-parse", "HEAD")
+// resolveTargetHash returns the full commit hash for ref, or for HEAD when
+// ref is empty.
+func resolveTargetHash(ref string) (string, error) {
+	if ref == "" {
+		ref = "HEAD"
+	}
+	cmd := commandutil.Command("git", "rev-parse", "--verify", ref)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", err
@@ -817,14 +797,94 @@ func resolveHEAD() (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// getRepoURL returns the git remote origin URL.
-func getRepoURL() string {
-	cmd := commandutil.Command("git", "remote", "get-url", "origin")
+// checkWorkingTreeClean aborts the bundle when tracked files differ from
+// HEAD (staged or unstaged), ignoring untracked files and anything under
+// outputDir. Without this, bundle.json freezes ref = HEAD while the bundle
+// content reflects uncommitted working-tree changes.
+func checkWorkingTreeClean(outputDir string) error {
+	// No commits yet: there is no committed ref for the bundle to be
+	// inconsistent with. Let the downstream ref resolution fail with its own
+	// clearer "failed to resolve HEAD" error instead of a diff error here.
+	if err := commandutil.Command("git", "rev-parse", "--verify", "HEAD").Run(); err != nil {
+		return nil
+	}
+
+	var excludeArgs []string
+	if excl, ok := excludePathspec(outputDir); ok {
+		excludeArgs = []string{excl}
+	}
+
+	diffArgs := append([]string{"diff", "--quiet", "HEAD", "--", "."}, excludeArgs...)
+	cmd := commandutil.Command("git", diffArgs...)
+	if err := cmd.Run(); err == nil {
+		return nil
+	}
+
+	nameArgs := append([]string{"diff", "--name-status", "HEAD", "--", "."}, excludeArgs...)
+	cmd = commandutil.Command("git", nameArgs...)
 	out, err := cmd.Output()
 	if err != nil {
-		return ""
+		return fmt.Errorf("failed to check working tree state: %w", err)
 	}
-	return strings.TrimSpace(string(out))
+
+	var paths []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		status, path := fields[0], fields[len(fields)-1]
+		label := "modified"
+		switch status[0] {
+		case 'A':
+			label = "added"
+		case 'D':
+			label = "deleted"
+		case 'R', 'C':
+			label = "renamed"
+		}
+		paths = append(paths, fmt.Sprintf("  %s: %s", label, path))
+	}
+
+	return fmt.Errorf("exo bundle: working tree has uncommitted changes to tracked files\n\n%s\n\nThe bundle records a ref (HEAD) but would publish state that differs from it.\nCommit your changes, then re-run. (Untracked files are ignored.)",
+		strings.Join(paths, "\n"))
+}
+
+// excludePathspec returns a `:(exclude)<path>` pathspec for outputDir,
+// relative to the repository root, when outputDir resolves to a location
+// inside the work tree. It returns ok=false when outputDir is outside the
+// repository (e.g. an absolute --output path like /tmp/bundle): git rejects
+// pathspecs outside the work tree, and no tracked file can live there
+// anyway, so the exclusion is unnecessary.
+func excludePathspec(outputDir string) (string, bool) {
+	abs, err := filepath.Abs(outputDir)
+	if err != nil {
+		return "", false
+	}
+
+	topOut, err := commandutil.Command("git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return "", false
+	}
+	top := strings.TrimSpace(string(topOut))
+
+	rel, err := filepath.Rel(top, abs)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return ":(exclude)" + rel, true
+}
+
+// getRepoURL returns the repository's canonical clone URL, resolved the same
+// way as the exo publish precondition (commandutil.ResolveCloneURL): prefer
+// "origin", fall back to another remote with a usable URL, and apply
+// url.insteadOf rewrites. err is non-nil when no remote has a usable clone
+// URL (e.g. no remote configured, or only local-path/file:// remotes).
+func getRepoURL() (url string, err error) {
+	return commandutil.ResolveCloneURL()
 }
 
 // resolveFromRef determines the start commit for the commit range.
@@ -1423,10 +1483,71 @@ func parseMarkdown(source []byte) (string, []Section, string, map[string][]strin
 	return title, sections, content, metadata
 }
 
-// readGitBlob reads a file's content from the git index (HEAD) without touching the working tree.
-func readGitBlob(path string) ([]byte, error) {
-	cmd := commandutil.Command("git", "show", "HEAD:"+path)
-	return cmd.Output()
+// readGitBlobsBatch reads the contents of multiple blobs in a single
+// `git cat-file --batch` invocation, keyed by blob hash (as obtained from
+// buildBlobInfoMap). This replaces one `git show <ref>:<path>` subprocess
+// per file with a single subprocess, and reads from the object database
+// directly rather than requiring the working tree to be checked out.
+func readGitBlobsBatch(hashes []string) (map[string][]byte, error) {
+	result := make(map[string][]byte, len(hashes))
+	if len(hashes) == 0 {
+		return result, nil
+	}
+
+	cmd := commandutil.Command("git", "cat-file", "--batch")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stdin pipe: %w", err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = &stderrBuf
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start git cat-file: %w", err)
+	}
+
+	go func() {
+		for _, h := range hashes {
+			fmt.Fprintln(stdin, h)
+		}
+		stdin.Close()
+	}()
+
+	reader := bufio.NewReader(stdout)
+	for _, hash := range hashes {
+		header, err := reader.ReadString('\n')
+		if err != nil {
+			return nil, fmt.Errorf("reading git cat-file header for %s: %w", hash, err)
+		}
+		fields := strings.Fields(header)
+		if len(fields) < 3 {
+			return nil, fmt.Errorf("unexpected git cat-file header for %s: %q", hash, header)
+		}
+		size, err := strconv.ParseInt(fields[2], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid size in git cat-file header for %s: %w", hash, err)
+		}
+		content := make([]byte, size)
+		if _, err := io.ReadFull(reader, content); err != nil {
+			return nil, fmt.Errorf("reading git cat-file content for %s: %w", hash, err)
+		}
+		if _, err := reader.ReadByte(); err != nil { // trailing newline after content
+			return nil, fmt.Errorf("reading git cat-file trailing newline for %s: %w", hash, err)
+		}
+		result[fields[0]] = content
+	}
+
+	if err := cmd.Wait(); err != nil {
+		if stderr := strings.TrimSpace(stderrBuf.String()); stderr != "" {
+			return nil, fmt.Errorf("git cat-file failed: %s", stderr)
+		}
+		return nil, fmt.Errorf("git cat-file failed: %w", err)
+	}
+
+	return result, nil
 }
 
 // generateMarkdownArtifacts generates per-file artifact JSONs for markdown files.
@@ -1488,6 +1609,18 @@ func generateMarkdownArtifacts(filesDir, headHash, repoURL string, preset Preset
 	if progress == nil {
 		logStatus(fmt.Sprintf("Processing %d markdown files...", len(eligible)))
 	}
+
+	hashes := make([]string, 0, len(eligible))
+	for _, line := range eligible {
+		if info, ok := blobInfoMap[line]; ok && info.Hash != "" {
+			hashes = append(hashes, info.Hash)
+		}
+	}
+	blobContents, err := readGitBlobsBatch(hashes)
+	if err != nil {
+		return 0, 0, markdownFiles, fmt.Errorf("failed to read markdown blob contents: %w", err)
+	}
+
 	count := 0
 	var totalSize int64
 	for _, line := range eligible {
@@ -1495,10 +1628,9 @@ func generateMarkdownArtifacts(filesDir, headHash, repoURL string, preset Preset
 		blobHash, size := info.Hash, info.Size
 		fileCommits := expandCommits(pathCommits[line], commitMap)
 
-		// Read file content from git and parse markdown
-		source, err := readGitBlob(line)
-		if err != nil {
-			return count, totalSize, markdownFiles, fmt.Errorf("failed to read %s from git: %w", line, err)
+		source, ok := blobContents[blobHash]
+		if !ok {
+			return count, totalSize, markdownFiles, fmt.Errorf("failed to read %s from git: blob %s not found", line, blobHash)
 		}
 		title, sections, content, mdMetadata := parseMarkdown(source)
 
@@ -2191,11 +2323,16 @@ func expandCommits(hashes []string, commitMap map[string]Commit) []Commit {
 	return result
 }
 
-// buildBlobInfoMap runs a single `git ls-tree -r -l HEAD` and returns a map
-// from file path to its blob hash and size. This replaces N per-file
-// getGitBlobInfo calls with a single subprocess.
-func buildBlobInfoMap(pathFilters []string) (map[string]blobInfo, error) {
-	args := []string{"ls-tree", "-r", "-l", "HEAD"}
+// buildBlobInfoMap runs a single `git ls-tree -r --long <targetRef>` (HEAD
+// when targetRef is empty) and returns a map from file path to its blob hash
+// and size. This replaces N per-file getGitBlobInfo calls with a single
+// subprocess.
+func buildBlobInfoMap(targetRef string, pathFilters []string) (map[string]blobInfo, error) {
+	ref := targetRef
+	if ref == "" {
+		ref = "HEAD"
+	}
+	args := []string{"ls-tree", "-r", "--long", ref}
 	if len(pathFilters) > 0 {
 		args = append(args, "--")
 		args = append(args, pathFilters...)

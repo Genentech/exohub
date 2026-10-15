@@ -15,6 +15,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/Genentech/exohub/go/exo/commands/login"
+	"github.com/Genentech/exohub/go/exo/commandutil"
 	"github.com/Genentech/exohub/go/exo/configdir"
 	"github.com/Genentech/exohub/go/exo/internal/defaults"
 )
@@ -156,7 +157,7 @@ func checkGitAnnexInit() []CheckResult {
 	// We use `git config --get-regexp remote\..*\.url` to list only remotes that
 	// have a real fetch URL, then filter to http/https/git/ssh schemes.
 	remoteID := "repo.git-remote"
-	gitRemotes := listGitFetchRemotes()
+	gitRemotes := commandutil.ListGitFetchRemotes()
 	allRemoteOut, _ := exec.Command("git", "remote").Output()
 	allRemoteNames := strings.Fields(strings.TrimSpace(string(allRemoteOut)))
 
@@ -383,49 +384,6 @@ func buildUUIDMap() map[string]string {
 		m[uuid] = name
 	}
 	return m
-}
-
-// listGitFetchRemotes returns the names of git remotes that have a real fetch
-// URL (http/https/git/ssh schemes). git-annex special remotes (S3, rsync…) are
-// stored in git config with annex-specific keys but no remote.<name>.url, so
-// they do not appear in this list.
-func listGitFetchRemotes() []string {
-	out, err := exec.Command("git", "config", "--get-regexp", `remote\..*\.url`).Output()
-	if err != nil {
-		return nil
-	}
-	var names []string
-	seen := make(map[string]bool)
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		parts := strings.Fields(line)
-		if len(parts) != 2 {
-			continue
-		}
-		// key is like remote.origin.url, value is the URL
-		key, url := parts[0], parts[1]
-		if !strings.HasPrefix(key, "remote.") || !strings.HasSuffix(key, ".url") {
-			continue
-		}
-		// Only count remotes whose URL looks like a git server (not s3://, not nourl)
-		lowerURL := strings.ToLower(url)
-		if !strings.HasPrefix(lowerURL, "http") &&
-			!strings.HasPrefix(lowerURL, "git@") &&
-			!strings.HasPrefix(lowerURL, "ssh://") &&
-			!strings.HasPrefix(lowerURL, "git://") {
-			continue
-		}
-		name := strings.TrimPrefix(key, "remote.")
-		name = strings.TrimSuffix(name, ".url")
-		if !seen[name] {
-			seen[name] = true
-			names = append(names, name)
-		}
-	}
-	return names
 }
 
 // currentUsername resolves the caller's username from the JWT or OS.

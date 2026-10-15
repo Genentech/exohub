@@ -6,13 +6,15 @@ import (
 	"os"
 	"strings"
 
+	addcmd "github.com/Genentech/exohub/go/exo/commands/add"
 	gomcp "github.com/mark3labs/mcp-go/mcp"
 )
 
 type addResult struct {
-	GitFiles    []string `json:"git_files,omitempty"`
-	AnnexFiles  []string `json:"annex_files,omitempty"`
-	AddURLFiles []string `json:"addurl_files,omitempty"`
+	GitFiles    []string          `json:"git_files,omitempty"`
+	AnnexFiles  []string          `json:"annex_files,omitempty"`
+	AddURLFiles []string          `json:"addurl_files,omitempty"`
+	Reasons     map[string]string `json:"reasons,omitempty"`
 }
 
 func handleAdd(_ context.Context, request gomcp.CallToolRequest) (*gomcp.CallToolResult, error) {
@@ -60,11 +62,6 @@ func handleAdd(_ context.Context, request gomcp.CallToolRequest) (*gomcp.CallToo
 	}
 	args = append(args, paths...)
 
-	out, err := runInDir(repoDir, args...)
-	if err != nil {
-		return resultError("exo add failed: %s", out)
-	}
-
 	// Categorize paths for the response based on what we know about the inputs
 	var urlPaths, localPaths []string
 	for _, p := range paths {
@@ -75,6 +72,18 @@ func handleAdd(_ context.Context, request gomcp.CallToolRequest) (*gomcp.CallToo
 		}
 	}
 
+	var plan []addcmd.PlannedFile
+	if mode == "auto" && len(localPaths) > 0 {
+		plan, err = addcmd.PlanAutoAdd(repoDir, localPaths, "")
+		if err != nil {
+			return resultError("cannot plan exo add: %v", err)
+		}
+	}
+	out, err := runInDir(repoDir, args...)
+	if err != nil {
+		return resultError("exo add failed: %s", out)
+	}
+
 	result := addResult{AddURLFiles: urlPaths}
 	switch mode {
 	case "annex":
@@ -82,10 +91,7 @@ func handleAdd(_ context.Context, request gomcp.CallToolRequest) (*gomcp.CallToo
 	case "git":
 		result.GitFiles = localPaths
 	default:
-		// In auto mode we don't know the split without re-detecting;
-		// report all local paths under annex_files for simplicity since
-		// the actual routing is handled by exo add.
-		result.AnnexFiles = localPaths
+		applyAutoPlan(&result, plan)
 	}
 
 	return resultJSON(result)
@@ -105,4 +111,16 @@ func mcpIsURL(arg string) bool {
 		return true
 	}
 	return false
+}
+
+func applyAutoPlan(result *addResult, plan []addcmd.PlannedFile) {
+	result.Reasons = make(map[string]string, len(plan))
+	for _, file := range plan {
+		if file.Backend == addcmd.Annex {
+			result.AnnexFiles = append(result.AnnexFiles, file.Path)
+		} else {
+			result.GitFiles = append(result.GitFiles, file.Path)
+		}
+		result.Reasons[file.Path] = file.Reason
+	}
 }

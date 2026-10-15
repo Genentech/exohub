@@ -26,9 +26,9 @@ import (
 
 	initcmd "github.com/Genentech/exohub/go/exo/commands/init"
 	"github.com/Genentech/exohub/go/exo/commandutil"
-	"github.com/Genentech/exohub/go/exo/configdir"
 	manifestutil "github.com/Genentech/exohub/go/exo/commandutil"
 	logging "github.com/Genentech/exohub/go/exo/commandutil/logging"
+	"github.com/Genentech/exohub/go/exo/configdir"
 	"github.com/Genentech/exohub/go/exo/internal/defaults"
 	"github.com/Genentech/exohub/go/exo/palette"
 )
@@ -46,6 +46,12 @@ type dryRunResult struct {
 
 const (
 	longText = `Sync git-annex content and record bad files.
+
+Catalog publishing:
+  --bundle-dir selects one existing bundle directory (relative or absolute).
+  Version comes from bundle.json, not HEAD or the directory name.
+  Without it, selection remains automatic. --path filters annex files, not bundles.
+  Example: exo sync --with exohub-atlas --bundle-dir .exohub/bundles/v1
 
 Filtering options (for import and annex remotes):
   --include and --exclude accept git-annex glob patterns:
@@ -128,6 +134,7 @@ func NewCommand() *cobra.Command {
 	var logPrefix string
 	var jobsFlag string
 	var noContent bool
+	var bundleDir string
 
 	rootCmd := &cobra.Command{
 		Use:   "sync",
@@ -142,10 +149,15 @@ func NewCommand() *cobra.Command {
 				fmt.Fprintln(os.Stderr, "--json requires --dry-run")
 				os.Exit(1)
 			}
-			runSync(manifestPath, withRemotes, paths, includePatterns, excludePatterns, importDir, dryRun, outputJSON, logPrefix, jobsFlag, noContent)
+			if cmd.Flags().Changed("bundle-dir") && strings.TrimSpace(bundleDir) == "" {
+				fmt.Fprintln(os.Stderr, "--bundle-dir requires a non-empty directory")
+				os.Exit(1)
+			}
+			runSync(manifestPath, withRemotes, paths, includePatterns, excludePatterns, importDir, dryRun, outputJSON, logPrefix, jobsFlag, noContent, bundleDir)
 		},
 	}
 
+	rootCmd.Flags().StringVar(&bundleDir, "bundle-dir", "", "Publish one existing bundle directory (catalog remotes only; not an annex file filter)")
 	rootCmd.Flags().StringVar(&manifestPath, "manifest", "", "Manifest YAML file")
 	rootCmd.Flags().StringArrayVar(&withRemotes, "with", nil, "Annex remote to sync")
 	rootCmd.Flags().StringArrayVar(&paths, "path", nil, "Path to limit sync (repeatable)")
@@ -161,7 +173,8 @@ func NewCommand() *cobra.Command {
 	return rootCmd
 }
 
-func runSync(manifestPath string, withRemotes []string, paths []string, includePatterns []string, excludePatterns []string, importDir string, dryRun bool, outputJSON bool, logPrefix string, jobsFlag string, noContent bool) {
+func runSync(manifestPath string, withRemotes []string, paths []string, includePatterns []string, excludePatterns []string, importDir string, dryRun bool, outputJSON bool, logPrefix string, jobsFlag string, noContent bool, selectedBundle ...string) {
+	bundleDir := selectedBundleDir(selectedBundle)
 	if err := requireBins("git-annex"); err != nil {
 		os.Exit(127)
 	}
@@ -231,8 +244,22 @@ func runSync(manifestPath string, withRemotes []string, paths []string, includeP
 		os.Exit(1)
 	}
 
+	if bundleDir != "" {
+		if len(withRemotes) == 0 {
+			withRemotes, err = listAnnexRemotes()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+		}
+		if err := validateBundleSelection(withRemotes, remotesConfig, bundleDir); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
+
 	if dryRun {
-		if err := runDryRun(withRemotes, expandedPaths, outputJSON, jobs, logPrefix, remotesConfig); err != nil {
+		if err := runDryRun(withRemotes, expandedPaths, outputJSON, jobs, logPrefix, remotesConfig, bundleDir); err != nil {
 			fmt.Fprintln(os.Stderr, err.Error())
 			os.Exit(1)
 		}
@@ -308,7 +335,7 @@ func runSync(manifestPath string, withRemotes []string, paths []string, includeP
 				os.Exit(1)
 			}
 			// Check publish_on constraint
-			if shouldSkipPublish(remote, remotesConfig) {
+			if bundleDir == "" && shouldSkipPublish(remote, remotesConfig) {
 				fmt.Printf("💎  Skipping catalog remote '%s' (publish_on: tag, HEAD is not a tag)\n", remote)
 				continue
 			}
@@ -324,7 +351,7 @@ func runSync(manifestPath string, withRemotes []string, paths []string, includeP
 				fmt.Printf("  grants:       %v\n", rc.Grants)
 				continue
 			}
-			if err := syncCatalogRemote(remote, remotesConfig, catalogBinary); err != nil {
+			if err := syncCatalogRemote(remote, remotesConfig, catalogBinary, bundleDir); err != nil {
 				fmt.Fprintf(os.Stderr, "Publish failed for '%s': %v\n", remote, err)
 				os.Exit(1)
 			}
@@ -491,13 +518,22 @@ func runSync(manifestPath string, withRemotes []string, paths []string, includeP
 	}
 }
 
-func runDryRun(withRemotes []string, paths []string, outputJSON bool, jobs string, logPrefix string, remotesConfig *initcmd.RemotesConfig) error {
+func runDryRun(withRemotes []string, paths []string, outputJSON bool, jobs string, logPrefix string, remotesConfig *initcmd.RemotesConfig, selectedBundle ...string) error {
+	bundleDir := selectedBundleDir(selectedBundle)
 	remotes := withRemotes
 	if len(remotes) == 0 {
 		var err error
 		remotes, err = listAnnexRemotes()
 		if err != nil {
 			return err
+		}
+	}
+	if bundleDir != "" {
+		if err := validateBundleSelection(remotes, remotesConfig, bundleDir); err != nil {
+			return err
+		}
+		if outputJSON {
+			return fmt.Errorf("--json is not supported with --bundle-dir; use text --dry-run for catalog publishing")
 		}
 	}
 	if outputJSON {
@@ -564,6 +600,14 @@ func runDryRun(withRemotes []string, paths []string, outputJSON bool, jobs strin
 				fmt.Fprintf(writer, "  instance-url: %s\n", rc.InstanceURL)
 			}
 			fmt.Fprintf(writer, "  grants:       %v\n", rc.Grants)
+			if bundleDir != "" {
+				info, err := readSelectedBundle(bundleDir)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(writer, "  bundle-dir:   %s\n  ref-name:     %s\n  ref:          %s\n", bundleDir, info.RefName, info.Ref)
+			}
+
 		} else if isImportRemote(remote) {
 			// Handle import remotes specially: use S3 API directly
 			if err := runImportDryRun(writer, remote, jobs); err != nil {
@@ -2768,7 +2812,7 @@ type bundleManifest struct {
 
 // syncCatalogRemote delegates publishing to a catalog remote's binary.
 // The binary is called with: <binary> publish --s3url=... --bundle-dir=... [--artifactdb-dir=...] [--grants] [--instance-url=...] [--api-url=...]
-func syncCatalogRemote(remote string, remotesConfig *initcmd.RemotesConfig, binaryName string) error {
+func syncCatalogRemote(remote string, remotesConfig *initcmd.RemotesConfig, binaryName string, selectedBundle ...string) error {
 	rc := getRemoteConfigByName(remote, remotesConfig)
 	if rc == nil {
 		return fmt.Errorf("remote '%s' not found in .exohub/remotes", remote)
@@ -2778,9 +2822,23 @@ func syncCatalogRemote(remote string, remotesConfig *initcmd.RemotesConfig, bina
 	fmt.Printf("💎↑ Publishing to catalog remote '%s' via %s\n", remoteStyle.Render(remote), binaryName)
 
 	// Find bundle directory
-	bundleDir, _, _, _, err := findBundleInfoForNotification()
-	if err != nil {
-		return fmt.Errorf("no bundle output found (run 'exo bundle' first): %w", err)
+	bundleDir := selectedBundleDir(selectedBundle)
+	var repoURL string
+	if bundleDir != "" {
+		info, err := readSelectedBundle(bundleDir)
+		if err != nil {
+			return err
+		}
+		repoURL = info.RepoURL
+	} else {
+		var err error
+		bundleDir, _, _, repoURL, err = findBundleInfoForNotification()
+		if err != nil {
+			return fmt.Errorf("no bundle output found (run 'exo bundle' first): %w", err)
+		}
+	}
+	if repoURL == "" {
+		return fmt.Errorf("bundle has no repo_url (no git remote configured) — refusing to sync to catalog remote %q; configure a git remote and re-run 'exo bundle'", remote)
 	}
 
 	// Build publish command args
@@ -2879,4 +2937,44 @@ func findBundleInfoForNotification() (bundleDir, refName, ref, repoURL string, e
 	}
 
 	return dir, manifest.RefName, manifest.Ref, manifest.RepoURL, nil
+}
+
+func selectedBundleDir(selection []string) string {
+	if len(selection) > 0 {
+		return selection[0]
+	}
+	return ""
+}
+
+func validateBundleSelection(remotes []string, config *initcmd.RemotesConfig, dir string) error {
+	for _, remote := range remotes {
+		if isCatalogRemoteType(remote, config) {
+			_, err := readSelectedBundle(dir)
+			return err
+		}
+	}
+	return fmt.Errorf("--bundle-dir requires at least one selected catalog remote (use --with)")
+}
+
+func readSelectedBundle(dir string) (bundleManifest, error) {
+	var manifest bundleManifest
+	info, err := os.Stat(dir)
+	if err != nil {
+		return manifest, fmt.Errorf("invalid --bundle-dir %q: %w", dir, err)
+	}
+	if !info.IsDir() {
+		return manifest, fmt.Errorf("invalid --bundle-dir %q: not a directory", dir)
+	}
+	path := filepath.Join(dir, "bundle.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return manifest, fmt.Errorf("invalid selected bundle %q: %w", path, err)
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return manifest, fmt.Errorf("invalid selected bundle %q: %w", path, err)
+	}
+	if strings.TrimSpace(manifest.RefName) == "" || strings.TrimSpace(manifest.Ref) == "" || strings.TrimSpace(manifest.RepoURL) == "" {
+		return manifest, fmt.Errorf("invalid selected bundle %q: ref_name, ref and repo_url are required", path)
+	}
+	return manifest, nil
 }

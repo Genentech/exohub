@@ -1,6 +1,7 @@
 package defaults
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -17,6 +18,33 @@ func TestAPIBase_Builtin(t *testing.T) {
 	got := APIBase()
 	if got != builtinAPIBase {
 		t.Errorf("APIBase() = %q, want builtin %q", got, builtinAPIBase)
+	}
+}
+
+func TestBaseURL_EnvOverride(t *testing.T) {
+	t.Setenv("EXOHUB_BASE_URL", "https://custom.example.com/")
+	got := BaseURL()
+	if got != "https://custom.example.com" {
+		t.Errorf("BaseURL() = %q, want %q", got, "https://custom.example.com")
+	}
+}
+
+func TestBaseURL_FromAPIBase(t *testing.T) {
+	t.Setenv("EXOHUB_BASE_URL", "")
+	t.Setenv("EXOHUB_API_URL", "https://custom.example.com/api")
+	got := BaseURL()
+	if got != "https://custom.example.com" {
+		t.Errorf("BaseURL() = %q, want %q", got, "https://custom.example.com")
+	}
+}
+
+func TestBaseURL_Builtin(t *testing.T) {
+	t.Setenv("EXOHUB_BASE_URL", "")
+	t.Setenv("EXOHUB_API_URL", "")
+	got := BaseURL()
+	want := strings.TrimSuffix(strings.TrimRight(builtinAPIBase, "/"), "/api")
+	if got != want {
+		t.Errorf("BaseURL() = %q, want builtin-derived %q", got, want)
 	}
 }
 
@@ -107,5 +135,21 @@ func TestUpgradeURL_Builtin(t *testing.T) {
 	got := UpgradeURL()
 	if got != builtinUpgradeURL {
 		t.Errorf("UpgradeURL() = %q, want builtin %q", got, builtinUpgradeURL)
+	}
+}
+
+func TestInstallCmd_EnvOverride(t *testing.T) {
+	t.Setenv("EXOHUB_INSTALL_CMD", "curl -fsSL https://example.com/install.sh | sh")
+	got := InstallCmd()
+	if got != "curl -fsSL https://example.com/install.sh | sh" {
+		t.Errorf("InstallCmd() = %q, want %q", got, "curl -fsSL https://example.com/install.sh | sh")
+	}
+}
+
+func TestInstallCmd_Builtin(t *testing.T) {
+	t.Setenv("EXOHUB_INSTALL_CMD", "")
+	got := InstallCmd()
+	if got != builtinInstallCmd {
+		t.Errorf("InstallCmd() = %q, want builtin %q", got, builtinInstallCmd)
 	}
 }

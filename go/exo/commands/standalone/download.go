@@ -13,7 +13,7 @@ import (
 	"strings"
 )
 
-const versitygwVersion = "v1.0.10"
+const versitygwVersion = "v1.8.0"
 const surrealVersion = "v3.2.4"
 
 // binarySpec describes how to fetch a stack binary from GitHub releases.
@@ -36,7 +36,10 @@ var binarySpecs = map[string]binarySpec{
 			if assetOS == "" || assetArch == "" {
 				return "", fmt.Errorf("unsupported platform %s/%s — install versitygw manually", goos, goarch)
 			}
-			return fmt.Sprintf("versitygw_%s_%s_%s.tar.gz", version[1:], assetOS, assetArch), nil
+			// versitygw release assets KEEP the leading "v" in the filename
+			// (e.g. versitygw_v1.0.10_Darwin_arm64.tar.gz), unlike the other
+			// binaries here. Do not strip it.
+			return fmt.Sprintf("versitygw_%s_%s_%s.tar.gz", version, assetOS, assetArch), nil
 		},
 		innerBinary:   "versitygw",
 		checksumAsset: func(version string) string { return "" },

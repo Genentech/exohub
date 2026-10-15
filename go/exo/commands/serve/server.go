@@ -18,6 +18,7 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/Genentech/exohub/go/exo/internal/defaults"
 	"github.com/Genentech/exohub/go/exo/palette"
 )
 
@@ -116,6 +117,8 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 		html := string(data)
 		html = strings.ReplaceAll(html, "__EXOHUB_CATALOG_URL__", s.catalogURL)
 		html = strings.ReplaceAll(html, "__EXOHUB_THEMES__", buildThemesJSON())
+		installCmdJSON, _ := json.Marshal(defaults.InstallCmd())
+		html = strings.ReplaceAll(html, "__EXOHUB_INSTALL_CMD__", string(installCmdJSON))
 		if BasePath != "" {
 			baseTag := fmt.Sprintf(`<base href="%s/">`, BasePath)
 			html = strings.Replace(html, "<title>", baseTag+"\n  <title>", 1)

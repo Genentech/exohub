@@ -41,9 +41,11 @@ Directory layout under `EXO_CONFIG_DIR`:
 |----------|-------------|---------|
 | `EXOHUB_CONTEXT` | Active context name (alternative to `--context` flag) | _(none)_ |
 | `EXOHUB_JOBS` | Parallel jobs for sync, get, export, copy, fsck, and add operations | `1` |
+| `EXOHUB_LARGE_TEXT_THRESHOLD` | Override the fallback large-text threshold used by `exo add`'s auto routing (e.g. `1MiB`). A `--large-text-threshold` flag takes precedence over this variable. Never overrides an explicit `annex.routing` rule. | `5MiB` |
 | `EXOHUB_API_URL` | ExoHub API endpoint | _(none — must be set or provided by your ExoHub deployment)_ |
 | `EXOHUB_GIT_HOST` | Default git host URL used by the built-in `default` context. Useful when deploying ExoHub against a custom GitLab or GitHub instance. | _(built-in on internal binary; none on OSS build)_ |
 | `EXOHUB_CATALOG_URL` | ArtifactDB catalog URL for `exo atlas` and `exo download` | _(auto-resolved from context)_ |
+| `EXOHUB_BASE_URL` | ExoHub host root URL (no `/api` suffix), used for endpoints outside `/api` such as the `/eds` index resolved by `exo download --eds` | _(derived from `EXOHUB_API_URL`/built-in API base with any trailing `/api` stripped)_ |
 | `EXOHUB_PROFILE` | Profile name to apply when running `exo init` in a new directory (equivalent to `--profile`; ignored if the current directory is already a git repository) | _(none)_ |
 | `EXOHUB_TPL_<NAME>` | Expose an environment variable to profile templates as `.<NAME>` (top-level, e.g. `EXOHUB_TPL_BUCKET` → `.BUCKET`) | _(none)_ |
 | `EXO_UPGRADE_URL` | URL of the upgrade script used by `exo upgrade`. Must use `https://`. Overrides the built-in default when set. The internal binary has a built-in default; the open-source build has none (`exo upgrade` fails if neither built-in nor env var is set). | _(built-in on internal binary; none on OSS build)_ |

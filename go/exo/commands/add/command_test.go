@@ -3,6 +3,8 @@ package add
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -186,7 +188,10 @@ func TestSplitArgs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			locals, urls, flags := splitArgs(tt.args)
+			locals, urls, flags, _, _, _, _, _, err := splitArgs(tt.args)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if !reflect.DeepEqual(locals, tt.locals) {
 				t.Errorf("locals = %v, want %v", locals, tt.locals)
 			}
@@ -321,6 +326,192 @@ func TestClassifyFiles(t *testing.T) {
 			t.Errorf("expected 0 large text files, got %d", len(largeText))
 		}
 	})
+}
+
+// TestClassifyFilesRespectsGitignore reproduces issue #108: a directory
+// expansion must skip .gitignore'd paths uniformly across every MIME route
+// (git for text/JSON, annex for binary, largeText for oversized text), not
+// just some of them.
+func TestClassifyFilesRespectsGitignore(t *testing.T) {
+	dir := initGitRepo(t)
+	orig, _ := os.Getwd()
+	defer os.Chdir(orig)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	mustWrite := func(rel string, content []byte) {
+		full := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, content, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	mustWrite(".gitignore", []byte("ignored/\n"))
+	mustWrite("ignored/out.json", []byte(`{"x":1}`))        // git route (JSON)
+	mustWrite("ignored/blob.bin", []byte{0x00, 0x01, 0x02}) // annex route (binary)
+	mustWrite("ignored/small.txt", []byte("hello\n"))       // git route (small text)
+	big := bytes.Repeat([]byte("a"), largeTextFileThreshold+1)
+	mustWrite("ignored/big.txt", big) // largeText route
+	mustWrite("README.md", []byte("# keep\n"))
+
+	git, annex, largeText := classifyFiles([]string{"."})
+
+	var all []string
+	all = append(all, git...)
+	all = append(all, annex...)
+	all = append(all, largeText...)
+	for _, f := range all {
+		if strings.HasPrefix(filepath.ToSlash(f), "ignored/") {
+			t.Errorf("ignored path %q was classified; should have been skipped (git=%v annex=%v largeText=%v)", f, git, annex, largeText)
+		}
+	}
+
+	found := false
+	for _, f := range git {
+		if f == "README.md" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected README.md to still be classified, got git=%v", git)
+	}
+}
+
+// TestClassifyFilesExcludesDotGit ensures the git-aware enumerator never
+// walks into .git, so git/git-annex internals are never MIME-sniffed or
+// passed as explicit add arguments.
+func TestClassifyFilesExcludesDotGit(t *testing.T) {
+	dir := initGitRepo(t)
+	orig, _ := os.Getwd()
+	defer os.Chdir(orig)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hi"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	git, annex, largeText := classifyFiles([]string{"."})
+	var all []string
+	all = append(all, git...)
+	all = append(all, annex...)
+	all = append(all, largeText...)
+	for _, f := range all {
+		if strings.HasPrefix(filepath.ToSlash(f), ".git/") || f == ".git" {
+			t.Fatalf(".git contents were classified: %q (all=%v)", f, all)
+		}
+	}
+}
+
+// TestCollectFilesRespectsGitignore covers the --force migration path
+// (migrateToAnnex/migrateToGit), which shares the same enumerator.
+func TestCollectFilesRespectsGitignore(t *testing.T) {
+	dir := initGitRepo(t)
+	orig, _ := os.Getwd()
+	defer os.Chdir(orig)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("ignored/\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "ignored"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ignored", "x.bin"), []byte{0x00}, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "keep.txt"), []byte("hi"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	files := collectFiles([]string{"."})
+	for _, f := range files {
+		if strings.HasPrefix(filepath.ToSlash(f), "ignored/") {
+			t.Errorf("collectFiles returned ignored path %q (all=%v)", f, files)
+		}
+	}
+	found := false
+	for _, f := range files {
+		if f == "keep.txt" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected keep.txt in collected files, got %v", files)
+	}
+}
+
+// TestListGitAwareFilesFallsBackOutsideRepo ensures a directory outside any
+// git working tree still gets walked (no silent empty result) when the
+// ignore-aware git invocation can't run.
+func TestListGitAwareFilesFallsBackOutsideRepo(t *testing.T) {
+	dir := t.TempDir() // not a git repo, and (via t.TempDir) outside this repo's worktree
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hi"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "sub", "b.txt"), []byte("hi"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := listGitAwareFiles(dir)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 files via fallback walk, got %d: %v", len(got), got)
+	}
+}
+
+// TestExecCommandBatched verifies large file lists are chunked across
+// multiple invocations instead of exceeding argv limits in one call.
+func TestExecCommandBatched(t *testing.T) {
+	var calls [][]string
+	origPath, err := exec.LookPath("true")
+	if err != nil {
+		t.Skip("'true' not in PATH")
+	}
+	_ = origPath
+
+	// We can't easily intercept exec.Command inside execCommand without a
+	// seam, so instead verify the chunk boundaries directly via the batching
+	// arithmetic by calling execCommandBatched against a no-op command and
+	// counting invocations through a side-effect file.
+	tmp := t.TempDir()
+	counterScript := filepath.Join(tmp, "count.sh")
+	script := "#!/bin/sh\necho \"$#\" >> \"" + filepath.Join(tmp, "counts.txt") + "\"\n"
+	if err := os.WriteFile(counterScript, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	files := make([]string, maxFilesPerBatch+1)
+	for i := range files {
+		files[i] = fmt.Sprintf("f%d", i)
+	}
+	if err := execCommandBatched(counterScript, nil, files); err != nil {
+		t.Fatalf("execCommandBatched: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(tmp, "counts.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Fields(strings.TrimSpace(string(data)))
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 batched invocations, got %d (%v)", len(lines), lines)
+	}
+	if lines[0] != fmt.Sprintf("%d", maxFilesPerBatch) {
+		t.Errorf("first batch size = %s, want %d", lines[0], maxFilesPerBatch)
+	}
+	if lines[1] != "1" {
+		t.Errorf("second batch size = %s, want 1", lines[1])
+	}
+	_ = calls
 }
 
 func TestBuildAddURLArgs(t *testing.T) {
@@ -684,4 +875,495 @@ func TestReconcileExecBit(t *testing.T) {
 			t.Errorf("index mode = %q, want 100755 (subdirectory case broken if 100644)", got)
 		}
 	})
+}
+
+// initGitAnnexRepo creates a temporary git+git-annex repo, chdirs the test
+// process into it, and returns a restore func to chdir back. It skips the
+// test when git-annex is not available in PATH.
+func initGitAnnexRepo(t *testing.T) (dir string, restore func()) {
+	t.Helper()
+	if _, err := exec.LookPath("git-annex"); err != nil {
+		t.Skip("git-annex not in PATH")
+	}
+	dir = t.TempDir()
+	// git-annex stores object files read-only; make everything writable
+	// before t.TempDir() cleanup tries to remove it.
+	t.Cleanup(func() {
+		filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil
+			}
+			return os.Chmod(p, info.Mode()|0o700)
+		})
+	})
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "HOME="+dir, "GIT_CONFIG_NOSYSTEM=1")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("command %v: %v\n%s", args, err, out)
+		}
+	}
+	run("git", "init")
+	run("git", "config", "user.email", "test@example.com")
+	run("git", "config", "user.name", "Test")
+	run("git", "annex", "init", "testrepo")
+
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	return dir, func() { os.Chdir(orig) }
+}
+
+// TestAddDirSkipsIgnoredFilesConsistently is an end-to-end regression test
+// for issue #108: `exo add <dir>` must skip .gitignore'd paths uniformly
+// across both the git route (text/JSON) and the annex route (binary), exit
+// 0, and never partially stage when an ignored path would otherwise have
+// aborted the git-route invocation.
+func TestAddDirSkipsIgnoredFilesConsistently(t *testing.T) {
+	_, restore := initGitAnnexRepo(t)
+	defer restore()
+
+	write := func(rel string, content []byte) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(rel), 0755); err != nil && filepath.Dir(rel) != "." {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(rel, content, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Mirrors the issue's downstream motivation: exo publish writes
+	// .exohub/bundles/*/bundle.json (JSON -> git route) after each commit;
+	// .gitignore'ing it must not abort `exo add .`, and the unrelated
+	// data.bin (binary -> annex route) must still get staged in the same run.
+	write(".gitignore", []byte(".exohub/bundles\n"))
+	write(".exohub/bundles/bundle.json", []byte(`{"a":1}`))
+	write("data.bin", []byte{0x00, 0x01, 0x02, 0x03})
+	write("README.md", []byte("keep\n"))
+
+	cmd := NewCommand()
+	cmd.SetArgs([]string{"."})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("exo add . returned error (should skip ignored paths and exit 0): %v", err)
+	}
+
+	out, err := exec.Command("git", "status", "--porcelain").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := string(out)
+	if strings.Contains(status, "bundle.json") {
+		t.Errorf("ignored bundle.json was staged:\n%s", status)
+	}
+	if !strings.Contains(status, "data.bin") {
+		t.Errorf("data.bin (non-ignored, annex route) was NOT staged (non-atomic failure regression):\n%s", status)
+	}
+	if !strings.Contains(status, "README.md") {
+		t.Errorf("README.md was not staged:\n%s", status)
+	}
+}
+
+// TestAddExplicitIgnoredPathStillErrors ensures a path named directly on the
+// command line (not discovered via directory expansion) keeps today's error
+// behavior when it is .gitignore'd, matching plain `git add <ignored-file>`.
+// Only paths exo discovers itself while expanding a directory should be
+// silently skipped.
+func TestAddExplicitIgnoredPathStillErrors(t *testing.T) {
+	_, restore := initGitAnnexRepo(t)
+	defer restore()
+
+	if err := os.MkdirAll("ignored", 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(".gitignore", []byte("ignored/\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("ignored/small.txt", []byte("hello\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := NewCommand()
+	cmd.SetArgs([]string{"ignored/small.txt"})
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("expected exo add <explicit ignored path> to fail, matching git add's behavior")
+	}
+}
+
+// TestCollectFilesExcludesDeletedTrackedFiles covers a maître review finding:
+// `git ls-files -c` reports index entries regardless of whether they still
+// exist in the working tree, so a tracked file removed with a plain `rm`
+// (deletion not yet staged) must not be returned by the enumerator, or
+// --force migrations will try to operate on a path that doesn't exist.
+func TestCollectFilesExcludesDeletedTrackedFiles(t *testing.T) {
+	dir := initGitRepo(t)
+	orig, _ := os.Getwd()
+	defer os.Chdir(orig)
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+
+	stageFileAt(t, dir, "data/keep.txt", []byte("keep\n"), "100644")
+	stageFileAt(t, dir, "data/gone.txt", []byte("gone\n"), "100644")
+	commit := exec.Command("git", "commit", "-q", "-m", "init")
+	if out, err := commit.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
+	}
+
+	// Remove gone.txt from the working tree without staging the deletion.
+	if err := os.Remove(filepath.Join(dir, "data", "gone.txt")); err != nil {
+		t.Fatal(err)
+	}
+
+	files := collectFiles([]string{"data"})
+	for _, f := range files {
+		if f == "data/gone.txt" {
+			t.Errorf("collectFiles returned a tracked-but-deleted path %q: %v", f, files)
+		}
+	}
+	found := false
+	for _, f := range files {
+		if f == "data/keep.txt" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected data/keep.txt in collected files, got %v", files)
+	}
+}
+
+// TestAddForceAnnexMigrationSkipsDeletedTrackedFiles is an end-to-end
+// regression test for the maître's finding: `exo add --annex --force <dir>`
+// must not fail, and must not stage the deletion of, a tracked file that was
+// removed from the working tree (but not yet `git rm`'d) alongside files
+// that are actually being migrated.
+func TestAddForceAnnexMigrationSkipsDeletedTrackedFiles(t *testing.T) {
+	_, restore := initGitAnnexRepo(t)
+	defer restore()
+
+	if err := os.MkdirAll("data", 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("data/keep.txt", []byte("keep\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("data/gone.txt", []byte("gone\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	addCmd := exec.Command("git", "add", "data")
+	if out, err := addCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
+	}
+	commitCmd := exec.Command("git", "commit", "-q", "-m", "init")
+	if out, err := commitCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
+	}
+
+	// Remove gone.txt from the working tree without staging the deletion.
+	if err := os.Remove("data/gone.txt"); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := NewCommand()
+	cmd.SetArgs([]string{"--annex", "--force", "data"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("exo add --annex --force data returned error: %v", err)
+	}
+
+	out, err := exec.Command("git", "status", "--porcelain").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := string(out)
+	if !strings.Contains(status, " D data/gone.txt") {
+		t.Errorf("expected gone.txt's deletion to remain unstaged (\" D data/gone.txt\"), got status:\n%s", status)
+	}
+	if strings.Contains(status, "D  data/gone.txt") {
+		t.Errorf("gone.txt's deletion must not be staged by the migration, got status:\n%s", status)
+	}
+}
+
+// TestAddForceGitMigrationSkipsDeletedAnnexedFiles mirrors the above for the
+// opposite migration direction (annex -> git): `exo add --git --force <dir>`
+// must not fail, and must not stage the deletion of, an annexed file whose
+// symlink was removed from the working tree.
+func TestAddForceGitMigrationSkipsDeletedAnnexedFiles(t *testing.T) {
+	_, restore := initGitAnnexRepo(t)
+	defer restore()
+
+	if err := os.MkdirAll("data", 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("data/keep.bin", []byte{0x00, 0x01}, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("data/gone.bin", []byte{0x02, 0x03}, 0644); err != nil {
+		t.Fatal(err)
+	}
+	annexAddCmd := exec.Command("git", "annex", "add", "data")
+	if out, err := annexAddCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git annex add: %v\n%s", err, out)
+	}
+	commitCmd := exec.Command("git", "commit", "-q", "-m", "init")
+	if out, err := commitCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
+	}
+
+	// Remove gone.bin's symlink from the working tree without staging the deletion.
+	if err := os.Remove("data/gone.bin"); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := NewCommand()
+	cmd.SetArgs([]string{"--git", "--force", "data"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("exo add --git --force data returned error: %v", err)
+	}
+
+	out, err := exec.Command("git", "status", "--porcelain").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := string(out)
+	if !strings.Contains(status, " D data/gone.bin") {
+		t.Errorf("expected gone.bin's deletion to remain unstaged (\" D data/gone.bin\"), got status:\n%s", status)
+	}
+	if strings.Contains(status, "D  data/gone.bin") {
+		t.Errorf("gone.bin's deletion must not be staged by the migration, got status:\n%s", status)
+	}
+}
+
+func runExplainCLI(t *testing.T, root string, args ...string) string {
+	t.Helper()
+	out, _ := runExplainCLIFull(t, root, args...)
+	return out
+}
+
+// runExplainCLIFull is runExplainCLI but also returns stderr, for
+// assertions on the shadow-rule warnings design D9 requires --explain to
+// print there (so stdout's --json output stays a clean array).
+func runExplainCLIFull(t *testing.T, root string, args ...string) (stdout, stderr string) {
+	t.Helper()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := os.Chdir(cwd); err != nil {
+			t.Fatal(err)
+		}
+	}()
+	cmd := NewCommand()
+	cmd.SetArgs(args)
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+	var outBuf, errBuf bytes.Buffer
+	cmd.SetOut(&outBuf)
+	cmd.SetErr(&errBuf)
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	return outBuf.String(), errBuf.String()
+}
+
+func TestAddExplainTable(t *testing.T) {
+	root := routingRepo(t)
+	routingWrite(t, root, ".exohub/config", "annex:\n  routing:\n    - path: '*.csv'\n      larger_than: 1KB\n      to: annex\n")
+	routingWrite(t, root, "data/a.csv", strings.Repeat("x", 2000))
+	routingWrite(t, root, "notes.txt", "hello\n")
+
+	out := runExplainCLI(t, root, "--explain", "data/a.csv", "notes.txt")
+	if !strings.Contains(out, "PATH") || !strings.Contains(out, "SIZE") || !strings.Contains(out, "DEST") || !strings.Contains(out, "WHY") {
+		t.Fatalf("missing table header: %q", out)
+	}
+	if !strings.Contains(out, "data/a.csv") || !strings.Contains(out, "rule 1:") || !strings.Contains(out, "annex") {
+		t.Fatalf("missing routed entry: %q", out)
+	}
+	if !strings.Contains(out, "notes.txt") || !strings.Contains(out, "default: text") {
+		t.Fatalf("missing fallback entry: %q", out)
+	}
+}
+
+func TestAddExplainJSON(t *testing.T) {
+	root := routingRepo(t)
+	routingWrite(t, root, ".exohub/config", "annex:\n  routing:\n    - path: '*.csv'\n      larger_than: 1KB\n      to: annex\n")
+	routingWrite(t, root, "data/a.csv", strings.Repeat("x", 2000))
+
+	out := runExplainCLI(t, root, "--explain", "--json", "data/a.csv")
+	var entries []explainEntry
+	if err := json.Unmarshal([]byte(out), &entries); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, out)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries = %+v", entries)
+	}
+	entry := entries[0]
+	if entry.Path != "data/a.csv" || entry.Destination != "annex" || entry.Size != 2000 || !strings.HasPrefix(entry.Reason, "rule 1:") {
+		t.Fatalf("entry = %+v", entry)
+	}
+}
+
+func TestAddExplainTrackedShowsRerouteHint(t *testing.T) {
+	root := routingRepo(t)
+	routingWrite(t, root, "data/old.csv", "original\n")
+	routingGit(t, root, "add", "data/old.csv")
+	routingWrite(t, root, ".exohub/config", "annex:\n  routing:\n    - path: 'data/*.csv'\n      to: annex\n")
+
+	out := runExplainCLI(t, root, "--explain", "data/old.csv")
+	if !strings.Contains(out, "tracked (git)") || !strings.Contains(out, "--reroute would move to annex") {
+		t.Fatalf("missing reroute hint: %q", out)
+	}
+}
+
+// TestAddExplainWarnsAboutShadowedRulesOnStderr is a should-fix item from
+// the maître's review of MR !247: design D9 says a shadowed rule "is
+// reported as a warning by exo doctor / --explain", but --explain only
+// wired this into exo doctor. The warning must land on stderr (both in
+// table and --json mode) so stdout's --json array stays clean.
+func TestAddExplainWarnsAboutShadowedRulesOnStderr(t *testing.T) {
+	root := routingRepo(t)
+	routingWrite(t, root, ".exohub/config", "annex:\n  routing:\n    - path: '**/*.csv'\n      to: git\n    - path: 'data/*.csv'\n      to: annex\n")
+	routingWrite(t, root, "data/a.csv", "hello\n")
+
+	_, stderr := runExplainCLIFull(t, root, "--explain", "data/a.csv")
+	if !strings.Contains(stderr, "rule 2") || !strings.Contains(stderr, "can never match") {
+		t.Fatalf("expected a shadow warning on stderr, got %q", stderr)
+	}
+
+	stdout, stderrJSON := runExplainCLIFull(t, root, "--explain", "--json", "data/a.csv")
+	if !strings.Contains(stderrJSON, "rule 2") {
+		t.Fatalf("expected a shadow warning on stderr in --json mode, got %q", stderrJSON)
+	}
+	var entries []explainEntry
+	if err := json.Unmarshal([]byte(stdout), &entries); err != nil {
+		t.Fatalf("--json stdout must stay a clean array even with a shadow warning: %v\n%s", err, stdout)
+	}
+}
+
+// TestAddJSONWithoutExplainErrors is a minor item from the maître's review
+// of MR !247: --json without --explain must not be silently swallowed.
+func TestAddJSONWithoutExplainErrors(t *testing.T) {
+	root := routingRepo(t)
+	routingWrite(t, root, "a.txt", "hello\n")
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(cwd)
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := NewCommand()
+	cmd.SetArgs([]string{"--json", "a.txt"})
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
+	err = cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "--json requires --explain") {
+		t.Fatalf("expected a '--json requires --explain' error, got %v", err)
+	}
+}
+
+func TestAddExplainZeroSideEffects(t *testing.T) {
+	root := routingRepo(t)
+	routingWrite(t, root, ".exohub/config", "annex:\n  routing:\n    - path: '*.csv'\n      to: annex\n")
+	routingWrite(t, root, "data/a.csv", "hello\n")
+
+	before := routingGit(t, root, "status", "--porcelain")
+	if err := routingCLI(t, root, "--explain", "--json", "."); err != nil {
+		t.Fatal(err)
+	}
+	after := routingGit(t, root, "status", "--porcelain")
+	if before != after {
+		t.Fatalf("working tree/index changed:\nbefore=%q\nafter=%q", before, after)
+	}
+}
+
+// TestAddPlainModeSkipsDroppedAnnexContent is an end-to-end regression test
+// for the maître's blocking finding on MR !247: both plain `exo add` and
+// `exo add --explain` must succeed in a repo that has a locked annex file
+// whose content was dropped (a dangling symlink, the normal state after a
+// clone without `get`), and plain `exo add .` must still stage an unrelated
+// new file.
+func TestAddPlainModeSkipsDroppedAnnexContent(t *testing.T) {
+	dir, restore := initGitAnnexRepo(t)
+	defer restore()
+
+	if err := os.WriteFile(filepath.Join(dir, "big.bin"), []byte(strings.Repeat("x", 2000)), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "annex", "add", "big.bin").CombinedOutput(); err != nil {
+		t.Fatalf("git annex add: %v\n%s", err, out)
+	}
+	if out, err := exec.Command("git", "commit", "-q", "-m", "init").CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
+	}
+	// Drop the content: big.bin is now a dangling symlink, same as after a
+	// clone without `get`.
+	if out, err := exec.Command("git", "annex", "drop", "--force", "big.bin").CombinedOutput(); err != nil {
+		t.Fatalf("git annex drop --force: %v\n%s", err, out)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "new.txt"), []byte("new\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := NewCommand()
+	cmd.SetArgs([]string{"."})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("exo add . with dropped annex content returned error: %v", err)
+	}
+	out, err := exec.Command("git", "status", "--porcelain").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := string(out)
+	if !strings.Contains(status, "A  new.txt") {
+		t.Fatalf("expected new.txt to be staged, got status:\n%s", status)
+	}
+	if strings.Contains(status, "big.bin") {
+		t.Fatalf("big.bin must be untouched by plain add, got status:\n%s", status)
+	}
+
+	explainOut := runExplainCLI(t, dir, "--explain", ".")
+	if !strings.Contains(explainOut, "big.bin") || !strings.Contains(explainOut, "tracked (annex)") {
+		t.Fatalf("missing dropped tracked entry: %q", explainOut)
+	}
+	if strings.Contains(explainOut, "--reroute") {
+		t.Fatalf("expected no reroute hint for a dropped, locked annex file: %q", explainOut)
+	}
+}
+
+func TestRoutingHelp(t *testing.T) {
+	cmd := NewCommand()
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&out)
+	cmd.SetArgs([]string{"--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{
+		".exohub/**", ".gitignore", ".gitattributes", "first match wins",
+		"new (untracked)", "current backend", "5 MiB", "--explain", "--json",
+		"--reroute", "--yes", "--large-text-threshold", "EXOHUB_LARGE_TEXT_THRESHOLD",
+		"Overrides affect only the fallback", "--annex --force", "git annex addurl",
+	} {
+		if !strings.Contains(out.String(), text) {
+			t.Errorf("help missing %q", text)
+		}
+	}
+	if strings.Contains(out.String(), "JSON, XML") {
+		t.Error("help still advertises obsolete JSON/XML exemptions")
+	}
 }

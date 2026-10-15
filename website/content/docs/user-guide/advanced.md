@@ -343,6 +343,18 @@ This reads the `.exohub/bundle` manifest and generates output under `.exohub/bun
 >
 > When the output contains many files, `exo bundle` automatically packs them into `.artipack` ZIP archives to reduce file count.
 
+### Repository URL in Bundle Metadata
+
+The bundle manifest includes a `repo_url` field used by the catalog. `exo bundle` resolves this to the repository's canonical clone URL: it prefers the `origin` remote, falls back to another remote with a usable URL, and applies any `url.insteadOf` rewrites. Only `http(s)://`, `ssh://`, `git://`, and scp-style (`user@host:path`) URLs count as usable — local paths and `file://` remotes are rejected, since a catalog entry pointing at a path on your machine isn't reachable by anyone else.
+
+If no remote has a usable clone URL, `exo bundle` prints a warning and leaves `repo_url` empty rather than failing:
+
+```
+⚠ no usable git remote found — repo_url will be empty in bundle metadata (no git remote configured)
+```
+
+Add a remote with `git remote add origin <url>` and re-run `exo bundle` to populate `repo_url`.
+
 ### Options
 
 | Flag | Description | Default |
@@ -408,7 +420,7 @@ exo bundle --ref v5.3.0
 exo bundle --ref v5.3.0 --dry-run   # preview first
 ```
 
-The working tree must be clean. `exo bundle` checks out the target ref, runs the bundle, then restores the original branch.
+`exo bundle --ref` reads the target ref's committed state directly (via git's object database) — it never checks out or otherwise touches your working tree. The working tree must still be clean: if tracked files have uncommitted changes relative to HEAD, the command aborts with an error listing the affected files, since the bundle would otherwise record a ref that doesn't match what's actually published. Commit your changes and re-run. (Untracked files are ignored.)
 
 ### Dry Run
 
@@ -484,30 +496,65 @@ Then run `exo init` to apply. With thin mode, annexed files use hard links inste
 
 > **Note:** In previous versions, thin mode was configured in `.exohub/context`. That file is no longer used by `exo init`.
 
-### File Routing with .gitattributes
+### Repository-Level File Routing
 
-`exo add` automatically detects whether a file is text or binary and routes it to git or git-annex accordingly. If you want `git add` (used by IDEs, git hooks, etc.) to also route files correctly, you can add an `annex.largefiles` rule to `.gitattributes`:
+`exo add` auto mode decides, for every **new (untracked)** file, whether it goes to git or git-annex. The decision is made in this order:
 
+1. **Protected paths** — `.exohub/**`, `.gitignore`, and `.gitattributes` always go to **git**. User rules cannot override this.
+2. **`annex.routing` rules** in `.exohub/config` — an ordered list, evaluated top-down. The **first match wins** (the opposite of `.gitignore`/`.gitattributes`, where the last match wins).
+3. **Fallback** (today's default behavior when no rule matches): binary files → **git-annex**; text files → **git**, unless they're at least the large-text threshold (default **5 MiB**), in which case they prompt on a TTY or default to **git-annex** otherwise.
+
+Because these rules live in the shared, committed `.exohub/config`, everyone who runs `exo add` on the repository — including CI/automation with no TTY — gets the same routing. `exo add`'s decision is authoritative: it adds annex-routed files with `git annex add --force-large` and git-routed files with `git add -c annex.largefiles=nothing`, so a repository's `annex.largefiles` in `.gitattributes` can no longer silently override exo (that `.gitattributes` setting still applies to plain `git annex add`, e.g. from IDEs or git hooks that don't go through `exo add`).
+
+**Rules only affect new files.** Changing or adding rules never silently migrates already-tracked files. To preview and apply routing changes to tracked files, use `exo add --reroute` (see below).
+
+Add a `routing:` list under `annex:` in `.exohub/config`:
+
+```yaml
+annex:
+  routing:
+    - path: "**/*.md"
+      to: git
+    - path: "**/*.csv"
+      larger_than: 1KB
+      to: annex
+    - path: "**/*.json"
+      larger_than: 1MB
+      to: annex
 ```
-* annex.largefiles=not(include=*.txt or include=*.md or include=*.json or include=*.xml or include=*.yaml or include=*.yml or include=*.py or include=*.go or include=*.sh or include=*.R or include=*.r) or largerthan=100kb
+
+`exo init` writes this block, commented out, into a newly created `.exohub/config` as a starting point — uncomment and adjust it to opt in. If your config already has an `annex:` key, add `routing:` beneath it rather than creating a second `annex:` mapping.
+
+#### Rule keys
+
+Every rule needs `to` and at least one match key. All match keys present in a rule must match (**AND**):
+
+| Key | Meaning |
+|-----|---------|
+| `path` | Repository-relative glob (`/` separators, `**` spans directories). A pattern without `/`, like `*.md`, matches basenames at any depth. |
+| `larger_than` | Size **≥** the given value. |
+| `smaller_than` | Size **<** the given value. |
+| `content` | `text` or `binary`, detected from the first 512 bytes (`text/*`, not file extension). |
+| `to` | Required destination: `git` or `annex`. |
+
+Sizes accept plain bytes, decimal `KB`/`MB` (1,000 / 1,000,000 bytes), or binary `KiB`/`MiB` (1,024 / 1,048,576 bytes). Quote glob patterns in YAML. For a range, `larger_than` must be less than `smaller_than`.
+
+Invalid rules — unknown keys, a missing or invalid `to`, an invalid `content` value, an invalid glob, an unparsable size, or a rule with no match keys — make `exo add` (and `exo doctor`) fail loudly before anything is staged. `exo doctor` also warns when a rule can never match because an earlier rule fully shadows it.
+
+#### Inspecting and re-routing
+
+```bash
+exo add --explain data/              # show destination + matched rule per file, no staging
+exo add --explain --json data/       # same, as machine-readable JSON
+exo add --reroute data/              # preview tracked files whose backend would change
+exo add --reroute --yes data/        # apply the previewed backend changes
 ```
 
-This tells git-annex:
-- Files matching listed extensions go to **git**
-- Everything else goes to **git-annex**
-- Files larger than 100kb are always annexed, regardless of extension
-
-You can customize the rule for your project. For example, to always annex everything in a `data/` directory:
-
-```
-data/** annex.largefiles=anything
-```
-
-> **Note:** Use extension-based matching (`include=`) rather than `mimetype=`. The `mimetype=` matcher depends on libmagic, which is unreliable across environments and can silently put binary files into git when the magic database is not found.
+`--json` requires `--explain`. `--yes` requires `--reroute`. `--reroute` cannot be combined with `--explain`, `--git`, `--annex`, or `--force`. Protected paths (`.exohub/**`, `.gitignore`, `.gitattributes`) are never moved by `--reroute`. Rerouting a file from annex to git requires its content to be present locally (`exo get` first if needed); files whose content can't be checked are reported as skipped rather than silently left alone.
 
 ### Large Text File Guardrail
 
-When running `exo add` in auto mode, the CLI checks whether any detected text files exceed **5 MB**. Files above this threshold are unusual for version-controlled source files and are likely data files that belong in git-annex rather than git.
+When no `annex.routing` rule matches a new file, the fallback checks whether a detected text file is at least the large-text threshold, default **5 MB**. Files at or above this size are unusual for version-controlled source files and are likely data files that belong in git-annex rather than git.
 
 In interactive terminals, a confirmation prompt appears:
 
@@ -521,7 +568,14 @@ Use git-annex for these files? (recommended)
 
 In non-interactive environments (CI pipelines, scripts), the guardrail defaults silently to **annex**.
 
-To bypass the prompt, pass an explicit mode:
+Override the fallback threshold with `--large-text-threshold` or `EXOHUB_LARGE_TEXT_THRESHOLD` (flag takes precedence over the environment variable, which takes precedence over the built-in 5 MiB default). This only changes the fallback — it never changes an explicit `annex.routing` rule:
+
+```bash
+exo add --large-text-threshold 1MiB data/
+EXOHUB_LARGE_TEXT_THRESHOLD=1MiB exo add data/
+```
+
+To bypass the prompt entirely, pass an explicit mode:
 
 ```bash
 # Force git-annex for all files (skips prompt)

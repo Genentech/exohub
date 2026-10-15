@@ -841,7 +841,7 @@
 
       // Typing animation for curl command
       (function() {
-        var cmd = 'curl -sSL https://github.com/exohub/exo-cli/releases/latest/download/install.sh | bash';
+        var cmd = __EXOHUB_INSTALL_CMD__;
         var el = document.getElementById('curl-cmd');
         var i = 0;
         setTimeout(function type() {
