@@ -39,7 +39,7 @@ A cloud-backed credential store that securely provisions SSH keys and git tokens
 The discovery and access layer for published datasets and artifacts. ExoAtlas lets users search, browse, inspect, and download content from the ExoHub catalog through either the interactive `exo atlas` TUI or a browser-based web interface, with both modes sharing the same underlying experience.
 
 ### <a href="{{< baseurl >}}/docs/components/dataservice/" class="component-link">Data Service</a>: The Agent Gateway
-An agent-facing HTTP service that gives AI agents and automated pipelines a simple, secure interface for consuming and producing ExoHub datasets. Agents connect via a central MCP endpoint (`/mcp/{deployment_id}`) and use four tools — `request_dataset`, `upload_dataset`, `get_operation`, and `wait_for_operation` — without needing direct git or git-annex access.
+An agent-facing HTTP service that gives AI agents and automated pipelines a simple, secure interface for consuming and producing ExoHub projects. Agents connect via a central MCP endpoint (`/mcp/{deployment_id}`) and use six tools — `download_project`, `upload_project`, `prune_project`, `describe_project`, `get_operation`, and `wait_for_operation` — without needing direct git or git-annex access.
 
 ### Extensible Remotes
 The architecture supports custom git-annex special remotes for specialized storage backends, demonstrated by git-annex-remote-s5cmd for high-performance S3 transfers.

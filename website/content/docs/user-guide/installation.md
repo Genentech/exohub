@@ -113,6 +113,20 @@ exo login --force
 
 This forces a full device-flow login (bypassing any cached refresh token) and also purges the S3 credential helper cache so stale cached credentials are cleared.
 
+
+
+### Checking Your Identity
+
+Use `exo whoami` to see who you're logged in as, how long your session lasts, and which AWS credentials exo will use:
+
+```bash
+exo whoami            # human-readable summary
+exo whoami --json     # stable JSON shape, for MCP/automation
+exo whoami --aws      # also perform a live sts:GetCallerIdentity call
+```
+
+It reports your identity (username, name, email, provider, issuer), session info (expiry and whether a refresh token is stored), organisation claims when present (department, cost center, manager, groups), and the AWS profile and credentials file exo uses. If you're not logged in, it prints a message and exits non-zero. Tokens, refresh tokens, and AWS secrets are never printed.
+
 ### Logging Out
 
 To clear cached credentials:

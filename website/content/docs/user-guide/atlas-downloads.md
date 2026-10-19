@@ -1,7 +1,7 @@
 ---
 title: "Atlas & Downloads"
 description: "Browse the catalog and download artifacts"
-weight: 10
+weight: 11
 ---
 
 ExoHub Atlas is an interactive terminal UI for browsing and searching an ArtifactDB catalog. It is also available as a web application at [`/atlas`]({{< baseurl >}}/atlas). The `exo download` command lets you download artifact files directly from the catalog without opening the TUI.

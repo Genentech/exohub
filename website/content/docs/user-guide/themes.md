@@ -1,7 +1,7 @@
 ---
 title: "Themes & Appearance"
 description: "Customize terminal colors and dark/light mode"
-weight: 11
+weight: 12
 ---
 
 The `exo` CLI supports color themes that apply across all commands, the Atlas TUI, and the web UI. Themes adapt automatically to dark and light terminal backgrounds.

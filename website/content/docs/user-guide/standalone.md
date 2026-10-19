@@ -1,7 +1,7 @@
 ---
 title: "Local Standalone Catalog"
 description: "Run a local ArtifactDB catalog stack with exo standalone"
-weight: 14
+weight: 15
 ---
 
 The `exo standalone` command lets you run a fully local ArtifactDB catalog stack — no cloud account, no ExoHub deployment required. It is ideal for local development, testing pipelines, or creating a private catalog before migrating to a shared ExoHub deployment.
