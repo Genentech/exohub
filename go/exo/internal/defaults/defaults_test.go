@@ -153,3 +153,19 @@ func TestInstallCmd_Builtin(t *testing.T) {
 		t.Errorf("InstallCmd() = %q, want builtin %q", got, builtinInstallCmd)
 	}
 }
+
+func TestDocsURL_EnvOverride(t *testing.T) {
+	t.Setenv("EXOHUB_DOCS_URL", "https://docs.example.com/llms.txt")
+	got := DocsURL()
+	if got != "https://docs.example.com/llms.txt" {
+		t.Errorf("DocsURL() = %q, want %q", got, "https://docs.example.com/llms.txt")
+	}
+}
+
+func TestDocsURL_Builtin(t *testing.T) {
+	t.Setenv("EXOHUB_DOCS_URL", "")
+	got := DocsURL()
+	if got != builtinDocsURL {
+		t.Errorf("DocsURL() = %q, want builtin %q", got, builtinDocsURL)
+	}
+}

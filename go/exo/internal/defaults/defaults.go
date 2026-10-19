@@ -36,6 +36,11 @@ var builtinUpgradeURL = ""
 // Overridden to an internal install command by defaults_internal.go when built with -tags internal.
 var builtinInstallCmd = "curl -fsSL https://github.com/Genentech/exohub/releases/latest/download/install.sh | sh"
 
+// builtinDocsURL is the built-in fallback for EXOHUB_DOCS_URL, pointing agents
+// at the llms.txt index for the user guide.
+// Overridden to an internal URL by defaults_internal.go when built with -tags internal.
+var builtinDocsURL = "https://genentech.github.io/exohub/llms.txt"
+
 // APIBase returns the ExoHub API base URL.
 // Precedence: EXOHUB_API_URL env → built-in.
 func APIBase() string {
@@ -116,4 +121,14 @@ func InstallCmd() string {
 		return v
 	}
 	return builtinInstallCmd
+}
+
+// DocsURL returns the llms.txt index URL for the ExoHub user guide, used to
+// point agents at usage documentation.
+// Precedence: EXOHUB_DOCS_URL env → built-in.
+func DocsURL() string {
+	if v := strings.TrimSpace(os.Getenv("EXOHUB_DOCS_URL")); v != "" {
+		return v
+	}
+	return builtinDocsURL
 }

@@ -47,6 +47,7 @@ import (
 	versioncmd "github.com/Genentech/exohub/go/exo/commands/version"
 	"github.com/Genentech/exohub/go/exo/commandutil"
 	"github.com/Genentech/exohub/go/exo/configdir"
+	"github.com/Genentech/exohub/go/exo/internal/defaults"
 	"github.com/Genentech/exohub/go/exo/internal/tips"
 	"github.com/Genentech/exohub/go/exo/palette"
 	"github.com/Genentech/exohub/go/exo/preferences"
@@ -194,5 +195,16 @@ Additional help topics:{{range .Commands}}{{if .IsAdditionalHelpTopicCommand}}
   {{rpad .CommandPath .CommandPathPadding}} {{.Short}}{{end}}{{end}}{{end}}{{if .HasAvailableSubCommands}}
 
 Use "` + purpleStyle.Render("{{.CommandPath}} [command]") + ` --help" for more information about a command.{{end}}
+` + helpDocsFooter() + `
 `
+}
+
+// helpDocsFooter returns a one-line footer pointing agents at the llms.txt
+// docs index, or an empty string if no docs URL is configured.
+func helpDocsFooter() string {
+	docsURL := defaults.DocsURL()
+	if docsURL == "" {
+		return ""
+	}
+	return "\nDocs for agents (llms.txt): " + docsURL + "\n"
 }
