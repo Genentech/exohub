@@ -12,3 +12,12 @@ func TestInstallCmd_OSSBuiltin(t *testing.T) {
 		t.Errorf("InstallCmd() = %q, want OSS builtin %q", got, want)
 	}
 }
+
+func TestDocsURL_OSSBuiltin(t *testing.T) {
+	t.Setenv("EXOHUB_DOCS_URL", "")
+	got := DocsURL()
+	want := "https://genentech.github.io/exohub/llms.txt"
+	if got != want {
+		t.Errorf("DocsURL() = %q, want OSS builtin %q", got, want)
+	}
+}

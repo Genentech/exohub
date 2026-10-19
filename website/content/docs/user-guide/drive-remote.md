@@ -1,7 +1,7 @@
 ---
 title: "Google Drive Remote"
 description: "Export annexed files to Google Drive for collaborators using Google Workspace"
-weight: 9
+weight: 10
 ---
 
 The Google Drive remote lets you export annexed data to a Drive folder where collaborators can browse, download, and share files using the Drive UI — without needing S3 access or the `exo` CLI.

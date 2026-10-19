@@ -1,7 +1,7 @@
 ---
 title: "MCP Server"
 description: "Use AI agents to manage your data through the Model Context Protocol"
-weight: 13
+weight: 14
 ---
 
 ExoCLI includes a built-in [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that exposes data management operations as tools for AI agents. This lets agents like Claude, Cursor, or any MCP-compatible client create repositories, sync data, monitor progress, and more — without requiring knowledge of git-annex internals.
@@ -65,11 +65,13 @@ exo mcp show sync
 | `broadcast` | Broadcast git-annex metadata to remotes without transferring file content |
 | `login` | Authenticate via OIDC device flow (non-blocking) |
 | `login_status` | Check whether authentication has completed |
+| `whoami` | Show identity, session, organisation, and AWS credential info for the current login |
 | `heartbeat_record` | Start recording sync progress metrics in the background |
 | `heartbeat_show` | Show the latest sync progress metrics |
 | `init` | Initialize or reconfigure git-annex in an existing repository (run after `git clone`) |
 | `init_remote` | Add a new storage remote to the repository |
 | `info` | Show repository information: configured remotes, annex state, and storage statistics |
+| `docs` | Fetch exo usage documentation (the llms.txt index, or a specific page) |
 | `catalog_search` | Search the ExoHub catalog for datasets and artifacts |
 | `catalog_schemas` | List available document schema names in the catalog |
 | `catalog_download` | Download files, artifacts, or entire projects from the catalog |
@@ -303,6 +305,18 @@ Check the status of an in-progress login or verify existing credentials.
 
 **Returns:** `waiting` (device flow pending), `ok` (authenticated), `not_authenticated`, or `expired`.
 
+### whoami
+
+Show who you're logged in as: identity, session expiry, organisation claims, and the AWS profile/credentials exo will use. Read-only. Returns an error if not logged in (call `login` first). Never returns tokens or AWS secrets.
+
+**Parameters:**
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `aws` | No | Also perform a live `sts:GetCallerIdentity` call (network call) |
+
+**Prerequisites:** Authentication (`login`).
+
 ### heartbeat_record
 
 Start recording sync progress metrics in the background. Launches a background process that continuously captures annex sync metrics every `interval` seconds.
@@ -402,6 +416,16 @@ Retrieve entity details and relationships from the ExoHub catalog knowledge grap
 | `include_relationships` | No | Whether to include related relationships (default: `true`) |
 
 **Prerequisites:** Authentication (`login`).
+
+### docs
+
+Fetch exo usage documentation for agents. Read-only. With no arguments, returns the llms.txt index of available doc pages. Pass `page` with a link from that index (or a path under the docs base) to fetch that page's content. If the docs site is unreachable, returns the attempted URL and the error instead of failing.
+
+**Parameters:**
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `page` | No | A page link from the llms.txt index, or a path under the docs base |
 
 ## Architecture
 

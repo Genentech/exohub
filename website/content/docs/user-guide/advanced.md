@@ -1,7 +1,7 @@
 ---
 title: "Advanced Operations"
 description: "Copying, mirroring, and linking"
-weight: 8
+weight: 9
 ---
 
 This section covers advanced operations for managing data across multiple remotes and storage systems.

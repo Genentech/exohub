@@ -45,5 +45,8 @@ oss-build:
 build-oss-check: oss-build
 	bash scripts/leak-scan.sh public
 
+check-provenance-context:
+	bash scripts/check-provenance-context.sh $(EXO_CLI_DIR)
+
 ingest:
 	gitingest -i content

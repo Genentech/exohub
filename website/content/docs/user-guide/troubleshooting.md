@@ -1,7 +1,7 @@
 ---
 title: "Troubleshooting"
 description: "Diagnosing and fixing issues"
-weight: 12
+weight: 13
 ---
 
 This section covers common issues and how to resolve them using `exo doctor`, `exo fsck`, and other diagnostic tools.
@@ -65,10 +65,13 @@ Common fixes:
 
 **2. Identity & Auth** — Checks that your `exo login` session is valid, attempts a silent token refresh if expired, and decodes JWT claims (username, groups, expiry) without printing secrets. Verifies that your token includes the mandatory `EXOHUB_USERS` group (you will get a `FAIL` with a subscription link if it is missing). Also verifies the `exohub` AWS profile resolves and `sts:GetCallerIdentity` returns the expected principal.
 
+
 Common fixes:
 - Token expired → `exo login`
 - AWS profile missing → `exo login` (rewrites `~/.aws/credentials [exohub]`)
 - Identity mismatch → `exo login` to sync token and AWS credentials
+
+For a human-readable summary of your current identity and credentials outside of `exo doctor`, use `exo whoami` (see [Installation & Setup]({{< ref "installation" >}}#checking-your-identity)).
 
 **3. Network Reachability** — Probes four network planes independently with a short timeout: ExoHub API, AWS S3, AWS S3 Control (required for S3 Access Grants), and the OIDC issuer. The result distinguishes "no VPN" (API blocked, AWS reachable) from "no AWS egress" (e.g., restricted HPC node). On open-source builds, the S3 Control probe is automatically **SKIP**ped when `EXOHUB_GRANTS_ACCOUNT_ID` is not set — set it to enable this check.
 

@@ -1,7 +1,7 @@
 ---
 title: "Running Jobs at Scale"
 description: "Manifests, job submission, and monitoring"
-weight: 7
+weight: 8
 ---
 
 For large datasets or automated pipelines, you can submit sync jobs to ExoHub's backend infrastructure. This section covers writing manifests, submitting jobs, and monitoring their progress.

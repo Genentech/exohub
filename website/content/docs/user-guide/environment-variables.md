@@ -1,7 +1,7 @@
 ---
 title: "Environment Variables"
 description: "All environment variables supported by the exo CLI"
-weight: 15
+weight: 16
 ---
 
 This page lists all environment variables recognized by the `exo` CLI. Set them in your shell profile (`~/.bashrc` or `~/.zshrc`) or inline before a command.
@@ -50,6 +50,7 @@ Directory layout under `EXO_CONFIG_DIR`:
 | `EXOHUB_TPL_<NAME>` | Expose an environment variable to profile templates as `.<NAME>` (top-level, e.g. `EXOHUB_TPL_BUCKET` → `.BUCKET`) | _(none)_ |
 | `EXO_UPGRADE_URL` | URL of the upgrade script used by `exo upgrade`. Must use `https://`. Overrides the built-in default when set. The internal binary has a built-in default; the open-source build has none (`exo upgrade` fails if neither built-in nor env var is set). | _(built-in on internal binary; none on OSS build)_ |
 | `EXOHUB_VERSION_CHECK_URL` | Override the version-update-check service URL used by `exo version`. The internal binary has a built-in default; the open-source build has none (update check is skipped unless set). | _(built-in on internal binary; none on OSS build)_ |
+| `EXOHUB_DOCS_URL` | llms.txt index URL for the ExoHub user guide, shown in `exo --help`, in the MCP server instructions, and used by the MCP `docs` tool to point agents at usage documentation | `https://genentech.github.io/exohub/llms.txt` (OSS); internal binary has its own built-in |
 
 
 
@@ -80,6 +81,8 @@ Directory layout under `EXO_CONFIG_DIR`:
 | `EXOHUB_GITHUB_TOKEN` | GitHub-specific git token | _(none)_ |
 | `EXOHUB_GITEA_TOKEN` | Gitea-specific git token | _(none)_ |
 | `EXO_TOKEN_FILE` | Path to the OAuth token file (overrides `EXO_CONFIG_DIR`-derived path and system default) | `~/.config/exo/credentials/token.json` |
+
+
 
 ## S3 Access Grants
 

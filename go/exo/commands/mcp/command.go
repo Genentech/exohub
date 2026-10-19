@@ -9,6 +9,8 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/spf13/cobra"
+
+	"github.com/Genentech/exohub/go/exo/internal/defaults"
 )
 
 // toolEntry holds a tool definition and its handler in a single registry entry.
@@ -240,6 +242,19 @@ func toolRegistry() []toolEntry {
 			),
 			handler: handleInfo,
 		},
+		{
+			tool: mcp.NewTool("docs",
+				mcp.WithDescription(
+					"Fetch exo usage documentation for agents. "+
+						"With no arguments, returns the llms.txt index of available doc pages. "+
+						"Pass 'page' with a link from that index (or a path under the docs base) to fetch that page's content. "+
+						"If the docs site is unreachable, returns the attempted URL and the error instead of failing.",
+				),
+				mcp.WithString("page", mcp.Description("A page link from the llms.txt index, or a path under the docs base")),
+				mcp.WithReadOnlyHintAnnotation(true),
+			),
+			handler: handleDocs,
+		},
 	}
 	return append(entries, catalogTools()...)
 }
@@ -281,7 +296,15 @@ The server communicates via JSON-RPC over stdin/stdout.`,
 	}
 }
 
-const serverInstructions = `ExoHub is a git-annex based data repository management system. It extends git with large file support via git-annex, storing data on S3 or local remotes while tracking metadata in git.
+func serverInstructions() string {
+	instructions := baseServerInstructions
+	if docsURL := defaults.DocsURL(); docsURL != "" {
+		instructions += "\n\nFor exo usage docs, use the 'docs' tool or fetch " + docsURL + " directly."
+	}
+	return instructions
+}
+
+const baseServerInstructions = `ExoHub is a git-annex based data repository management system. It extends git with large file support via git-annex, storing data on S3 or local remotes while tracking metadata in git.
 
 Key concepts:
 - Remotes: storage backends for data files. Types: annex (versioned S3), export (S3 file tree), artifactdb (ArtifactDB catalog / ExoHub Atlas), exospace (local/rsync).
@@ -334,7 +357,7 @@ func runServer(version string) error {
 		"exo",
 		version,
 		server.WithToolCapabilities(true),
-		server.WithInstructions(serverInstructions),
+		server.WithInstructions(serverInstructions()),
 	)
 
 	for _, entry := range toolRegistry() {
