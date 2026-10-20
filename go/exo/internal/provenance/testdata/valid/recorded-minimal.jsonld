@@ -1,0 +1,20 @@
+{
+  "@context": "https://genentech.github.io/exohub/ns/provenance/v1.jsonld",
+  "@id": "urn:exohub:record:01928c9e-0000-7000-8000-00000000f00d",
+  "exo:assertion": "recorded",
+  "exo:assertedBy": "urn:exohub:agent:person:jrivers",
+  "generatedAtTime": "2026-10-14T09:00:00Z",
+  "@graph": [
+    {
+      "@id": "urn:exohub:git:blob:4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+      "@type": "Entity",
+      "exo:path": "README.md",
+      "wasAttributedTo": "urn:exohub:agent:person:jrivers"
+    },
+    {
+      "@id": "urn:exohub:agent:person:jrivers",
+      "@type": "Person",
+      "label": "Jordan Rivers"
+    }
+  ]
+}

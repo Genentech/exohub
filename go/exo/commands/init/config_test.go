@@ -892,6 +892,61 @@ func TestExohubConfigLoadSave(t *testing.T) {
 	}
 }
 
+func TestExohubConfigProvenanceLoadSave(t *testing.T) {
+	tmpDir := t.TempDir()
+	oldWd, _ := os.Getwd()
+	defer os.Chdir(oldWd)
+	os.Chdir(tmpDir)
+
+	os.Mkdir(".exohub", 0755)
+
+	cfg := &ExohubConfig{
+		Provenance: &ProvenanceConfig{
+			Require:     []string{"results/**", "models/**"},
+			Collections: []string{"**/*.tdb/", "**/*.zarr/"},
+		},
+	}
+	if err := SaveExohubConfig(cfg); err != nil {
+		t.Fatalf("SaveExohubConfig() error = %v", err)
+	}
+
+	loaded, err := LoadExohubConfig()
+	if err != nil {
+		t.Fatalf("LoadExohubConfig() error = %v", err)
+	}
+	if loaded == nil || loaded.Provenance == nil {
+		t.Fatalf("expected Provenance section, got %+v", loaded)
+	}
+	if len(loaded.Provenance.Require) != 2 || loaded.Provenance.Require[0] != "results/**" {
+		t.Errorf("Provenance.Require = %v, want [results/** models/**]", loaded.Provenance.Require)
+	}
+	if len(loaded.Provenance.Collections) != 2 || loaded.Provenance.Collections[1] != "**/*.zarr/" {
+		t.Errorf("Provenance.Collections = %v, want [**/*.tdb/ **/*.zarr/]", loaded.Provenance.Collections)
+	}
+}
+
+func TestLoadExohubConfigFromBytes(t *testing.T) {
+	cfg, err := LoadExohubConfigFromBytes([]byte("provenance:\n  require:\n    - \"results/**\"\n"))
+	if err != nil {
+		t.Fatalf("LoadExohubConfigFromBytes() error = %v", err)
+	}
+	if cfg == nil || cfg.Provenance == nil || len(cfg.Provenance.Require) != 1 || cfg.Provenance.Require[0] != "results/**" {
+		t.Errorf("LoadExohubConfigFromBytes() = %+v, want provenance.require [results/**]", cfg)
+	}
+
+	empty, err := LoadExohubConfigFromBytes(nil)
+	if err != nil {
+		t.Fatalf("LoadExohubConfigFromBytes(nil) error = %v", err)
+	}
+	if empty == nil {
+		t.Fatalf("LoadExohubConfigFromBytes(nil) returned nil config, want non-nil empty config")
+	}
+
+	if _, err := LoadExohubConfigFromBytes([]byte("not: [valid")); err == nil {
+		t.Errorf("LoadExohubConfigFromBytes() expected error for invalid YAML")
+	}
+}
+
 func TestExohubConfigInvalidYAML(t *testing.T) {
 	tmpDir := t.TempDir()
 	oldWd, _ := os.Getwd()

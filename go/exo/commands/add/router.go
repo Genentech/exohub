@@ -9,10 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/bmatcuk/doublestar/v4"
 	"github.com/dustin/go-humanize"
 
 	initcmd "github.com/Genentech/exohub/go/exo/commands/init"
+	"github.com/Genentech/exohub/go/exo/internal/pathglob"
 )
 
 // Backend identifies where a file's content is stored.
@@ -82,7 +82,7 @@ var protectedPatterns = []string{".exohub/**", ".gitignore", ".gitattributes"}
 func IsProtectedPath(relPath string) (bool, error) {
 	relPath = filepath.ToSlash(relPath)
 	for _, pattern := range protectedPatterns {
-		ok, err := matchGlob(pattern, relPath)
+		ok, err := pathglob.Match(pattern, relPath)
 		if err != nil {
 			return false, fmt.Errorf("protected pattern %q: %w", pattern, err)
 		}
@@ -130,7 +130,7 @@ func (c compiledRule) description() string {
 // rule cares about are never opened.
 func (c compiledRule) matches(relPath string, info fs.FileInfo, sniffContent func() (string, error)) (bool, error) {
 	if c.raw.Path != "" {
-		ok, err := matchGlob(c.raw.Path, relPath)
+		ok, err := pathglob.Match(c.raw.Path, relPath)
 		if err != nil {
 			return false, fmt.Errorf("annex.routing rule %d: %w", c.index, err)
 		}
@@ -249,17 +249,6 @@ func resolveThreshold(override string) (uint64, error) {
 	return uint64(largeTextFileThreshold), nil
 }
 
-// matchGlob implements the gitignore-style path matching from design D2: a
-// pattern containing "/" is matched against the full repo-relative path; a
-// pattern with no "/" matches the basename at any depth.
-func matchGlob(pattern, relPath string) (bool, error) {
-	relPath = filepath.ToSlash(relPath)
-	if strings.Contains(pattern, "/") {
-		return doublestar.Match(pattern, relPath)
-	}
-	return doublestar.Match(pattern, filepath.Base(relPath))
-}
-
 // sniffIsText reads the first 512 bytes of path and reports whether
 // http.DetectContentType classifies it as text/*. It mirrors
 // detectMimeType/classifySingleFile's sniff (empty files are text).
@@ -300,7 +289,7 @@ func (rt *Router) routeContent(relPath string, info fs.FileInfo, unavailable err
 	relPath = filepath.ToSlash(relPath)
 
 	for _, pattern := range protectedPatterns {
-		ok, err := matchGlob(pattern, relPath)
+		ok, err := pathglob.Match(pattern, relPath)
 		if err != nil {
 			return Decision{}, fmt.Errorf("protected pattern %q: %w", pattern, err)
 		}

@@ -3,7 +3,6 @@ package doctor
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -16,36 +15,34 @@ import (
 
 	"github.com/Genentech/exohub/go/exo/commands/login"
 	"github.com/Genentech/exohub/go/exo/configdir"
+	"github.com/Genentech/exohub/go/exo/internal/auth"
 )
 
 const groupAuth = "Identity & Auth"
 const mandatoryGroup = "EXOHUB_USERS"
 
+// extraAuthChecks is an optional hook letting internal builds append extra
+// auth-related diagnostics without this file needing any build tags. Nil in
+// the OSS build.
+var extraAuthChecks func() []CheckResult
+
 func runAuthChecks() []CheckResult {
-	return []CheckResult{
+	results := []CheckResult{
 		checkToken(),
 		checkJWTClaims(),
 		checkRequiredGroup(),
 		checkAWSIdentity(),
 	}
+	if extraAuthChecks != nil {
+		results = append(results, extraAuthChecks()...)
+	}
+	return results
 }
 
-// jwtClaims holds the fields we decode from the JWT payload.
-type jwtClaims struct {
-	PreferredUsername string `json:"preferred_username"`
-	Sub               string `json:"sub"`
-	Iss               string `json:"iss"`
-	Aud               any    `json:"aud"` // may be string or []string
-	Exp               int64  `json:"exp"`
-	Iat               int64  `json:"iat"`
-	// CognitoGroups is the standard Cognito claim (real []string).
-	CognitoGroups []string `json:"cognito:groups"`
-	// Groups is decoded as RawMessage so we can handle all three Cognito forms:
-	//   1. Real []string:           ["group1","group2"]
-	//   2. JSON-encoded string arr: "[\"group1\",\"group2\"]"  (string containing JSON)
-	//   3. Plain string:            "group1"
-	Groups json.RawMessage `json:"groups"`
-}
+// jwtClaims is an alias for the shared claims type decoded from a JWT
+// payload. Kept as a package-level alias (rather than inlining auth.JWTClaims
+// everywhere) so existing doctor code and tests read the same as before.
+type jwtClaims = auth.JWTClaims
 
 // loadDoctorToken is the single canonical way to load the stored token in doctor checks.
 // All checks must use this function so token-file resolution is consistent.
@@ -247,19 +244,7 @@ func checkAWSIdentity() CheckResult {
 
 // decodeJWTClaims decodes the payload of a raw JWT (no signature verification).
 func decodeJWTClaims(rawJWT string) (*jwtClaims, error) {
-	parts := strings.SplitN(rawJWT, ".", 3)
-	if len(parts) < 2 {
-		return nil, fmt.Errorf("invalid JWT format")
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode JWT payload: %w", err)
-	}
-	var claims jwtClaims
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal JWT claims: %w", err)
-	}
-	return &claims, nil
+	return auth.DecodeJWTClaims(rawJWT)
 }
 
 // decodeBase64URL decodes a base64 URL-encoded string (with or without padding).
@@ -267,62 +252,15 @@ func decodeBase64URL(s string) ([]byte, error) {
 	return base64.RawURLEncoding.DecodeString(s)
 }
 
-// normalizeGroups extracts the groups claim from JWT claims, handling all three forms:
-//  1. cognito:groups as a real []string
-//  2. groups as a real []string
-//  3. groups as a JSON-encoded string containing a JSON array: "[\"g1\",\"g2\"]"
-//  4. groups as a plain string: "group1"
+// normalizeGroups extracts the groups claim from JWT claims. See
+// auth.NormalizeGroups for the three Cognito forms handled.
 func normalizeGroups(claims *jwtClaims) []string {
-	// Form 1: standard Cognito cognito:groups claim (real []string)
-	if len(claims.CognitoGroups) > 0 {
-		return claims.CognitoGroups
-	}
-
-	if len(claims.Groups) == 0 {
-		return nil
-	}
-
-	// Form 2: real []string — try to unmarshal as []string first
-	var groupSlice []string
-	if err := json.Unmarshal(claims.Groups, &groupSlice); err == nil {
-		return groupSlice
-	}
-
-	// Form 3 & 4: it's a JSON string — unwrap the string value
-	var groupStr string
-	if err := json.Unmarshal(claims.Groups, &groupStr); err != nil {
-		return nil
-	}
-
-	// Form 3: the string itself is a JSON array
-	if err := json.Unmarshal([]byte(groupStr), &groupSlice); err == nil && len(groupSlice) > 0 {
-		return groupSlice
-	}
-
-	// Form 4: plain string (single group)
-	if groupStr != "" {
-		return []string{groupStr}
-	}
-
-	return nil
+	return auth.NormalizeGroups(claims)
 }
 
 // audString converts the aud claim (string or []string) to a display string.
 func audString(aud any) string {
-	switch v := aud.(type) {
-	case string:
-		return v
-	case []interface{}:
-		var parts []string
-		for _, a := range v {
-			if s, ok := a.(string); ok {
-				parts = append(parts, s)
-			}
-		}
-		return strings.Join(parts, ", ")
-	default:
-		return fmt.Sprintf("%v", aud)
-	}
+	return auth.AudString(aud)
 }
 
 // lastN returns the last n chars of s (or all of s if shorter).

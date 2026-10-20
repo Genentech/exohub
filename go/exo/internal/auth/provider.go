@@ -7,8 +7,6 @@ package auth
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/json"
 	"strings"
 	"time"
 )
@@ -91,23 +89,28 @@ func splitScopes(s string) []string {
 // the payload of a raw JWT without signature verification.
 // Returns an empty string if the token cannot be decoded.
 func UsernameFromToken(rawJWT string) string {
-	parts := strings.SplitN(rawJWT, ".", 3)
-	if len(parts) < 2 {
-		return ""
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	claims, err := DecodeJWTClaims(rawJWT)
 	if err != nil {
 		return ""
 	}
-	var claims struct {
-		PreferredUsername string `json:"preferred_username"`
-		Sub               string `json:"sub"`
+	return claims.Username()
+}
+
+// PersonIdentityFromToken decodes a Person agent identity from the payload
+// of a raw JWT without signature verification (design D5): the
+// preferred_username claim as the unix id, and a display label built from
+// whichever name claims the identity provider issues, checked in this
+// order: the "name" claim, then "given_name" and "family_name" joined with
+// a space. There is no email or git-config fallback (design D5). ok is
+// false if the token cannot be decoded or has no preferred_username.
+func PersonIdentityFromToken(rawJWT string) (unixID, label string, ok bool) {
+	claims, err := DecodeJWTClaims(rawJWT)
+	if err != nil || claims.PreferredUsername == "" {
+		return "", "", false
 	}
-	if err := json.Unmarshal(payload, &claims); err != nil {
-		return ""
+	label = claims.Name
+	if label == "" {
+		label = strings.TrimSpace(claims.GivenName + " " + claims.FamilyName)
 	}
-	if claims.PreferredUsername != "" {
-		return claims.PreferredUsername
-	}
-	return claims.Sub
+	return claims.PreferredUsername, label, true
 }

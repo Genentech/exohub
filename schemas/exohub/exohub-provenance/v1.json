@@ -1,0 +1,262 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "exohub-provenance/v1.json",
+  "title": "exohub-provenance",
+  "description": "An exo bundle's flattened, catalog-facing provenance graph (provenance.json), derived from provenance.jsonld with no catalog-specific logic (design D16).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "ref",
+    "record_count",
+    "entity_count",
+    "records",
+    "agents",
+    "activities",
+    "entities",
+    "graph_file"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "const": "exohub-provenance/v1.json"
+    },
+    "ref": {
+      "type": "string",
+      "_elasticsearch": {
+        "type": "keyword"
+      }
+    },
+    "ref_name": {
+      "type": "string",
+      "_elasticsearch": {
+        "type": "text"
+      }
+    },
+    "record_count": {
+      "type": "integer",
+      "format": "long"
+    },
+    "entity_count": {
+      "type": "integer",
+      "format": "long"
+    },
+    "graph_file": {
+      "type": "string",
+      "_elasticsearch": {
+        "type": "keyword"
+      }
+    },
+    "records": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "assertion",
+          "asserted_by",
+          "generated_at_time"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "_elasticsearch": {
+              "type": "keyword"
+            }
+          },
+          "assertion": {
+            "type": "string",
+            "_elasticsearch": {
+              "type": "keyword"
+            }
+          },
+          "asserted_by": {
+            "type": "string",
+            "_elasticsearch": {
+              "type": "keyword"
+            }
+          },
+          "generated_at_time": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    },
+    "agents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "_elasticsearch": {
+              "type": "keyword"
+            }
+          },
+          "type": {
+            "type": "string",
+            "_elasticsearch": {
+              "type": "keyword"
+            }
+          },
+          "label": {
+            "type": "string",
+            "_elasticsearch": {
+              "type": "text"
+            }
+          },
+          "model": {
+            "type": "string",
+            "_elasticsearch": {
+              "type": "keyword"
+            }
+          },
+          "acted_on_behalf_of": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "_elasticsearch": {
+                "type": "keyword"
+              }
+            }
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "_elasticsearch": {
+                "type": "keyword"
+              }
+            }
+          }
+        }
+      }
+    },
+    "activities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "_elasticsearch": {
+              "type": "keyword"
+            }
+          },
+          "plan": {
+            "type": "string",
+            "_elasticsearch": {
+              "type": "keyword"
+            }
+          },
+          "started": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ended": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "agents": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "_elasticsearch": {
+                "type": "keyword"
+              }
+            }
+          },
+          "used": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "_elasticsearch": {
+                "type": "keyword"
+              }
+            }
+          },
+          "generated": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "_elasticsearch": {
+                "type": "keyword"
+              }
+            }
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "_elasticsearch": {
+                "type": "keyword"
+              }
+            }
+          }
+        }
+      }
+    },
+    "entities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "covered"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "_elasticsearch": {
+              "type": "keyword"
+            }
+          },
+          "type": {
+            "type": "string",
+            "_elasticsearch": {
+              "type": "keyword"
+            }
+          },
+          "path": {
+            "type": "string",
+            "_elasticsearch": {
+              "type": "keyword"
+            }
+          },
+          "covered": {
+            "type": "boolean"
+          },
+          "revision_of": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "_elasticsearch": {
+                "type": "keyword"
+              }
+            }
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "_elasticsearch": {
+                "type": "keyword"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

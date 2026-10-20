@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	initcmd "github.com/Genentech/exohub/go/exo/commands/init"
+	"github.com/Genentech/exohub/go/exo/internal/pathglob"
 )
 
 // chdirTemp creates a temp dir, chdirs into it, and returns a cleanup func
@@ -140,12 +141,12 @@ func TestRouterGlobSemantics(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ok, err := matchGlob(tt.pattern, tt.path)
+			ok, err := pathglob.Match(tt.pattern, tt.path)
 			if err != nil {
-				t.Fatalf("matchGlob() error = %v", err)
+				t.Fatalf("pathglob.Match() error = %v", err)
 			}
 			if ok != tt.wantMatch {
-				t.Errorf("matchGlob(%q, %q) = %v, want %v", tt.pattern, tt.path, ok, tt.wantMatch)
+				t.Errorf("pathglob.Match(%q, %q) = %v, want %v", tt.pattern, tt.path, ok, tt.wantMatch)
 			}
 		})
 	}

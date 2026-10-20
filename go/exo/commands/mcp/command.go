@@ -168,6 +168,19 @@ func toolRegistry() []toolEntry {
 			handler: handleLoginStatus,
 		},
 		{
+			tool: mcp.NewTool("whoami",
+				mcp.WithDescription(
+					"Show who you're logged in as: identity, session expiry, organisation claims, "+
+						"and the AWS profile/credentials exo will use. "+
+						"Returns an error if not logged in (call 'login' first). "+
+						"Never returns tokens or AWS secrets.",
+				),
+				mcp.WithBoolean("aws", mcp.Description("Also perform a live sts:GetCallerIdentity call (network call)")),
+				mcp.WithReadOnlyHintAnnotation(true),
+			),
+			handler: handleWhoami,
+		},
+		{
 			tool: mcp.NewTool("heartbeat_record",
 				mcp.WithDescription(
 					"Start recording sync progress metrics in the background. "+

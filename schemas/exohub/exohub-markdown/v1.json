@@ -1,0 +1,503 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "exohub-markdown/v1.json",
+  "title": "ExoHub Markdown",
+  "description": "Per-file markdown artifact produced by exo bundle, describing a tracked markdown file with parsed structure, content, and metadata from YAML front matter.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "repo_url",
+    "ref",
+    "path",
+    "key",
+    "backend",
+    "size",
+    "title",
+    "content",
+    "is_readme"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "const": "exohub-markdown/v1.json"
+    },
+    "repo_url": {
+      "_elasticsearch": {
+        "type": "text"
+      },
+      "type": "string",
+      "description": "Git remote URL of the repository (from origin)"
+    },
+    "ref": {
+      "_elasticsearch": {
+        "type": "keyword"
+      },
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$",
+      "description": "Resolved commit hash at which this bundle was generated"
+    },
+    "path": {
+      "_elasticsearch": {
+        "type": "text"
+      },
+      "type": "string",
+      "description": "File path relative to the repository root"
+    },
+    "key": {
+      "type": "string",
+      "description": "Git blob hash"
+    },
+    "backend": {
+      "type": "string",
+      "const": "git",
+      "description": "Always 'git' for markdown files"
+    },
+    "size": {
+      "type": "integer",
+      "format": "long",
+      "minimum": 0,
+      "description": "File size in bytes"
+    },
+    "is_readme": {
+      "type": "boolean",
+      "description": "True when the filename is README.md or README (case-insensitive)"
+    },
+    "title": {
+      "_elasticsearch": {
+        "type": "text"
+      },
+      "_nuros": [
+        {
+          "model": {
+            "id": "default"
+          }
+        }
+      ],
+      "type": "string",
+      "description": "Text of the first H1 heading, or empty string if none"
+    },
+    "sections": {
+      "type": "array",
+      "description": "All headings extracted from the markdown content.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "level",
+          "text"
+        ],
+        "properties": {
+          "level": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 6,
+            "description": "Heading level (1-6)"
+          },
+          "text": {
+            "_elasticsearch": {
+              "type": "text"
+            },
+            "_nuros": [
+              {
+                "model": {
+                  "id": "default"
+                }
+              }
+            ],
+            "type": "string",
+            "description": "Heading text content"
+          }
+        }
+      }
+    },
+    "content": {
+      "_elasticsearch": {
+        "type": "text"
+      },
+      "_nuros": [
+        {
+          "model": {
+            "id": "default"
+          }
+        }
+      ],
+      "type": "string",
+      "description": "Raw markdown source with YAML front matter stripped"
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Metadata from YAML front matter, same shape as git-annex metadata in exohub-artifact. Each value is an array of strings.",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "_elasticsearch": {
+            "type": "text"
+          },
+          "type": "string"
+        }
+      }
+    },
+    "commits": {
+      "type": "array",
+      "description": "Commits within the bundle range that modified this file, newest first.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "hash",
+          "parents",
+          "author_name",
+          "author_email",
+          "author_date",
+          "committer_name",
+          "committer_email",
+          "committer_date",
+          "subject"
+        ],
+        "properties": {
+          "hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$",
+            "description": "Full commit SHA-1 hash"
+          },
+          "parents": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "description": "Parent commit hashes (multiple for merge commits)"
+          },
+          "author_name": {
+            "_elasticsearch": {
+              "type": "text"
+            },
+            "type": "string"
+          },
+          "author_email": {
+            "type": "string"
+          },
+          "author_date": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Author date in ISO 8601 format"
+          },
+          "committer_name": {
+            "_elasticsearch": {
+              "type": "text"
+            },
+            "type": "string"
+          },
+          "committer_email": {
+            "type": "string"
+          },
+          "committer_date": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Committer date in ISO 8601 format"
+          },
+          "subject": {
+            "_elasticsearch": {
+              "type": "text"
+            },
+            "type": "string",
+            "description": "First line of the commit message"
+          },
+          "body": {
+            "_elasticsearch": {
+              "type": "text"
+            },
+            "type": "string",
+            "description": "Commit message body (after the first line)"
+          }
+        }
+      }
+    },
+    "locations": {
+      "type": "array",
+      "description": "Non-local remotes holding a copy of this file. Always empty for markdown files.",
+      "items": {
+        "type": "object",
+        "required": [
+          "remote",
+          "type",
+          "uuid"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "remote": {
+            "type": "string",
+            "description": "Remote name as configured in .exohub/remotes"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "annex",
+              "export",
+              "exospace",
+              "artifactdb"
+            ],
+            "description": "Remote type"
+          },
+          "uuid": {
+            "type": "string",
+            "description": "Git-annex UUID of the remote"
+          },
+          "untrusted": {
+            "type": "boolean",
+            "description": "True if git-annex considers this remote untrusted"
+          },
+          "s3url": {
+            "type": "string",
+            "description": "S3 base URL of the remote (annex and export types)"
+          },
+          "s3_object": {
+            "type": "string",
+            "description": "Full S3 object path for non-chunked files in annex remotes"
+          },
+          "export_path": {
+            "type": "string",
+            "description": "Full S3 path for files in export remotes (uses original file path)"
+          },
+          "chunks": {
+            "type": "array",
+            "description": "Chunk details for files exceeding the annex remote's chunk size.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "chunk_key",
+                "chunk_number",
+                "chunk_size",
+                "s3_path"
+              ],
+              "properties": {
+                "chunk_key": {
+                  "type": "string",
+                  "description": "Full git-annex chunk key"
+                },
+                "chunk_number": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "1-based chunk index"
+                },
+                "chunk_size": {
+                  "type": "integer",
+                  "format": "long",
+                  "minimum": 1,
+                  "description": "Size of this chunk in bytes"
+                },
+                "s3_path": {
+                  "type": "string",
+                  "description": "Full S3 object path for this chunk"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "lineage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "covered"
+      ],
+      "properties": {
+        "covered": {
+          "type": "boolean"
+        },
+        "generated_by": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "_elasticsearch": {
+                "type": "keyword"
+              }
+            },
+            "started": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "ended": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "plan": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "_elasticsearch": {
+                    "type": "keyword"
+                  }
+                },
+                "path": {
+                  "type": "string",
+                  "_elasticsearch": {
+                    "type": "keyword"
+                  }
+                }
+              }
+            },
+            "agents": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "_elasticsearch": {
+                      "type": "keyword"
+                    }
+                  },
+                  "type": {
+                    "type": "string",
+                    "_elasticsearch": {
+                      "type": "keyword"
+                    }
+                  },
+                  "label": {
+                    "type": "string",
+                    "_elasticsearch": {
+                      "type": "text"
+                    }
+                  },
+                  "model": {
+                    "type": "string",
+                    "_elasticsearch": {
+                      "type": "keyword"
+                    }
+                  },
+                  "acted_on_behalf_of": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "_elasticsearch": {
+                        "type": "keyword"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "_elasticsearch": {
+                  "type": "keyword"
+                }
+              },
+              "path": {
+                "type": "string",
+                "_elasticsearch": {
+                  "type": "keyword"
+                }
+              }
+            }
+          }
+        },
+        "revision_of": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "_elasticsearch": {
+              "type": "keyword"
+            }
+          }
+        },
+        "attributed_to": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "_elasticsearch": {
+              "type": "keyword"
+            }
+          }
+        },
+        "records": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "assertion",
+              "asserted_by",
+              "generated_at_time"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "_elasticsearch": {
+                  "type": "keyword"
+                }
+              },
+              "assertion": {
+                "type": "string",
+                "_elasticsearch": {
+                  "type": "keyword"
+                }
+              },
+              "asserted_by": {
+                "type": "string",
+                "_elasticsearch": {
+                  "type": "keyword"
+                }
+              },
+              "generated_at_time": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        },
+        "collection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "_elasticsearch": {
+                "type": "keyword"
+              }
+            },
+            "path": {
+              "type": "string",
+              "_elasticsearch": {
+                "type": "keyword"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

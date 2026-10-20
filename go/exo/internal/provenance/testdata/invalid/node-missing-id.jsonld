@@ -1,0 +1,10 @@
+{
+  "@context": "https://genentech.github.io/exohub/ns/provenance/v1.jsonld",
+  "@id": "urn:exohub:record:01928c9e-0000-7000-8000-000000000006",
+  "exo:assertion": "asserted",
+  "exo:assertedBy": "urn:exohub:agent:person:jrivers",
+  "generatedAtTime": "2026-10-14T09:00:00Z",
+  "@graph": [
+    { "@type": "Entity", "exo:path": "data/result.csv" }
+  ]
+}

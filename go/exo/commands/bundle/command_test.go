@@ -10,6 +10,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/Genentech/exohub/go/exo/internal/provenance"
 )
 
 func TestParseChunkSize(t *testing.T) {
@@ -1420,7 +1422,7 @@ func TestGenerateGitArtifactsBasic(t *testing.T) {
 		"aaaa": {Hash: "aaaa", Subject: "init"},
 	}
 
-	count, totalSize, err := generateGitArtifacts(filesDir, "headhash", "https://example.com/repo.git", Preset{}, pathCommits, commitMap, blobInfoMap, false, nil, false, map[string]bool{}, map[string]bool{}, nil)
+	count, totalSize, err := generateGitArtifacts(filesDir, "headhash", "https://example.com/repo.git", Preset{}, pathCommits, commitMap, blobInfoMap, false, nil, false, map[string]bool{}, map[string]bool{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("generateGitArtifacts error: %v", err)
 	}
@@ -1483,7 +1485,7 @@ func TestGenerateGitArtifactsResume(t *testing.T) {
 	commitMap := map[string]Commit{"h1": {Hash: "h1"}}
 
 	// First run — generates both
-	count, _, err := generateGitArtifacts(filesDir, "head", "url", Preset{}, pathCommits, commitMap, blobInfoMap, false, nil, false, map[string]bool{}, map[string]bool{}, nil)
+	count, _, err := generateGitArtifacts(filesDir, "head", "url", Preset{}, pathCommits, commitMap, blobInfoMap, false, nil, false, map[string]bool{}, map[string]bool{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("first run error: %v", err)
 	}
@@ -1492,7 +1494,7 @@ func TestGenerateGitArtifactsResume(t *testing.T) {
 	}
 
 	// Second run with resume — should skip both
-	count, _, err = generateGitArtifacts(filesDir, "head", "url", Preset{}, pathCommits, commitMap, blobInfoMap, false, nil, true, map[string]bool{}, map[string]bool{}, nil)
+	count, _, err = generateGitArtifacts(filesDir, "head", "url", Preset{}, pathCommits, commitMap, blobInfoMap, false, nil, true, map[string]bool{}, map[string]bool{}, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("resume run error: %v", err)
 	}
@@ -1658,7 +1660,7 @@ func TestGenerateMarkdownArtifacts(t *testing.T) {
 
 	t.Run("root only by default", func(t *testing.T) {
 		outDir := filepath.Join(dir, "out-root", "files")
-		count, _, mdFiles, err := generateMarkdownArtifacts(outDir, "headhash", "https://example.com/repo.git", Preset{}, pathCommits, commitMap, blobInfoMap, false, nil, false, map[string]bool{}, nil)
+		count, _, mdFiles, err := generateMarkdownArtifacts(outDir, "headhash", "https://example.com/repo.git", Preset{}, pathCommits, commitMap, blobInfoMap, false, nil, false, map[string]bool{}, nil, nil, nil)
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
@@ -1704,7 +1706,7 @@ func TestGenerateMarkdownArtifacts(t *testing.T) {
 
 	t.Run("recursive processes subdirectories", func(t *testing.T) {
 		outDir := filepath.Join(dir, "out-recursive", "files")
-		count, _, mdFiles, err := generateMarkdownArtifacts(outDir, "headhash", "https://example.com/repo.git", Preset{MarkdownRecursive: true}, pathCommits, commitMap, blobInfoMap, false, nil, false, map[string]bool{}, nil)
+		count, _, mdFiles, err := generateMarkdownArtifacts(outDir, "headhash", "https://example.com/repo.git", Preset{MarkdownRecursive: true}, pathCommits, commitMap, blobInfoMap, false, nil, false, map[string]bool{}, nil, nil, nil)
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
@@ -1732,14 +1734,14 @@ func TestGenerateMarkdownArtifacts(t *testing.T) {
 	t.Run("git artifacts exclude markdown files", func(t *testing.T) {
 		// Generate markdown artifacts first
 		mdDir := filepath.Join(dir, "out-exclusion", "files")
-		_, _, mdFiles, err := generateMarkdownArtifacts(mdDir, "headhash", "url", Preset{}, pathCommits, commitMap, blobInfoMap, false, nil, false, map[string]bool{}, nil)
+		_, _, mdFiles, err := generateMarkdownArtifacts(mdDir, "headhash", "url", Preset{}, pathCommits, commitMap, blobInfoMap, false, nil, false, map[string]bool{}, nil, nil, nil)
 		if err != nil {
 			t.Fatalf("markdown error: %v", err)
 		}
 
 		// Now generate git artifacts — README.md should be excluded
 		gitDir := filepath.Join(dir, "out-exclusion-git", "files")
-		count, _, err := generateGitArtifacts(gitDir, "headhash", "url", Preset{}, pathCommits, commitMap, blobInfoMap, false, nil, false, map[string]bool{}, mdFiles, nil)
+		count, _, err := generateGitArtifacts(gitDir, "headhash", "url", Preset{}, pathCommits, commitMap, blobInfoMap, false, nil, false, map[string]bool{}, mdFiles, nil, nil, nil)
 		if err != nil {
 			t.Fatalf("git artifacts error: %v", err)
 		}
@@ -1797,7 +1799,7 @@ func TestMarkdownUnderAnnexScope(t *testing.T) {
 
 	t.Run("annex scope produces markdown artifact", func(t *testing.T) {
 		outDir := filepath.Join(dir, "out-annex", "files")
-		count, _, mdFiles, err := generateMarkdownArtifacts(outDir, "headhash", "https://example.com/repo.git", Preset{}, pathCommits, commitMap, blobInfoMap, false, nil, false, map[string]bool{}, nil)
+		count, _, mdFiles, err := generateMarkdownArtifacts(outDir, "headhash", "https://example.com/repo.git", Preset{}, pathCommits, commitMap, blobInfoMap, false, nil, false, map[string]bool{}, nil, nil, nil)
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
@@ -1822,7 +1824,7 @@ func TestMarkdownUnderAnnexScope(t *testing.T) {
 
 	t.Run("annex scope with recursive includes subdirs", func(t *testing.T) {
 		outDir := filepath.Join(dir, "out-annex-recursive", "files")
-		count, _, mdFiles, err := generateMarkdownArtifacts(outDir, "headhash", "https://example.com/repo.git", Preset{MarkdownRecursive: true}, pathCommits, commitMap, blobInfoMap, false, nil, false, map[string]bool{}, nil)
+		count, _, mdFiles, err := generateMarkdownArtifacts(outDir, "headhash", "https://example.com/repo.git", Preset{MarkdownRecursive: true}, pathCommits, commitMap, blobInfoMap, false, nil, false, map[string]bool{}, nil, nil, nil)
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
@@ -1865,7 +1867,7 @@ func TestMarkdownUnderAnnexScope(t *testing.T) {
 		commitMapNoMd := map[string]Commit{"bbbb": {Hash: "bbbb", Subject: "init"}}
 
 		outDir := filepath.Join(noMdDir, "out-nomd", "files")
-		count, _, _, err := generateMarkdownArtifacts(outDir, "headhash", "https://example.com/repo.git", Preset{}, pathCommitsNoMd, commitMapNoMd, blobInfoMapNoMd, false, nil, false, map[string]bool{}, nil)
+		count, _, _, err := generateMarkdownArtifacts(outDir, "headhash", "https://example.com/repo.git", Preset{}, pathCommitsNoMd, commitMapNoMd, blobInfoMapNoMd, false, nil, false, map[string]bool{}, nil, nil, nil)
 		if err != nil {
 			t.Fatalf("error: %v", err)
 		}
@@ -1876,12 +1878,12 @@ func TestMarkdownUnderAnnexScope(t *testing.T) {
 
 	t.Run("all scope deduplicates markdown files", func(t *testing.T) {
 		mdOutDir := filepath.Join(dir, "out-dedup-md", "files")
-		_, _, mdFiles, err := generateMarkdownArtifacts(mdOutDir, "headhash", "https://example.com/repo.git", Preset{}, pathCommits, commitMap, blobInfoMap, false, nil, false, map[string]bool{}, nil)
+		_, _, mdFiles, err := generateMarkdownArtifacts(mdOutDir, "headhash", "https://example.com/repo.git", Preset{}, pathCommits, commitMap, blobInfoMap, false, nil, false, map[string]bool{}, nil, nil, nil)
 		if err != nil {
 			t.Fatalf("markdown error: %v", err)
 		}
 		gitOutDir := filepath.Join(dir, "out-dedup-git", "files")
-		_, _, err = generateGitArtifacts(gitOutDir, "headhash", "https://example.com/repo.git", Preset{}, pathCommits, commitMap, blobInfoMap, false, nil, false, map[string]bool{}, mdFiles, nil)
+		_, _, err = generateGitArtifacts(gitOutDir, "headhash", "https://example.com/repo.git", Preset{}, pathCommits, commitMap, blobInfoMap, false, nil, false, map[string]bool{}, mdFiles, nil, nil, nil)
 		if err != nil {
 			t.Fatalf("git error: %v", err)
 		}
@@ -2537,5 +2539,409 @@ func TestGetRepoURLLocalPathOnlyErrors(t *testing.T) {
 	url, err := getRepoURL()
 	if err == nil {
 		t.Fatalf("expected an error for a local-path-only remote, got url=%q", url)
+	}
+}
+
+// setupBundleTestRepo creates a temp git repository with a minimal
+// .exohub/remotes file, enough for runBundle to execute end to end.
+func setupBundleTestRepo(t *testing.T) (dir string, run func(args ...string) string) {
+	t.Helper()
+	dir = t.TempDir()
+	run = func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "HOME="+dir)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("command %v failed: %v\n%s", args, err, out)
+		}
+		return string(out)
+	}
+	run("git", "init", "-q")
+	run("git", "config", "user.email", "test@test.com")
+	run("git", "config", "user.name", "Test")
+	if err := os.MkdirAll(filepath.Join(dir, ".exohub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	remotes := "remotes:\n  - name: s3-primary\n    type: s3\n    uuid: 00000000-0000-0000-0000-000000000001\n    s3url: s3://bucket/prefix\n"
+	if err := os.WriteFile(filepath.Join(dir, ".exohub", "remotes"), []byte(remotes), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir, run
+}
+
+func readBundleInfo(t *testing.T, outputDir string) BundleInfo {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(outputDir, "bundle.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(bundle.json) error = %v", err)
+	}
+	var info BundleInfo
+	if err := json.Unmarshal(data, &info); err != nil {
+		t.Fatalf("Unmarshal(bundle.json) error = %v", err)
+	}
+	return info
+}
+
+func TestRunBundle_NoRecordsNoProvenanceFile(t *testing.T) {
+	dir, run := setupBundleTestRepo(t)
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello\n"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	outputDir := filepath.Join(".exohub", "bundles", "out")
+	if err := runBundle("", "", "default", outputDir, "", false, false, true, false, false, false, false, "test", nil); err != nil {
+		t.Fatalf("runBundle() error = %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(outputDir, "provenance.jsonld")); !os.IsNotExist(err) {
+		t.Errorf("provenance.jsonld exists, want none (no records, no require rules): %v", err)
+	}
+	info := readBundleInfo(t, outputDir)
+	if info.Provenance != nil {
+		t.Errorf("bundle.json provenance = %+v, want nil", info.Provenance)
+	}
+}
+
+func TestRunBundle_RequireViolationFailsBeforeWriting(t *testing.T) {
+	dir, run := setupBundleTestRepo(t)
+	os.WriteFile(filepath.Join(dir, ".exohub", "config"), []byte("provenance:\n  require:\n    - \"results/**\"\n"), 0o644)
+	os.MkdirAll(filepath.Join(dir, "results"), 0o755)
+	os.WriteFile(filepath.Join(dir, "results", "a.csv"), []byte("a\n"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	outputDir := filepath.Join(".exohub", "bundles", "out")
+	err := runBundle("", "", "default", outputDir, "", false, false, true, false, false, false, false, "test", nil)
+	if err == nil {
+		t.Fatal("runBundle() error = nil, want a provenance.require violation error")
+	}
+	if _, statErr := os.Stat(filepath.Join(outputDir, "bundle.json")); !os.IsNotExist(statErr) {
+		t.Error("bundle.json was written despite the provenance.require violation")
+	}
+
+	// --no-provenance does not bypass provenance.require (design D8).
+	err = runBundle("", "", "default", outputDir, "", false, false, true, false, false, false, true, "test", nil)
+	if err == nil {
+		t.Fatal("runBundle() with --no-provenance error = nil, want a provenance.require violation error")
+	}
+}
+
+func TestRunBundle_CompilesProvenanceDocument(t *testing.T) {
+	dir, run := setupBundleTestRepo(t)
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello\n"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	blobID := strings.TrimSpace(run("git", "rev-parse", "HEAD:a.txt"))
+	entityID := "urn:exohub:git:blob:" + blobID
+	recID := "018f8f3e-1a2b-7c3d-8e4f-5a6b7c8d9e0f"
+	record := fmt.Sprintf(`{
+  "@context": "https://genentech.github.io/exohub/ns/provenance/v1.jsonld",
+  "@id": "urn:exohub:record:%s",
+  "exo:assertion": "recorded",
+  "exo:assertedBy": "urn:exohub:agent:person:alice",
+  "generatedAtTime": "2026-10-14T10:00:00Z",
+  "@graph": [{"@id": %q, "@type": "Entity"}]
+}`, recID, entityID)
+	os.MkdirAll(filepath.Join(dir, ".exohub", "provenance"), 0o755)
+	os.WriteFile(filepath.Join(dir, ".exohub", "provenance", "r.jsonld"), []byte(record), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "record")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	outputDir := filepath.Join(".exohub", "bundles", "out")
+	if err := runBundle("", "", "default", outputDir, "", false, false, true, false, false, false, false, "test", nil); err != nil {
+		t.Fatalf("runBundle() error = %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(outputDir, "provenance.jsonld"))
+	if err != nil {
+		t.Fatalf("ReadFile(provenance.jsonld) error = %v", err)
+	}
+	if !strings.Contains(string(data), entityID) {
+		t.Errorf("provenance.jsonld does not contain %s:\n%s", entityID, data)
+	}
+
+	info := readBundleInfo(t, outputDir)
+	if info.Provenance == nil {
+		t.Fatal("bundle.json provenance = nil, want non-nil")
+	}
+	if info.Provenance.File != "provenance.jsonld" || info.Provenance.RecordCount != 1 || info.Provenance.EntityCount != 1 {
+		t.Errorf("bundle.json provenance = %+v, want {provenance.jsonld 1 1}", info.Provenance)
+	}
+
+	// provenance.jsonld must never be packed into an artipack.
+	walkErr := filepath.Walk(outputDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if filepath.Ext(path) == artipackExtension {
+			zr, zerr := zip.OpenReader(path)
+			if zerr != nil {
+				return zerr
+			}
+			defer zr.Close()
+			for _, f := range zr.File {
+				if filepath.Base(f.Name) == "provenance.jsonld" {
+					t.Errorf("provenance.jsonld found inside artipack %s", path)
+				}
+			}
+		}
+		return nil
+	})
+	if walkErr != nil {
+		t.Fatalf("filepath.Walk error = %v", walkErr)
+	}
+}
+
+func TestRunBundle_CompilesProvenanceSoftwareAndPersonAgents(t *testing.T) {
+	dir, run := setupBundleTestRepo(t)
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello\n"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	blobID := strings.TrimSpace(run("git", "rev-parse", "HEAD:a.txt"))
+	entityID := "urn:exohub:git:blob:" + blobID
+	activityID := "urn:exohub:activity:018f8f3e-1a2b-7c3d-8e4f-5a6b7c8d9e10"
+	recID := "018f8f3e-1a2b-7c3d-8e4f-5a6b7c8d9e0f"
+	record := fmt.Sprintf(`{
+  "@context": "https://genentech.github.io/exohub/ns/provenance/v1.jsonld",
+  "@id": "urn:exohub:record:%s",
+  "exo:assertion": "asserted",
+  "exo:assertedBy": "urn:exohub:agent:software:claude-code",
+  "exo:evidence": "scripts/gen.py writes a.txt",
+  "generatedAtTime": "2026-10-14T10:00:00Z",
+  "@graph": [
+    {"@id": %q, "@type": "Entity", "wasGeneratedBy": %q},
+    {"@id": %q, "@type": "Activity", "wasAssociatedWith": ["urn:exohub:agent:software:claude-code", "urn:exohub:agent:person:alice"]},
+    {"@id": "urn:exohub:agent:software:claude-code", "@type": "SoftwareAgent", "exo:model": "claude-sonnet", "actedOnBehalfOf": "urn:exohub:agent:person:alice"},
+    {"@id": "urn:exohub:agent:person:alice", "@type": "Person"}
+  ]
+}`, recID, entityID, activityID, activityID)
+	os.MkdirAll(filepath.Join(dir, ".exohub", "provenance"), 0o755)
+	os.WriteFile(filepath.Join(dir, ".exohub", "provenance", "r.jsonld"), []byte(record), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "record")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	outputDir := filepath.Join(".exohub", "bundles", "out")
+	if err := runBundle("", "", "default", outputDir, "", false, false, true, false, false, false, false, "test", nil); err != nil {
+		t.Fatalf("runBundle() error = %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(outputDir, "provenance.jsonld"))
+	if err != nil {
+		t.Fatalf("ReadFile(provenance.jsonld) error = %v", err)
+	}
+	// The compiled activity references both agents, and both agent nodes
+	// are present in the graph (design D6, D11): a software agent and the
+	// person it acted for, not the person alone.
+	for _, want := range []string{
+		"urn:exohub:agent:software:claude-code",
+		"urn:exohub:agent:person:alice",
+	} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("provenance.jsonld does not contain %s:\n%s", want, data)
+		}
+	}
+}
+
+func TestRunBundle_DryRunWritesNothing(t *testing.T) {
+	dir, run := setupBundleTestRepo(t)
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello\n"), 0o644)
+	os.MkdirAll(filepath.Join(dir, ".exohub", "provenance"), 0o755)
+	os.WriteFile(filepath.Join(dir, ".exohub", "provenance", "bad.jsonld"), []byte("not json"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	outputDir := filepath.Join(".exohub", "bundles", "out")
+	if err := runBundle("", "", "default", outputDir, "", false, false, true, true, false, false, false, "test", nil); err != nil {
+		t.Fatalf("runBundle() dry-run error = %v", err)
+	}
+	if _, err := os.Stat(outputDir); !os.IsNotExist(err) {
+		t.Errorf("dry-run created %s, want nothing written", outputDir)
+	}
+}
+
+func TestRunBundle_RefIgnoresUncommittedWorktreeRecords(t *testing.T) {
+	dir, run := setupBundleTestRepo(t)
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello\n"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+	run("git", "tag", "v1.0.0")
+
+	// A record added after the tag, uncommitted in the worktree, must not
+	// reach the compiled document for `--ref v1.0.0` (design D8.1).
+	os.MkdirAll(filepath.Join(dir, ".exohub", "provenance"), 0o755)
+	os.WriteFile(filepath.Join(dir, ".exohub", "provenance", "bad.jsonld"), []byte("not json"), 0o644)
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	outputDir := filepath.Join(".exohub", "bundles", "out")
+	if err := runBundle("", "", "default", outputDir, "v1.0.0", false, false, true, false, false, false, false, "test", nil); err != nil {
+		t.Fatalf("runBundle() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outputDir, "provenance.jsonld")); !os.IsNotExist(err) {
+		t.Errorf("provenance.jsonld exists, want none (record only exists uncommitted in the worktree)")
+	}
+}
+
+func TestRunBundle_WritesProvenanceJSONWithLineage(t *testing.T) {
+	dir, run := setupBundleTestRepo(t)
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello\n"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	blobID := strings.TrimSpace(run("git", "rev-parse", "HEAD:a.txt"))
+	entityID := "urn:exohub:git:blob:" + blobID
+	recID := "018f8f3e-1a2b-7c3d-8e4f-5a6b7c8d9e0f"
+	record := fmt.Sprintf(`{
+  "@context": "https://genentech.github.io/exohub/ns/provenance/v1.jsonld",
+  "@id": "urn:exohub:record:%s",
+  "exo:assertion": "recorded",
+  "exo:assertedBy": "urn:exohub:agent:person:alice",
+  "generatedAtTime": "2026-10-14T10:00:00Z",
+  "@graph": [{"@id": %q, "@type": "Entity", "wasAttributedTo": "urn:exohub:agent:person:alice"}]
+}`, recID, entityID)
+	os.MkdirAll(filepath.Join(dir, ".exohub", "provenance"), 0o755)
+	os.WriteFile(filepath.Join(dir, ".exohub", "provenance", "r.jsonld"), []byte(record), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "record")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	outputDir := filepath.Join(".exohub", "bundles", "out")
+	if err := runBundle("", "", "default", outputDir, "", false, false, true, false, false, false, false, "test", nil); err != nil {
+		t.Fatalf("runBundle() error = %v", err)
+	}
+
+	catalogData, err := os.ReadFile(filepath.Join(outputDir, "provenance.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(provenance.json) error = %v", err)
+	}
+	var catalog provenance.ProvenanceDocument
+	if err := json.Unmarshal(catalogData, &catalog); err != nil {
+		t.Fatalf("Unmarshal(provenance.json) error = %v", err)
+	}
+	if catalog.Schema != provenance.ProvenanceSchemaID {
+		t.Errorf("provenance.json $schema = %q, want %q", catalog.Schema, provenance.ProvenanceSchemaID)
+	}
+	if catalog.RecordCount != 1 || len(catalog.Entities) != 1 || catalog.Entities[0].ID != entityID {
+		t.Errorf("provenance.json = %+v, want record_count 1 and entity %s", catalog, entityID)
+	}
+
+	artifactData, err := os.ReadFile(filepath.Join(outputDir, "files", "a.txt.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(files/a.txt.json) error = %v", err)
+	}
+	var artifact Artifact
+	if err := json.Unmarshal(artifactData, &artifact); err != nil {
+		t.Fatalf("Unmarshal(files/a.txt.json) error = %v", err)
+	}
+	if artifact.Lineage == nil || !artifact.Lineage.Covered {
+		t.Fatalf("artifact.Lineage = %+v, want a covered lineage object", artifact.Lineage)
+	}
+	if len(artifact.Lineage.AttributedTo) != 1 || artifact.Lineage.AttributedTo[0] != "urn:exohub:agent:person:alice" {
+		t.Errorf("artifact.Lineage.AttributedTo = %v, want [urn:exohub:agent:person:alice]", artifact.Lineage.AttributedTo)
+	}
+
+	// provenance.json must never be packed into an artipack.
+	walkErr := filepath.Walk(outputDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if filepath.Ext(path) == artipackExtension {
+			zr, zerr := zip.OpenReader(path)
+			if zerr != nil {
+				return zerr
+			}
+			defer zr.Close()
+			for _, f := range zr.File {
+				if filepath.Base(f.Name) == "provenance.json" {
+					t.Errorf("provenance.json found inside artipack %s", path)
+				}
+			}
+		}
+		return nil
+	})
+	if walkErr != nil {
+		t.Fatalf("filepath.Walk error = %v", walkErr)
+	}
+}
+
+func TestRunBundle_IncrementalReemitsOnLineageChange(t *testing.T) {
+	dir, run := setupBundleTestRepo(t)
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "other.txt"), []byte("first\n"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "v1")
+	v1 := strings.TrimSpace(run("git", "rev-parse", "HEAD"))
+
+	// v2: a.txt's content does not change, but a record now covers it, and
+	// an unrelated file changes too (so the bundle has something else to
+	// diff against for --from-ref).
+	os.WriteFile(filepath.Join(dir, "other.txt"), []byte("second\n"), 0o644)
+	blobID := strings.TrimSpace(run("git", "rev-parse", "HEAD:a.txt"))
+	entityID := "urn:exohub:git:blob:" + blobID
+	recID := "018f8f3e-1a2b-7c3d-8e4f-5a6b7c8d9e0f"
+	record := fmt.Sprintf(`{
+  "@context": "https://genentech.github.io/exohub/ns/provenance/v1.jsonld",
+  "@id": "urn:exohub:record:%s",
+  "exo:assertion": "recorded",
+  "exo:assertedBy": "urn:exohub:agent:person:alice",
+  "generatedAtTime": "2026-10-14T10:00:00Z",
+  "@graph": [{"@id": %q, "@type": "Entity", "wasAttributedTo": "urn:exohub:agent:person:alice"}]
+}`, recID, entityID)
+	os.MkdirAll(filepath.Join(dir, ".exohub", "provenance"), 0o755)
+	os.WriteFile(filepath.Join(dir, ".exohub", "provenance", "r.jsonld"), []byte(record), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "v2: record + unrelated change")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	outputDir := filepath.Join(".exohub", "bundles", "out")
+	if err := runBundle("", v1, "default", outputDir, "", false, true, true, false, false, false, false, "test", nil); err != nil {
+		t.Fatalf("runBundle() error = %v", err)
+	}
+
+	// a.txt's content is unchanged since v1, but its lineage is new: the
+	// incremental bundle must still contain its document (spec "Incremental
+	// bundles keep lineage current").
+	artifactData, err := os.ReadFile(filepath.Join(outputDir, "files", "a.txt.json"))
+	if err != nil {
+		t.Fatalf("a.txt.json not emitted despite its new lineage: %v", err)
+	}
+	var artifact Artifact
+	if err := json.Unmarshal(artifactData, &artifact); err != nil {
+		t.Fatalf("Unmarshal(files/a.txt.json) error = %v", err)
+	}
+	if artifact.Lineage == nil || !artifact.Lineage.Covered {
+		t.Fatalf("artifact.Lineage = %+v, want a covered lineage object", artifact.Lineage)
 	}
 }
