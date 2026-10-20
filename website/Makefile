@@ -48,5 +48,8 @@ build-oss-check: oss-build
 check-provenance-context:
 	bash scripts/check-provenance-context.sh $(EXO_CLI_DIR)
 
+test-scripts:
+	bash scripts/oss-sync-guard.test.sh
+
 ingest:
 	gitingest -i content

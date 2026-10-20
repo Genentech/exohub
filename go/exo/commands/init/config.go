@@ -158,9 +158,20 @@ func (a *AnnexConfig) ValidateRouting() error {
 	return nil
 }
 
+// ProvenanceConfig holds the provenance.require and provenance.collections
+// settings from .exohub/config (design D14/D15). Both lists use the same
+// glob syntax as annex.routing paths (pathglob.Match): require patterns
+// match file paths, collections patterns end in "/" and match directory
+// paths.
+type ProvenanceConfig struct {
+	Require     []string `yaml:"require,omitempty"`
+	Collections []string `yaml:"collections,omitempty"`
+}
+
 // ExohubConfig represents .exohub/config file for shared repository settings
 type ExohubConfig struct {
-	Annex *AnnexConfig `yaml:"annex,omitempty"`
+	Annex      *AnnexConfig      `yaml:"annex,omitempty"`
+	Provenance *ProvenanceConfig `yaml:"provenance,omitempty"`
 }
 
 // LoadExohubConfig reads .exohub/config from the current directory.
@@ -179,7 +190,15 @@ func LoadExohubConfigAt(root string) (*ExohubConfig, error) {
 		}
 		return nil, fmt.Errorf("failed to read .exohub/config: %w", err)
 	}
+	return LoadExohubConfigFromBytes(data)
+}
 
+// LoadExohubConfigFromBytes parses .exohub/config content already read from
+// some state (design D15 "Checked states"): the worktree, the index (`git
+// show :.exohub/config`) or a ref tree (`git show <ref>:.exohub/config`).
+// Unlike LoadExohubConfigAt, it never looks at the filesystem, so callers
+// decide how "file does not exist at that state" is handled.
+func LoadExohubConfigFromBytes(data []byte) (*ExohubConfig, error) {
 	var cfg ExohubConfig
 	if strings.TrimSpace(string(data)) != "" {
 		if err := yaml.Unmarshal(data, &cfg); err != nil {

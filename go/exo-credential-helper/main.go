@@ -534,12 +534,23 @@ func outputCredentials(creds *credentialOutput, exportMode bool) {
 
 // Cache
 
+// cacheKeyGroup is an optional hook returning the currently active
+// credential-scoping group (e.g. set via 'exo login --roche-group'), folded
+// into the cache key so that switching or clearing the group never serves
+// AWS credentials cached under a different (or no) group. Nil in the OSS
+// build, where it contributes nothing to the key.
+var cacheKeyGroup func() string
+
 func cacheKey(s3URL, permission string, grants bool) string {
 	grantsStr := "1"
 	if !grants {
 		grantsStr = "0"
 	}
-	h := sha256.Sum256([]byte(s3URL + "|" + permission + "|" + grantsStr))
+	group := ""
+	if cacheKeyGroup != nil {
+		group = cacheKeyGroup()
+	}
+	h := sha256.Sum256([]byte(s3URL + "|" + permission + "|" + grantsStr + "|" + group))
 	return fmt.Sprintf("%x", h[:8])
 }
 

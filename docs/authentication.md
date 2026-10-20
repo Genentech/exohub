@@ -55,3 +55,21 @@ asking the user to run `exo login` again.
 `exo doctor` probes the configured OIDC issuer endpoint
 (`EXO_OIDC_ISSUER` → `/.well-known/openid-configuration`) and reports
 whether it is reachable. This check works for both builds.
+
+## Checking your identity
+
+`exo whoami` shows who you're logged in as, how long the session lasts, and
+which AWS credentials exo will use:
+
+```bash
+exo whoami            # human-readable summary
+exo whoami --json     # stable JSON shape, for MCP/automation
+exo whoami --aws      # also perform a live sts:GetCallerIdentity call
+```
+
+It reports identity (username, name, email, provider, issuer), session
+(expiry and whether a refresh token is stored), organisation claims when
+present (department, cost center, manager, groups), and the AWS profile and
+credentials file path exo uses. If you're not logged in, it prints a message
+and exits non-zero. Tokens, refresh tokens, and AWS secrets are never
+printed.

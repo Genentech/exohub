@@ -2,13 +2,17 @@ package mcp
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
+	"strings"
 	"sync"
 	"syscall"
 
 	gomcp "github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/Genentech/exohub/go/exo/commandutil"
 )
@@ -153,4 +157,117 @@ func getStringArrayParam(request gomcp.CallToolRequest, key string) []string {
 		}
 	}
 	return result
+}
+
+// getNumberParam extracts an integer-valued number parameter from the request.
+func getNumberParam(request gomcp.CallToolRequest, key string) int {
+	args := request.GetArguments()
+	v, ok := args[key]
+	if !ok {
+		return 0
+	}
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case json.Number:
+		i, _ := n.Int64()
+		return int(i)
+	}
+	return 0
+}
+
+// getBoolParam extracts a bool parameter from the request, falling back to
+// defaultVal when absent or not a bool.
+func getBoolParam(request gomcp.CallToolRequest, key string, defaultVal bool) bool {
+	args := request.GetArguments()
+	v, ok := args[key]
+	if !ok {
+		return defaultVal
+	}
+	if b, ok := v.(bool); ok {
+		return b
+	}
+	return defaultVal
+}
+
+// agentNameDisallowed matches any run of characters that are not valid in
+// an exo provenance agent name (person:<name> / software:<name> — see
+// internal/provenance's validAgentName: non-empty, no whitespace or "/").
+// normalizeAgentName is stricter than that minimum, collapsing to a safe
+// lowercase [a-z0-9._-] form so MCP client names like "Visual Studio Code"
+// or "Claude Desktop" become valid agent names instead of being rejected
+// by 'exo provenance validate' after the fact.
+var agentNameDisallowed = regexp.MustCompile(`[^a-z0-9._-]+`)
+
+// normalizeAgentName lowercases name and replaces every run of characters
+// outside [a-z0-9._-] with a single "-", trimming leading/trailing "-".
+// e.g. "Claude Code" -> "claude-code", "Visual Studio Code" ->
+// "visual-studio-code". Returns "" if name has no normalizable content.
+func normalizeAgentName(name string) string {
+	lowered := strings.ToLower(strings.TrimSpace(name))
+	normalized := agentNameDisallowed.ReplaceAllString(lowered, "-")
+	return strings.Trim(normalized, "-")
+}
+
+// defaultSoftwareAgent returns "software:<normalized client name>" for the
+// MCP client driving this tool call (design decision: an AI agent calling
+// exo tools over MCP is a software agent, not the logged-in human), or ""
+// if the transport exposes no client info (e.g. a bare context.Context in
+// tests) or the client name has no normalizable content. The client name
+// is normalized (lowercased, non [a-z0-9._-] runs collapsed to "-") so
+// names like "Visual Studio Code" or "Claude Desktop" are valid exo
+// provenance agent names instead of being rejected by 'exo provenance
+// validate' after the fact.
+func defaultSoftwareAgent(ctx context.Context) string {
+	session := server.ClientSessionFromContext(ctx)
+	if session == nil {
+		return ""
+	}
+	withInfo, ok := session.(server.SessionWithClientInfo)
+	if !ok {
+		return ""
+	}
+	name := normalizeAgentName(withInfo.GetClientInfo().Name)
+	if name == "" {
+		return ""
+	}
+	return "software:" + name
+}
+
+// runExoJSON runs an exo subcommand and returns its stdout as the tool
+// result, trusting well-formed JSON output; it fails the tool call if the
+// command errors.
+func runExoJSON(dir string, args ...string) (*gomcp.CallToolResult, error) {
+	out, err := runInDir(dir, append([]string{"exo"}, args...)...)
+	if err != nil {
+		return resultError("exo %s failed: %s", strings.Join(args, " "), strings.TrimSpace(out))
+	}
+	return jsonOrText(out)
+}
+
+// runExoJSONTolerant runs an exo subcommand, trusting a well-formed JSON
+// result even when the command exits non-zero. Some exo subcommands (e.g.
+// 'provenance validate', 'doctor') use a non-zero exit code to report
+// findings, not to signal that the tool call itself failed.
+func runExoJSONTolerant(dir string, args ...string) (*gomcp.CallToolResult, error) {
+	out, err := runInDir(dir, append([]string{"exo"}, args...)...)
+	trimmed := strings.TrimSpace(out)
+	if json.Valid([]byte(trimmed)) {
+		return gomcp.NewToolResultText(trimmed), nil
+	}
+	if err != nil {
+		return resultError("exo %s failed: %s", strings.Join(args, " "), trimmed)
+	}
+	return resultJSON(map[string]any{"status": "ok", "output": trimmed})
+}
+
+// jsonOrText wraps out as the tool result: verbatim if it is already valid
+// JSON (e.g. from a --json flag), or as a {"status":"ok","output":...} text
+// envelope otherwise.
+func jsonOrText(out string) (*gomcp.CallToolResult, error) {
+	trimmed := strings.TrimSpace(out)
+	if json.Valid([]byte(trimmed)) {
+		return gomcp.NewToolResultText(trimmed), nil
+	}
+	return resultJSON(map[string]any{"status": "ok", "output": trimmed})
 }

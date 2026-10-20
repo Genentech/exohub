@@ -1,0 +1,478 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "exohub-artifact/v1.json",
+  "title": "ExoHub Artifact",
+  "description": "Per-file metadata artifact produced by exo bundle, describing a tracked file's identity, metadata, commit history, and storage locations. Supports both annexed files (annex backend + remote locations) and git-only files (backend=git, empty locations).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "repo_url",
+    "ref",
+    "path",
+    "key",
+    "backend",
+    "size"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "const": "exohub-artifact/v1.json"
+    },
+    "repo_url": {
+      "_elasticsearch": {
+        "type": "text"
+      },
+      "type": "string",
+      "description": "Git remote URL of the repository (from origin)"
+    },
+    "ref": {
+      "_elasticsearch": {
+        "type": "keyword"
+      },
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$",
+      "description": "Resolved commit hash at which this bundle was generated"
+    },
+    "path": {
+      "_elasticsearch": {
+        "type": "text"
+      },
+      "type": "string",
+      "description": "File path relative to the repository root"
+    },
+    "key": {
+      "type": "string",
+      "description": "Git-annex key (for annexed files, e.g. SHA256E-s12345--abc...def.txt) or git blob hash (for git-only files)"
+    },
+    "backend": {
+      "type": "string",
+      "description": "Backend type: git-annex backend (SHA256E, WORM, etc.) or 'git' for regular tracked files",
+      "enum": [
+        "git",
+        "SHA256E",
+        "SHA256",
+        "SHA512E",
+        "SHA512",
+        "SHA384E",
+        "SHA384",
+        "SHA224E",
+        "SHA224",
+        "SHA3_256E",
+        "SHA3_256",
+        "SHA3_512E",
+        "SHA3_512",
+        "SHA3_384E",
+        "SHA3_384",
+        "SHA3_224E",
+        "SHA3_224",
+        "SKEIN256E",
+        "SKEIN256",
+        "SKEIN512E",
+        "SKEIN512",
+        "BLAKE2B256E",
+        "BLAKE2B256",
+        "BLAKE2B512E",
+        "BLAKE2B512",
+        "BLAKE2B160E",
+        "BLAKE2B160",
+        "BLAKE2B224E",
+        "BLAKE2B224",
+        "BLAKE2B384E",
+        "BLAKE2B384",
+        "BLAKE2S256E",
+        "BLAKE2S256",
+        "BLAKE2S160E",
+        "BLAKE2S160",
+        "BLAKE2S224E",
+        "BLAKE2S224",
+        "BLAKE2SP256E",
+        "BLAKE2SP256",
+        "MD5E",
+        "MD5",
+        "WORM",
+        "URL"
+      ]
+    },
+    "size": {
+      "type": "integer",
+      "format": "long",
+      "minimum": 0,
+      "description": "File size in bytes"
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Git-annex user-defined metadata fields. Each value is an array of strings (git-annex fields support multiple values).",
+      "additionalProperties": {
+        "type": "array",
+        "items": {
+          "_elasticsearch": {
+            "type": "text"
+          },
+          "type": "string"
+        }
+      }
+    },
+    "commits": {
+      "type": "array",
+      "description": "Commits within the bundle range that modified this file, newest first.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "hash",
+          "parents",
+          "author_name",
+          "author_email",
+          "author_date",
+          "committer_name",
+          "committer_email",
+          "committer_date",
+          "subject"
+        ],
+        "properties": {
+          "hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$",
+            "description": "Full commit SHA-1 hash"
+          },
+          "parents": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "description": "Parent commit hashes (multiple for merge commits)"
+          },
+          "author_name": {
+            "_elasticsearch": {
+              "type": "text"
+            },
+            "type": "string"
+          },
+          "author_email": {
+            "type": "string"
+          },
+          "author_date": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Author date in ISO 8601 format"
+          },
+          "committer_name": {
+            "_elasticsearch": {
+              "type": "text"
+            },
+            "type": "string"
+          },
+          "committer_email": {
+            "type": "string"
+          },
+          "committer_date": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Committer date in ISO 8601 format"
+          },
+          "subject": {
+            "_elasticsearch": {
+              "type": "text"
+            },
+            "type": "string",
+            "description": "First line of the commit message"
+          },
+          "body": {
+            "_elasticsearch": {
+              "type": "text"
+            },
+            "type": "string",
+            "description": "Commit message body (after the first line)"
+          }
+        }
+      }
+    },
+    "locations": {
+      "type": "array",
+      "description": "Non-local remotes holding a copy of this file.",
+      "items": {
+        "type": "object",
+        "required": [
+          "remote",
+          "type",
+          "uuid"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "remote": {
+            "type": "string",
+            "description": "Remote name as configured in .exohub/remotes"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "annex",
+              "export",
+              "exospace",
+              "artifactdb"
+            ],
+            "description": "Remote type"
+          },
+          "uuid": {
+            "type": "string",
+            "description": "Git-annex UUID of the remote"
+          },
+          "untrusted": {
+            "type": "boolean",
+            "description": "True if git-annex considers this remote untrusted"
+          },
+          "s3url": {
+            "type": "string",
+            "description": "S3 base URL of the remote (annex and export types)"
+          },
+          "s3_object": {
+            "type": "string",
+            "description": "Full S3 object path for non-chunked files in annex remotes"
+          },
+          "export_path": {
+            "type": "string",
+            "description": "Full S3 path for files in export remotes (uses original file path)"
+          },
+          "chunks": {
+            "type": "array",
+            "description": "Chunk details for files exceeding the annex remote's chunk size. Concatenate in chunk_number order to reconstitute the original file.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "chunk_key",
+                "chunk_number",
+                "chunk_size",
+                "s3_path"
+              ],
+              "properties": {
+                "chunk_key": {
+                  "type": "string",
+                  "description": "Full git-annex chunk key"
+                },
+                "chunk_number": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "1-based chunk index"
+                },
+                "chunk_size": {
+                  "type": "integer",
+                  "format": "long",
+                  "minimum": 1,
+                  "description": "Size of this chunk in bytes"
+                },
+                "s3_path": {
+                  "type": "string",
+                  "description": "Full S3 object path for this chunk"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "lineage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "covered"
+      ],
+      "properties": {
+        "covered": {
+          "type": "boolean"
+        },
+        "generated_by": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "_elasticsearch": {
+                "type": "keyword"
+              }
+            },
+            "started": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "ended": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "plan": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "_elasticsearch": {
+                    "type": "keyword"
+                  }
+                },
+                "path": {
+                  "type": "string",
+                  "_elasticsearch": {
+                    "type": "keyword"
+                  }
+                }
+              }
+            },
+            "agents": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "_elasticsearch": {
+                      "type": "keyword"
+                    }
+                  },
+                  "type": {
+                    "type": "string",
+                    "_elasticsearch": {
+                      "type": "keyword"
+                    }
+                  },
+                  "label": {
+                    "type": "string",
+                    "_elasticsearch": {
+                      "type": "text"
+                    }
+                  },
+                  "model": {
+                    "type": "string",
+                    "_elasticsearch": {
+                      "type": "keyword"
+                    }
+                  },
+                  "acted_on_behalf_of": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "_elasticsearch": {
+                        "type": "keyword"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "_elasticsearch": {
+                  "type": "keyword"
+                }
+              },
+              "path": {
+                "type": "string",
+                "_elasticsearch": {
+                  "type": "keyword"
+                }
+              }
+            }
+          }
+        },
+        "revision_of": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "_elasticsearch": {
+              "type": "keyword"
+            }
+          }
+        },
+        "attributed_to": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "_elasticsearch": {
+              "type": "keyword"
+            }
+          }
+        },
+        "records": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "assertion",
+              "asserted_by",
+              "generated_at_time"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "_elasticsearch": {
+                  "type": "keyword"
+                }
+              },
+              "assertion": {
+                "type": "string",
+                "_elasticsearch": {
+                  "type": "keyword"
+                }
+              },
+              "asserted_by": {
+                "type": "string",
+                "_elasticsearch": {
+                  "type": "keyword"
+                }
+              },
+              "generated_at_time": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        },
+        "collection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "_elasticsearch": {
+                "type": "keyword"
+              }
+            },
+            "path": {
+              "type": "string",
+              "_elasticsearch": {
+                "type": "keyword"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

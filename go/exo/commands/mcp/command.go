@@ -24,18 +24,19 @@ type toolEntry struct {
 func toolRegistry() []toolEntry {
 	entries := []toolEntry{
 		{
-			tool: mcp.NewTool("create_repo",
+			tool: mcp.NewTool("profiles",
 				mcp.WithDescription(
-					"Create and initialize a git-annex data repository on the git host. "+
-						"Provide the full git remote URL — the provider (GitLab, GitHub, Gitea) is auto-detected from the URL. "+
-						"No manual configuration files are needed. "+
-						"Requires authentication (run 'login' first). "+
-						"After creating the repo, use 'init_remote' to add S3 or exospace remotes.",
+					"List available ExoHub setup profiles, or show one profile's prompts. "+
+						"Call without 'name' to list profiles (name, description) so you can offer the user a choice. "+
+						"Call with 'name' to get that profile's prompts (key, type, choices, default) so you can ask the "+
+						"user every question yourself — never assume a default, especially for a 'read_access' prompt: it "+
+						"controls who can see the published catalog entries (e.g. 'public' vs 'authenticated'), and some "+
+						"profiles default to 'public'. Pass the answers to 'init' as 'profile' + 'answers'. Read-only.",
 				),
-				mcp.WithString("repo_url", mcp.Required(), mcp.Description("Git remote URL for the repository to create (e.g. git@github.com:org/repo.git)")),
-				mcp.WithString("directory", mcp.Description("Local directory to initialize (defaults to current working directory)")),
+				mcp.WithString("name", mcp.Description("Profile name to show prompts for (omit to list all available profiles)")),
+				mcp.WithReadOnlyHintAnnotation(true),
 			),
-			handler: handleCreateRepo,
+			handler: handleProfiles,
 		},
 		{
 			tool: mcp.NewTool("add",
@@ -149,7 +150,7 @@ func toolRegistry() []toolEntry {
 						"Otherwise, starts a device flow in the background and returns an auth URL "+
 						"that you MUST show to the user so they can visit it in a browser. "+
 						"Then poll 'login_status' to check when authentication completes. "+
-						"Required before using tools that interact with remote services (create_repo, sync, broadcast, clone).",
+						"Required before using tools that interact with remote services (init, sync, broadcast, get, publish).",
 				),
 				mcp.WithBoolean("force", mcp.Description("Force re-authentication even if valid credentials exist")),
 			),
@@ -166,6 +167,19 @@ func toolRegistry() []toolEntry {
 				mcp.WithReadOnlyHintAnnotation(true),
 			),
 			handler: handleLoginStatus,
+		},
+		{
+			tool: mcp.NewTool("whoami",
+				mcp.WithDescription(
+					"Show who you're logged in as: identity, session expiry, organisation claims, "+
+						"and the AWS profile/credentials exo will use. "+
+						"Returns an error if not logged in (call 'login' first). "+
+						"Never returns tokens or AWS secrets.",
+				),
+				mcp.WithBoolean("aws", mcp.Description("Also perform a live sts:GetCallerIdentity call (network call)")),
+				mcp.WithReadOnlyHintAnnotation(true),
+			),
+			handler: handleWhoami,
 		},
 		{
 			tool: mcp.NewTool("heartbeat_record",
@@ -201,13 +215,21 @@ func toolRegistry() []toolEntry {
 		{
 			tool: mcp.NewTool("init",
 				mcp.WithDescription(
-					"Initialize or reconfigure an existing git-annex repository. "+
-						"Runs 'exo init --yes' to ensure git-annex is set up and all remotes "+
-						"defined in '.exohub/remotes' are properly configured. "+
-						"Call this after 'clone' to enable remotes, or any time remote configuration may be stale. "+
-						"This is idempotent — safe to call multiple times.",
+					"Initialize or reconfigure git-annex in an existing git repository, optionally applying a server-authored "+
+						"profile. The repository must already exist locally (clone it with 'git clone <url>', or 'git init' + "+
+						"'git remote add origin <url>' for a brand new repository) — this tool does not create the git "+
+						"repository itself. Without 'profile', runs 'exo init --yes' to ensure git-annex is set up and all "+
+						"remotes defined in '.exohub/remotes' are properly configured — idempotent, safe to call multiple times. "+
+						"With 'profile', also fetches and applies that server-authored profile: use the 'profiles' tool first "+
+						"to discover available profiles and their prompts, ask the user about every prompt (never assume a value, "+
+						"especially 'read_access' — it controls who can see the published catalog entries, e.g. public vs "+
+						"authenticated, and some profiles default to public), then pass the answers here as 'answers' "+
+						"(key -> value, matching the profile's prompt keys and types).",
 				),
-				mcp.WithString("repo_dir", mcp.Required(), mcp.Description("Path to the git repository")),
+				mcp.WithString("repo_dir", mcp.Required(), mcp.Description("Path to the git repository; must already exist (see 'git clone' / 'git init' first)")),
+				mcp.WithString("profile", mcp.Description("Name of a server-authored profile to apply (see the 'profiles' tool)")),
+				mcp.WithString("name", mcp.Description("Explicit repository name (passed through as --name)")),
+				mcp.WithObject("answers", mcp.Description("Answers to the chosen profile's prompts, keyed by prompt key; unanswered prompts fall back to their default")),
 			),
 			handler: handleInit,
 		},
@@ -229,6 +251,100 @@ func toolRegistry() []toolEntry {
 				mcp.WithBoolean("grants", mcp.Description("Enable fine-grained S3 Access Grants permissions (default: true). Ask the user.")),
 			),
 			handler: handleInitRemote,
+		},
+		{
+			tool: mcp.NewTool("get",
+				mcp.WithDescription(
+					"Download git-annex managed content for specific paths into the local repository (wraps 'exo get'). "+
+						"Use this for a targeted download instead of 'sync', which transfers content for the whole repository. "+
+						"Requires git-annex to be initialized in the repository (run 'init' first).",
+				),
+				mcp.WithString("repo_dir", mcp.Required(), mcp.Description("Path to the git repository")),
+				mcp.WithArray("paths", mcp.Description("Paths to get (defaults to the current directory, i.e. everything)"), mcp.WithStringItems()),
+				mcp.WithString("from", mcp.Description("Source remote to get content from (defaults to any remote with the content)")),
+				mcp.WithBoolean("all", mcp.Description("Get all versions of the content, not just the current one")),
+			),
+			handler: handleGet,
+		},
+		{
+			tool: mcp.NewTool("doctor",
+				mcp.WithDescription(
+					"Run ExoHub client diagnostics (wraps 'exo doctor'): environment, auth, network, repo config, "+
+						"grants/S3 access, and provenance checks. Each check reports pass, warn, fail, or skip. "+
+						"Use this to diagnose a failing sync, login, or permission issue before asking the user to "+
+						"investigate manually.",
+				),
+				mcp.WithString("repo_dir", mcp.Description("Path to an ExoHub repo to scope repo-specific checks (default: current directory)")),
+				mcp.WithString("remote", mcp.Description("Only run per-remote checks for this remote name")),
+				mcp.WithBoolean("write_test", mcp.Description("Also perform an opt-in S3 write canary (put + delete) under a caller-owned prefix")),
+				mcp.WithReadOnlyHintAnnotation(true),
+			),
+			handler: handleDoctor,
+		},
+		{
+			tool: mcp.NewTool("provenance_add",
+				mcp.WithDescription(
+					"Record PROV-O provenance for files in this repository (wraps 'exo provenance add'): what was generated, "+
+						"what it was derived from or used, and who/what asserted it. Call this after generating or transforming "+
+						"files and before committing, so the commit carries both the data and its provenance. "+
+						"Unless 'agent' is given explicitly, the record is attributed to this calling tool as a software agent, "+
+						"acting on behalf of the logged-in user (exo resolves the on-behalf-of person automatically). "+
+						"Choose 'assertion' based on how you know the lineage: use 'recorded' when you (this agent) yourself "+
+						"just ran the step that produced 'generated' — you observed the activity directly; use 'asserted' "+
+						"(the default) plus 'evidence' when you are inferring lineage after the fact (e.g. from file names, "+
+						"timestamps, or a README) rather than having executed the step; use 'imported' when the lineage was "+
+						"taken from another system's records rather than observed or inferred here.",
+				),
+				mcp.WithString("repo_dir", mcp.Required(), mcp.Description("Path to the git repository")),
+				mcp.WithArray("generated", mcp.Required(), mcp.Description("Paths that were generated/created by this activity"), mcp.WithStringItems()),
+				mcp.WithArray("used", mcp.Description("Paths that were read as inputs without being transformed into 'generated'"), mcp.WithStringItems()),
+				mcp.WithArray("derived_from", mcp.Description("Paths that 'generated' was derived/transformed from"), mcp.WithStringItems()),
+				mcp.WithBoolean("no_derived_from", mcp.Description("Explicitly assert 'generated' has no inputs (e.g. hand-authored files)")),
+				mcp.WithArray("revision_of", mcp.Description("Paths/ids that 'generated' is a revision of"), mcp.WithStringItems()),
+				mcp.WithString("plan", mcp.Description("Path to a plan/script/notebook document describing the activity")),
+				mcp.WithString("agent", mcp.Description("person:<unix id> or software:<name> asserting this record; defaults to software:<this MCP client>")),
+				mcp.WithString("on_behalf_of", mcp.Description("person:<unix id> the software agent acted on behalf of; defaults to the logged-in user when agent is a software agent")),
+				mcp.WithString("model", mcp.Description("Model identifier for a software agent (requires agent software:<name>)")),
+				mcp.WithString("started", mcp.Description("Activity start time (RFC3339); defaults to now")),
+				mcp.WithString("ended", mcp.Description("Activity end time (RFC3339); defaults to now")),
+				mcp.WithString("assertion", mcp.Description("Assertion kind (default: asserted). 'recorded': you directly executed/observed the activity that produced 'generated'. "+
+					"'asserted': you are inferring lineage after the fact (pair with 'evidence'). 'imported': lineage taken from another system's records."), mcp.Enum("recorded", "imported", "asserted")),
+				mcp.WithString("evidence", mcp.Description("Free-text justification for how you inferred the lineage; required context for an 'asserted' record")),
+				mcp.WithArray("supersedes", mcp.Description("Record ids this record supersedes"), mcp.WithStringItems()),
+				mcp.WithBoolean("skip_existing", mcp.Description("Skip 'generated' paths that already have provenance instead of erroring")),
+				mcp.WithBoolean("dry_run", mcp.Description("Print the record that would be written without writing it")),
+			),
+			handler: handleProvenanceAdd,
+		},
+		{
+			tool: mcp.NewTool("provenance_show",
+				mcp.WithDescription(
+					"Show the recorded lineage for a path from the git repository's provenance records (wraps "+
+						"'exo provenance show'): what generated it, what it was derived from, and the agents involved. "+
+						"Use this to answer \"where did this file come from\" before reusing or publishing it. "+
+						"Complements 'catalog_lineage', which reads lineage already published to the catalog.",
+				),
+				mcp.WithString("repo_dir", mcp.Required(), mcp.Description("Path to the git repository")),
+				mcp.WithString("path", mcp.Required(), mcp.Description("Path to show lineage for")),
+				mcp.WithString("ref", mcp.Description("Show lineage as of this git ref (default: HEAD)")),
+				mcp.WithNumber("depth", mcp.Description("Maximum number of upstream hops to walk (default: unlimited)")),
+				mcp.WithReadOnlyHintAnnotation(true),
+			),
+			handler: handleProvenanceShow,
+		},
+		{
+			tool: mcp.NewTool("provenance_validate",
+				mcp.WithDescription(
+					"Validate recorded provenance for consistency (wraps 'exo provenance validate'): schema conformance, "+
+						"dangling references, and coverage. Returns a report of errors (exit-affecting) and warnings per record. "+
+						"Run this before committing or publishing to catch provenance problems early.",
+				),
+				mcp.WithString("repo_dir", mcp.Required(), mcp.Description("Path to the git repository")),
+				mcp.WithBoolean("staged", mcp.Description("Validate the staged (index) state instead of the worktree")),
+				mcp.WithString("ref", mcp.Description("Validate records as of this git ref instead of the worktree (mutually exclusive with staged)")),
+				mcp.WithReadOnlyHintAnnotation(true),
+			),
+			handler: handleProvenanceValidate,
 		},
 		{
 			tool: mcp.NewTool("info",
@@ -313,44 +429,79 @@ Key concepts:
 
 Creating or publishing a dataset:
 1. login — authenticate
-2. Ask the user: "Does the repository already exist on the git host?"
-   - If NO: use create_repo to create it (requires a git token)
-   - If YES: ask for the git URL, then git init + git remote add origin <url>
-3. init — configure git-annex
-4. Ask the user: "Which remote types do you want? (select all that apply)"
+2. Get a local git repository pointed at 'origin', either way:
+   - If the repository already exists on the git host: ask the user for its git URL, then prefer
+     'git clone <url>' (recommended). Use 'git init' + 'git remote add origin <url>' instead
+     only if you need to work in an existing non-empty local directory.
+   - If it does not exist yet: ask the user to create it on the git host themselves (exo no longer does this for
+     you) and give you the URL, then 'git clone <url>' (or 'git init' + 'git remote add origin <url>').
+   'init' requires an existing git repository, and pushing metadata later requires 'origin' — so this step comes
+   first either way, profile or no profile.
+3. profiles — list available server-authored profiles (if any fit, this is usually the fastest path: it asks the
+   right questions and sets up remotes and permissions for you). Call profiles with 'name' to see one profile's
+   prompts, then ask the user about EVERY prompt yourself — never assume a value, especially 'read_access': it
+   controls who can see the published catalog entries (e.g. 'public' vs 'authenticated'), and some profiles
+   default to 'public'. Then proceed to step 4 with 'profile' + 'answers' set.
+4. init — configure git-annex (pass 'profile' + 'answers' here if using a profile; it applies the profile, then
+   configures git-annex and any remotes the profile defined)
+5. If not using a profile: ask the user "Which remote types do you want? (select all that apply)"
    Offer these choices (multiple can be selected): annex, export, artifactdb, exospace
    Then call init_remote for each selected type, one at a time (NOT in parallel — git-annex locks conflict).
-5. add — stage files (auto-detects text→git vs binary→annex)
-6. git commit + git push — push metadata
-7. sync — upload data to remotes
+6. add — stage files (auto-detects text→git vs binary→annex)
+7. provenance_add — record what was generated/derived, if the files were produced by a pipeline, script, or this
+   agent itself (skip for hand-authored files with no inputs worth recording)
+8. git commit + git push — push metadata
+9. publish if an artifactdb remote is configured (it syncs content to all remotes first, then bundles metadata and
+   syncs to the catalog), otherwise sync — upload data to the configured remotes
 
 Cloning an existing dataset:
 1. login — authenticate
 2. git clone <url> — clone the repository
 3. init — configure git-annex and remotes from .exohub/remotes
-4. sync — download data from remotes
+4. get or sync — download data from remotes (get for specific paths, sync for everything)
+
+Recording and checking provenance:
+- Use 'provenance_add' after generating or transforming files, before committing, to record what was generated,
+  what it was derived from or used, and who/what is responsible. Unless you pass 'agent' explicitly, the record is
+  attributed to you (this MCP client) as a software agent, acting on behalf of the logged-in user. Pick
+  'assertion' honestly: 'recorded' when you directly ran the step that produced the files, 'asserted' + 'evidence'
+  when you are inferring lineage after the fact, 'imported' when the lineage comes from another system.
+- Use 'provenance_show' to see a path's recorded lineage from the repository directly — what produced it and its
+  upstream inputs, walking back through recorded activities.
+- Use 'provenance_validate' before committing or publishing to catch schema errors, dangling references, or
+  missing coverage in recorded provenance.
+- Use 'catalog_lineage' to read lineage already published to the catalog for an artifact, plus its direct
+  consumers (other catalog artifacts that used it as an input) — this is the cross-repository view;
+  'provenance_show' is the local, pre-publish view of the same data.
 
 Important:
 - NEVER manually create or edit .exohub/ or .artifactdb/ files. These are managed automatically by exo tools.
-- To publish to an artifactdb remote, run 'exo bundle' first to generate catalog metadata, then 'sync'.
+- To publish to an artifactdb remote, use 'publish' (there is no separate bundle tool — it syncs content, bundles
+  catalog metadata, and syncs the bundle to the catalog in one step).
 - Syncing to artifactdb remotes returns a Job URL in the output — use it to check indexing status.
 - artifactdb is a publish-only remote: 'locate' will not show it as a storage location for files.
 - NEVER run 'git annex' commands directly — use the exo MCP tools which handle remote configuration, credentials, and error recovery.
 - After cloning a repo, always call 'init' to configure remotes before syncing.
 - Use 'info' to see configured remotes and repository state.
 - Use 'add' instead of 'git add' to ensure correct backend routing.
-- Use 'sync' instead of 'git annex sync' for proper remote handling.
+- Use 'get' for a targeted download and 'sync' instead of 'git annex sync'/'git annex get' for whole-repo transfers.
 - Monitor long syncs with 'heartbeat_record' + 'heartbeat_show'.
+- If something isn't working — a failing login, sync, or permission error — run 'doctor' before asking the user
+  to investigate manually; it checks environment, auth, network, repo config, and grants/S3 access.
+- Use 'whoami' to check who you're authenticated as without making any changes.
 
 Searching the catalog:
-- Use 'catalog_schemas' to discover available schema types (filtered to exohub-* by default).
+- Use 'catalog_schemas' to discover available schema types (filtered to exohub-* by default), including
+  exohub-provenance/v1 (flattened provenance.json) alongside exohub-artifact/v1 and friends.
 - Use 'catalog_search' to find datasets and artifacts in the ExoHub catalog.
-- Searches support dotfield notation for field-specific queries (e.g. _extra.project_id:"myproject", path:*.parquet).
+- Searches support dotfield notation for field-specific queries (e.g. _extra.project_id:"myproject",
+  path:*.parquet, lineage.inputs.id:"<content id>" to find what consumed a given artifact).
 - Combine schema, project, and free-text filters for precise results.
 - The catalog URL is resolved from EXOHUB_CATALOG_URL env, exo context config, or the default.
 - Use 'catalog_download' to download artifacts found via search. Accepts artifact IDs, project@version, bundle IDs, or commit IDs.
 - Use 'catalog_semantic_search' for natural language queries (e.g. "datasets related to neurodegeneration"). Returns semantically similar chunks, entities, and relationships.
-- Use 'catalog_entities' to retrieve entity details (genes, diseases, pathways, etc.) and their relationships from the catalog knowledge graph.`
+- Use 'catalog_entities' to retrieve entity details (genes, diseases, pathways, etc.) and their relationships from the catalog knowledge graph.
+- Use 'catalog_lineage' to look up a specific artifact's recorded lineage and direct consumers once you have its id.`
 
 func runServer(version string) error {
 	s := server.NewMCPServer(

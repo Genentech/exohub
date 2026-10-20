@@ -1,0 +1,155 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "exohub-bundle/v1.json",
+  "title": "ExoHub Bundle",
+  "description": "Bundle manifest produced by exo bundle, describing how and when the bundle was generated with metadata about the repository, ref context, generation time, and aggregate statistics.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "repo_url",
+    "ref",
+    "ref_name",
+    "ref_type",
+    "generated_at",
+    "preset",
+    "scope",
+    "commit_count",
+    "file_count",
+    "annex_file_count",
+    "git_file_count",
+    "total_size",
+    "exo_version"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "const": "exohub-bundle/v1.json"
+    },
+    "repo_url": {
+      "_elasticsearch": {
+        "type": "text"
+      },
+      "type": "string",
+      "description": "Git remote URL of the repository (from origin)"
+    },
+    "ref": {
+      "_elasticsearch": {
+        "type": "keyword"
+      },
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$",
+      "description": "Resolved commit hash at which this bundle was generated"
+    },
+    "ref_name": {
+      "_elasticsearch": {
+        "type": "text"
+      },
+      "type": "string",
+      "description": "Human-readable ref name (tag name, branch name, or abbreviated commit hash)"
+    },
+    "ref_type": {
+      "type": "string",
+      "enum": [
+        "tag",
+        "branch",
+        "commit"
+      ],
+      "description": "Type of the ref: tag, branch, or detached commit"
+    },
+    "from_ref": {
+      "type": "string",
+      "description": "Starting ref for the commit range (empty string if all commits are included)"
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of when the bundle was generated (UTC)"
+    },
+    "preset": {
+      "type": "string",
+      "description": "Name of the bundle manifest preset used"
+    },
+    "scope": {
+      "type": "string",
+      "enum": [
+        "all",
+        "git",
+        "annex"
+      ],
+      "description": "Effective scope of the bundle"
+    },
+    "incremental": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether the bundle only includes file artifacts for files modified in the commit range"
+    },
+    "commit_hashes": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{40}$"
+      },
+      "description": "List of commit hashes included in the bundle range"
+    },
+    "commit_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of commits in the bundle range"
+    },
+    "file_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total number of per-file artifact JSONs written"
+    },
+    "annex_file_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of annexed files in the bundle"
+    },
+    "git_file_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of git-only tracked files in the bundle"
+    },
+    "total_size": {
+      "type": "integer",
+      "format": "long",
+      "minimum": 0,
+      "description": "Total size in bytes of all files in the bundle"
+    },
+    "exo_version": {
+      "type": "string",
+      "description": "Version of the exo CLI that produced the bundle"
+    },
+    "markdown_file_count": {
+      "type": "integer",
+      "format": "long"
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "file",
+        "record_count",
+        "entity_count"
+      ],
+      "properties": {
+        "file": {
+          "type": "string",
+          "_elasticsearch": {
+            "type": "keyword"
+          }
+        },
+        "record_count": {
+          "type": "integer",
+          "format": "long"
+        },
+        "entity_count": {
+          "type": "integer",
+          "format": "long"
+        }
+      }
+    }
+  }
+}

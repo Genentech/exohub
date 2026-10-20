@@ -1,0 +1,120 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "exohub-commit/v1.json",
+  "title": "ExoHub Commit",
+  "description": "Per-commit metadata artifact produced by exo bundle, describing a single git commit and the files it modified. Provides the inverse view of per-file artifacts: from a commit you can see which files it touched.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "repo_url",
+    "ref",
+    "hash",
+    "parents",
+    "author_name",
+    "author_email",
+    "author_date",
+    "committer_name",
+    "committer_email",
+    "committer_date",
+    "subject",
+    "annex_files",
+    "git_files"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "const": "exohub-commit/v1.json"
+    },
+    "repo_url": {
+      "_elasticsearch": {
+        "type": "text"
+      },
+      "type": "string",
+      "description": "Git remote URL of the repository (from origin)"
+    },
+    "ref": {
+      "_elasticsearch": {
+        "type": "keyword"
+      },
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$",
+      "description": "Resolved commit hash at which this bundle was generated"
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$",
+      "description": "Full commit SHA-1 hash"
+    },
+    "parents": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{40}$"
+      },
+      "description": "Parent commit hashes (multiple for merge commits)"
+    },
+    "author_name": {
+      "_elasticsearch": {
+        "type": "text"
+      },
+      "type": "string"
+    },
+    "author_email": {
+      "type": "string"
+    },
+    "author_date": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Author date in ISO 8601 format"
+    },
+    "committer_name": {
+      "_elasticsearch": {
+        "type": "text"
+      },
+      "type": "string"
+    },
+    "committer_email": {
+      "type": "string"
+    },
+    "committer_date": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Committer date in ISO 8601 format"
+    },
+    "subject": {
+      "_elasticsearch": {
+        "type": "text"
+      },
+      "type": "string",
+      "description": "First line of the commit message"
+    },
+    "body": {
+      "_elasticsearch": {
+        "type": "text"
+      },
+      "type": "string",
+      "description": "Commit message body (after the first line)"
+    },
+    "annex_files": {
+      "type": "array",
+      "items": {
+        "_elasticsearch": {
+          "type": "text"
+        },
+        "type": "string"
+      },
+      "description": "Subset of files tracked by git-annex"
+    },
+    "git_files": {
+      "type": "array",
+      "items": {
+        "_elasticsearch": {
+          "type": "text"
+        },
+        "type": "string"
+      },
+      "description": "Subset of files tracked by git (not annexed)"
+    }
+  }
+}

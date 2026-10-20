@@ -13,6 +13,12 @@ import (
 
 const pollTimeout = 2 * time.Minute
 
+// beforeFetchCredentials is an optional hook invoked immediately before every
+// AWS credential fetch, letting internal builds inject additional provider
+// configuration (e.g. a persisted group selector) without widening the
+// auth.Provider interface. Nil in the OSS build.
+var beforeFetchCredentials func()
+
 // DeviceFlowAuth performs interactive device flow authentication and writes AWS credentials.
 func DeviceFlowAuth(_ bool) (*oauth2.Token, string, error) {
 	cfg := auth.LoadConfig()
@@ -39,6 +45,9 @@ func DeviceFlowAuth(_ bool) (*oauth2.Token, string, error) {
 	}
 
 	fmt.Println("🔑 Fetching AWS credentials...")
+	if beforeFetchCredentials != nil {
+		beforeFetchCredentials()
+	}
 	awsCreds, err := flow.Provider.FetchAWSCredentials(context.Background(), tokens.IDToken)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to fetch AWS credentials: %w", err)
@@ -87,6 +96,9 @@ func DeviceFlowAuthJSON() (*oauth2.Token, string, error) {
 	}
 
 	fmt.Fprintln(os.Stderr, "Fetching AWS credentials...")
+	if beforeFetchCredentials != nil {
+		beforeFetchCredentials()
+	}
 	awsCreds, err := flow.Provider.FetchAWSCredentials(context.Background(), tokens.IDToken)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to fetch AWS credentials: %w", err)
@@ -119,6 +131,9 @@ func RefreshAuth(refreshToken string) (*oauth2.Token, string, error) {
 		return nil, "", err
 	}
 
+	if beforeFetchCredentials != nil {
+		beforeFetchCredentials()
+	}
 	awsCreds, err := provider.FetchAWSCredentials(context.Background(), tokens.IDToken)
 	if err != nil {
 		return nil, "", fmt.Errorf("failed to fetch AWS credentials after refresh: %w", err)
