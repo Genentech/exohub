@@ -75,6 +75,7 @@ Examples:
   exo init --profile sandbox
   exo init --profile sandbox --yes --dry-run
   exo init --profile sandbox --force  # overwrite existing .exohub/
+  exo init --profile sandbox --yes --set read_access=authenticated  # answer one prompt, default the rest
   EXOHUB_PROFILE=sandbox exo init  # equivalent to --profile sandbox (ignored in existing repos)
   exo init --create-repo https://github.com/org/mynewrepo
   exo --context myctx init --create-repo --name mynewrepo
@@ -122,15 +123,16 @@ var (
 	flagCreateRepo  bool
 	flagProfile     string
 	flagPickProfile bool
+	flagSet         []string
 	flagForce       bool
-	flagRepoName   string
-	flagYes        bool
-	flagReset      bool
-	flagDead       string
-	flagDestroy    string
-	flagDryRun     bool
-	flagConfirm    string
-	flagRemote     string
+	flagRepoName    string
+	flagYes         bool
+	flagReset       bool
+	flagDead        string
+	flagDestroy     string
+	flagDryRun      bool
+	flagConfirm     string
+	flagRemote      string
 )
 
 var initStylesOnce sync.Once
@@ -169,6 +171,7 @@ func NewCommand() *cobra.Command {
 	rootCmd.Flags().BoolVar(&flagCreateRepo, "create-repo", false, "Create repository on the git host")
 	rootCmd.Flags().StringVar(&flagProfile, "profile", "", "Fetch and apply a server-authored profile by name")
 	rootCmd.Flags().BoolVar(&flagPickProfile, "profile-select", false, "Interactively select a profile to apply")
+	rootCmd.Flags().StringArrayVar(&flagSet, "set", nil, "Answer a profile prompt non-interactively (key=value, repeatable); unknown keys are an error")
 	rootCmd.Flags().BoolVar(&flagForce, "force", false, "Overwrite existing .exohub/ when applying a profile")
 	rootCmd.Flags().StringVar(&flagRepoName, "name", "", "Use explicit repository name")
 	rootCmd.Flags().BoolVar(&flagYes, "yes", false, "Accept default choices automatically")

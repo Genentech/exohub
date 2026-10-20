@@ -24,6 +24,7 @@ require (
 	github.com/coreos/go-oidc/v3 v3.17.0
 	github.com/creack/pty/v2 v2.0.1
 	github.com/dustin/go-humanize v1.0.1
+	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/mark3labs/mcp-go v0.45.0
 	github.com/mattn/go-runewidth v0.0.16
@@ -76,7 +77,6 @@ require (
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
 	github.com/go-jose/go-jose/v4 v4.1.3 // indirect
 	github.com/go-logfmt/logfmt v0.6.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/hashicorp/hcl v1.0.0 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect

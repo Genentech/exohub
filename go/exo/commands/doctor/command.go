@@ -8,7 +8,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-
 var (
 	flagJSON      bool
 	flagVerbose   bool
@@ -72,6 +71,9 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	// 5. Grants & S3 access (per grants-enabled remote)
 	results = append(results, runGrantsChecks(repoDir, flagRemote, flagWriteTest)...)
 
+	// 6. Provenance records and require rules
+	results = append(results, runProvenanceChecks(repoDir)...)
+
 	if flagJSON {
 		return PrintJSON(cmd.OutOrStdout(), results)
 	}
@@ -84,5 +86,3 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	}
 	return nil
 }
-
-

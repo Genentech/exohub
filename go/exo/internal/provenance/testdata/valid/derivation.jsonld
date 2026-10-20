@@ -1,0 +1,37 @@
+{
+  "@context": "https://genentech.github.io/exohub/ns/provenance/v1.jsonld",
+  "@id": "urn:exohub:record:01928c9e-7f3a-7c2d-9b1e-4a5f6b7c8d9e",
+  "exo:assertion": "asserted",
+  "exo:assertedBy": { "@id": "urn:exohub:agent:software:claude-code" },
+  "generatedAtTime": "2026-10-14T10:12:00Z",
+  "exo:evidence": "scripts/normalize.py reads data/raw.csv and writes data/result.csv",
+  "@graph": [
+    {
+      "@id": "urn:exohub:annex:SHA256E-s2048--ab12.csv",
+      "@type": "Entity",
+      "exo:path": "data/result.csv",
+      "wasGeneratedBy": "urn:exohub:activity:01928c9e-0000-7000-8000-000000000001",
+      "wasDerivedFrom": "urn:exohub:annex:SHA256E-s9999--cd34.csv"
+    },
+    {
+      "@id": "urn:exohub:activity:01928c9e-0000-7000-8000-000000000001",
+      "@type": "Activity",
+      "used": ["urn:exohub:annex:SHA256E-s9999--cd34.csv"],
+      "hadPlan": "urn:exohub:git:blob:9e1f4c",
+      "wasAssociatedWith": "urn:exohub:agent:person:alice",
+      "startedAtTime": "2026-10-14T09:58:00Z",
+      "endedAtTime": "2026-10-14T10:11:30Z"
+    },
+    {
+      "@id": "urn:exohub:agent:person:alice",
+      "@type": "Person",
+      "label": "Alice"
+    },
+    {
+      "@id": "urn:exohub:agent:software:claude-code",
+      "@type": "SoftwareAgent",
+      "exo:model": "claude-sonnet",
+      "actedOnBehalfOf": "urn:exohub:agent:person:alice"
+    }
+  ]
+}

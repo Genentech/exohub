@@ -56,6 +56,11 @@ func New(ctx context.Context, cfg Config) (Provider, error) {
 
 func (p *oidcProvider) Name() string { return "oidc" }
 
+// ProviderName returns the provider identifier for this build without
+// constructing a Provider (no OIDC discovery round-trip). Used by `exo
+// whoami` to report the active provider cheaply.
+func ProviderName() string { return "oidc" }
+
 func (p *oidcProvider) Login(ctx context.Context) (Tokens, error) {
 	opts := []oauth2.AuthCodeOption{}
 	if p.cfg.OIDC.Audience != "" {

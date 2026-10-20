@@ -1,0 +1,162 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "provenance-record/v1.json",
+  "title": "ExoHub provenance record",
+  "description": "Compact record profile for ExoHub provenance records (design D2, D4): the envelope (context IRI, @id urn:exohub:record:<UUIDv7>, exo:assertion enum, exo:assertedBy, generatedAtTime, non-empty @graph), exo:supersedes, node @type/property term set, and the prefixed-extension shape. It does NOT check that referenced content ids exist in a repository, cross-record conflicts (duplicate ids, unknown supersedes, conflicting single-valued properties), immutability of committed records, or that a node's \"prefix:local\" property uses a prefix actually declared in the record's own @context object (a cross-field check) — those require the repository, git history, or the record's own context, and are checked by `exo provenance validate` and `exo bundle`.",
+  "type": "object",
+  "required": ["@context", "@id", "exo:assertion", "exo:assertedBy", "generatedAtTime", "@graph"],
+  "properties": {
+    "@context": {
+      "$ref": "#/definitions/context"
+    },
+    "@id": {
+      "type": "string",
+      "pattern": "^urn:exohub:record:[0-9a-fA-F-]{36}$"
+    },
+    "exo:assertion": {
+      "type": "string",
+      "enum": ["recorded", "imported", "asserted"]
+    },
+    "exo:assertedBy": {
+      "$ref": "#/definitions/idRef"
+    },
+    "generatedAtTime": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "exo:evidence": {
+      "type": "string"
+    },
+    "exo:supersedes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/recordIdRef"
+      },
+      "minItems": 1
+    },
+    "@graph": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/node"
+      },
+      "minItems": 1
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "context": {
+      "description": "The context IRI alone, or the context IRI plus an additional context object declaring extension prefixes (design D2: additional properties SHALL use a prefix declared in an additional context object). Declared prefix names are checked against the reserved list (see reservedContextName) directly in this schema. This schema cannot see which prefixes a record declares when checking a node's \"prefix:local\" properties (prefixed node properties are only pattern-checked, see node.patternProperties) — the exo/internal/provenance Go package (isReservedContextName, ValidateContextPrefixes) enforces that a used prefix was actually declared here.",
+      "oneOf": [
+        {
+          "const": "https://genentech.github.io/exohub/ns/provenance/v1.jsonld"
+        },
+        {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": [
+            {
+              "const": "https://genentech.github.io/exohub/ns/provenance/v1.jsonld"
+            },
+            {
+              "type": "object",
+              "minProperties": 1,
+              "propertyNames": {
+                "not": { "$ref": "#/definitions/reservedContextName" }
+              },
+              "additionalProperties": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "reservedContextName": {
+      "description": "The reserved names an additional context object's prefix must not redefine (design D2): the four namespace prefixes the embedded context declares, plus every unprefixed node type and property alias. This enum MUST match provenance.isReservedContextName in exo/internal/provenance/context.go exactly.",
+      "enum": [
+        "exo", "prov", "rdfs", "xsd",
+        "Entity", "Collection", "Activity", "Agent", "Person", "SoftwareAgent", "Organization",
+        "used", "wasGeneratedBy", "wasDerivedFrom", "wasRevisionOf", "wasAssociatedWith",
+        "wasAttributedTo", "actedOnBehalfOf", "hadPlan", "startedAtTime", "endedAtTime",
+        "generatedAtTime", "label"
+      ]
+    },
+    "idRef": {
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "object",
+          "required": ["@id"],
+          "properties": {
+            "@id": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "idRefOrArray": {
+      "oneOf": [
+        { "$ref": "#/definitions/idRef" },
+        {
+          "type": "array",
+          "items": { "$ref": "#/definitions/idRef" },
+          "minItems": 1
+        }
+      ]
+    },
+    "recordIdRef": {
+      "oneOf": [
+        { "type": "string", "pattern": "^urn:exohub:record:[0-9a-fA-F-]{36}$" },
+        {
+          "type": "object",
+          "required": ["@id"],
+          "properties": {
+            "@id": { "type": "string", "pattern": "^urn:exohub:record:[0-9a-fA-F-]{36}$" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "nodeType": {
+      "description": "An unprefixed node type alias declared by the embedded context (design D1); see provenance.NodeTypeIRI.",
+      "type": "string",
+      "enum": ["Entity", "Collection", "Activity", "Agent", "Person", "SoftwareAgent", "Organization"]
+    },
+    "node": {
+      "description": "A PROV node in @graph. Property keys are restricted to @id, @type, the unprefixed context property aliases, and \"prefix:local\" keys (design D2); the Go package additionally requires \"prefix:local\" keys to resolve against exo: or a prefix the record declares in its context object.",
+      "type": "object",
+      "required": ["@id"],
+      "properties": {
+        "@id": { "type": "string" },
+        "@type": {
+          "oneOf": [
+            { "$ref": "#/definitions/nodeType" },
+            {
+              "type": "array",
+              "items": { "$ref": "#/definitions/nodeType" },
+              "minItems": 1
+            }
+          ]
+        },
+        "used": { "$ref": "#/definitions/idRefOrArray" },
+        "wasGeneratedBy": { "$ref": "#/definitions/idRefOrArray" },
+        "wasDerivedFrom": { "$ref": "#/definitions/idRefOrArray" },
+        "wasRevisionOf": { "$ref": "#/definitions/idRefOrArray" },
+        "wasAssociatedWith": { "$ref": "#/definitions/idRefOrArray" },
+        "wasAttributedTo": { "$ref": "#/definitions/idRefOrArray" },
+        "actedOnBehalfOf": { "$ref": "#/definitions/idRefOrArray" },
+        "hadPlan": { "$ref": "#/definitions/idRefOrArray" },
+        "startedAtTime": { "type": "string", "format": "date-time" },
+        "endedAtTime": { "type": "string", "format": "date-time" },
+        "generatedAtTime": { "type": "string", "format": "date-time" },
+        "label": { "type": "string" }
+      },
+      "patternProperties": {
+        "^[A-Za-z][A-Za-z0-9]*:[^\\s:]+$": true
+      },
+      "additionalProperties": false
+    }
+  }
+}

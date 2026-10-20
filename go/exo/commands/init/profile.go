@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"text/template"
 
@@ -142,9 +143,14 @@ func resolveEnv() map[string]string {
 
 // runProfilePrompts executes the profile prompts block.
 // Answers are written into the answers map keyed by prompt Name (server field "key").
+// A prompt already present in answers (set via --set) is skipped — its value
+// is kept as given rather than prompted for or defaulted.
 // If skipInteractive is true (--yes), defaults are used without prompting.
 func runProfilePrompts(spec *ProfileSpec, answers map[string]interface{}, skipInteractive bool) error {
 	for _, p := range spec.Prompts {
+		if _, already := answers[p.Name]; already {
+			continue
+		}
 		switch p.Kind {
 		case "bool":
 			def := p.defaultString() == "true"
@@ -217,6 +223,47 @@ func runProfilePrompts(spec *ProfileSpec, answers map[string]interface{}, skipIn
 
 		default:
 			return fmt.Errorf("prompt %q: unknown kind %q (must be bool, string, or choice)", p.Name, p.Kind)
+		}
+	}
+	return nil
+}
+
+// applySetFlags parses --set key=value flags against spec's prompts and
+// seeds answers with validated values, skipping the corresponding prompt in
+// runProfilePrompts. An unknown key, or a value invalid for its prompt's
+// type, is an error; a bool prompt's value is parsed with strconv.ParseBool,
+// a choice prompt's value is checked against its Choices, and a string
+// prompt's value is used as-is.
+func applySetFlags(spec *ProfileSpec, answers map[string]interface{}, sets []string) error {
+	byKey := make(map[string]PromptSpec, len(spec.Prompts))
+	for _, p := range spec.Prompts {
+		byKey[p.Name] = p
+	}
+	for _, kv := range sets {
+		key, value, found := strings.Cut(kv, "=")
+		if !found {
+			return fmt.Errorf("--set %q: expected key=value", kv)
+		}
+		p, ok := byKey[key]
+		if !ok {
+			return fmt.Errorf("--set %q: %q is not a prompt in profile %q", kv, key, spec.Name)
+		}
+		switch p.Kind {
+		case "bool":
+			b, err := strconv.ParseBool(value)
+			if err != nil {
+				return fmt.Errorf("--set %s=%s: expected a bool (true/false)", key, value)
+			}
+			answers[key] = b
+		case "string":
+			answers[key] = value
+		case "choice":
+			if !isValidChoice(value, p.Choices) {
+				return fmt.Errorf("--set %s=%s: not a valid choice (%s)", key, value, strings.Join(p.Choices, ", "))
+			}
+			answers[key] = value
+		default:
+			return fmt.Errorf("--set %s: unknown prompt kind %q", key, p.Kind)
 		}
 	}
 	return nil
@@ -400,8 +447,8 @@ func runProfileActions(spec *ProfileSpec, data profileTplData, dryRun bool) erro
 	return nil
 }
 
-// fetchProfile fetches a named profile from the ExoHub API.
-func fetchProfile(name string) (*ProfileSpec, error) {
+// FetchProfile fetches a named profile from the ExoHub API.
+func FetchProfile(name string) (*ProfileSpec, error) {
 	apiBase := strings.TrimSuffix(defaults.APIBase(), "/")
 	reqURL := fmt.Sprintf("%s/profiles/%s", apiBase, url.PathEscape(name))
 	commandutil.DebugHTTP("GET", reqURL)
@@ -426,9 +473,9 @@ func fetchProfile(name string) (*ProfileSpec, error) {
 	return &spec, nil
 }
 
-// listProfiles fetches all available profiles from the ExoHub API.
+// ListProfiles fetches all available profiles from the ExoHub API.
 // Returns nil slice (not an error) if the server returns 404 or the list is empty.
-func listProfiles() ([]ProfileSummary, error) {
+func ListProfiles() ([]ProfileSummary, error) {
 	apiBase := strings.TrimSuffix(defaults.APIBase(), "/")
 	reqURL := fmt.Sprintf("%s/profiles", apiBase)
 	commandutil.DebugHTTP("GET", reqURL)
@@ -493,7 +540,7 @@ func runProfileInit(profileName string, args []string, summaries []ProfileSummar
 		// --profile-select: show interactive picker
 		var err error
 		if summaries == nil {
-			summaries, err = listProfiles()
+			summaries, err = ListProfiles()
 			if err != nil {
 				return err
 			}
@@ -511,19 +558,19 @@ func runProfileInit(profileName string, args []string, summaries []ProfileSummar
 				return err
 			}
 		}
-		spec, err = fetchProfile(chosen)
+		spec, err = FetchProfile(chosen)
 		if err != nil {
 			return err
 		}
 	} else {
-		fetched, err := fetchProfile(profileName)
+		fetched, err := FetchProfile(profileName)
 		if err != nil {
 			// Provide helpful error listing available profiles
 			var list []ProfileSummary
 			if summaries != nil {
 				list = summaries
 			} else {
-				list, _ = listProfiles()
+				list, _ = ListProfiles()
 			}
 			if len(list) > 0 {
 				names := make([]string, len(list))
@@ -548,8 +595,13 @@ func runProfileInit(profileName string, args []string, summaries []ProfileSummar
 	folder := filepath.Base(cwd)
 	env := resolveEnv()
 
-	// Run prompts; collect answers
+	// Run prompts; collect answers, pre-seeded by --set
 	answers := make(map[string]interface{})
+	if len(flagSet) > 0 {
+		if err := applySetFlags(spec, answers, flagSet); err != nil {
+			return err
+		}
+	}
 	if err := runProfilePrompts(spec, answers, flagYes); err != nil {
 		return err
 	}

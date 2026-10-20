@@ -64,6 +64,9 @@ jobs at scale.
 See [Git/annex routing rules](docs/annex-routing.md) to configure how new files
 are stored and inspect or deliberately reroute existing files.
 
+See [Provenance](docs/provenance.md) to record and inspect data lineage (`exo provenance
+add`/`show`/`validate`), including the workflow for AI agents and scripts.
+
 ## Standalone mode — a local catalog, no cloud required
 
 Run a fully local ArtifactDB catalog stack — ideal for development, testing, or a private
@@ -86,6 +89,8 @@ the enterprise ArtifactDB API, so datasets round-trip cleanly. See
   https://genentech.github.io/exohub/tutorials/
 - **Components & Architecture:** https://genentech.github.io/exohub/docs/
 - **`adb-standalone` design notes:** [`docs/adb-standalone/`](docs/adb-standalone/)
+- **Git/annex routing rules:** [`docs/annex-routing.md`](docs/annex-routing.md)
+- **Provenance (data lineage):** [`docs/provenance.md`](docs/provenance.md)
 
 ## Contributing & Security
 

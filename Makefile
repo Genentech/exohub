@@ -94,6 +94,7 @@ binaries:
 build: binaries
 
 test:
+	@bash scripts/test-oss-sync-guard.sh
 	@mkdir -p .gocache .coverage
 	@printf "go 1.24.0\n\nuse (\n\t../go/exo\n\t../go/git-annex-remote-s5cmd\n\t../go/git-annex-remote-artifactdb-export\n\t../go/exo-credential-helper\n)\n" > .coverage/go.work
 	(cd go/exo && GOCACHE=$(CURDIR)/.gocache go test -coverprofile=../../.coverage/exo.out ./...)

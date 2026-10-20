@@ -14,7 +14,9 @@ import (
 var catalogSchemasTool = gomcp.NewTool("catalog_schemas",
 	gomcp.WithDescription(
 		"List available document schemas from the ExoHub catalog. "+
-			"Returns schema names that can be used to filter searches with catalog_search. "+
+			"Returns schema names that can be used to filter searches with catalog_search, e.g. exohub-artifact/v1 "+
+			"(per-file metadata, with an optional lineage object), exohub-provenance/v1 (a bundle's whole compiled "+
+			"provenance graph flattened for search), and exohub-markdown/v1. "+
 			"By default only returns exohub-* schemas; use the filter parameter to change the pattern. "+
 			"Requires the catalog URL to be configured (EXOHUB_CATALOG_URL env, exo context, or default).",
 	),

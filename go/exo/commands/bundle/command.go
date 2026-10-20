@@ -29,6 +29,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/Genentech/exohub/go/exo/commandutil"
+	"github.com/Genentech/exohub/go/exo/internal/provenance"
 )
 
 var (
@@ -121,38 +122,48 @@ type CommitArtifact struct {
 
 // BundleInfo represents the bundle.json manifest (exohub-bundle/v1.json).
 type BundleInfo struct {
-	Schema            string   `json:"$schema"`
-	RepoURL           string   `json:"repo_url"`
-	Ref               string   `json:"ref"`
-	RefName           string   `json:"ref_name"`
-	RefType           string   `json:"ref_type"`
-	FromRef           string   `json:"from_ref"`
-	GeneratedAt       string   `json:"generated_at"`
-	Preset            string   `json:"preset"`
-	Scope             string   `json:"scope"`
-	Incremental       bool     `json:"incremental"`
-	CommitHashes      []string `json:"commit_hashes"`
-	CommitCount       int      `json:"commit_count"`
-	FileCount         int      `json:"file_count"`
-	AnnexFileCount    int      `json:"annex_file_count"`
-	GitFileCount      int      `json:"git_file_count"`
-	MarkdownFileCount int      `json:"markdown_file_count"`
-	TotalSize         int64    `json:"total_size"`
-	ExoVersion        string   `json:"exo_version"`
+	Schema            string          `json:"$schema"`
+	RepoURL           string          `json:"repo_url"`
+	Ref               string          `json:"ref"`
+	RefName           string          `json:"ref_name"`
+	RefType           string          `json:"ref_type"`
+	FromRef           string          `json:"from_ref"`
+	GeneratedAt       string          `json:"generated_at"`
+	Preset            string          `json:"preset"`
+	Scope             string          `json:"scope"`
+	Incremental       bool            `json:"incremental"`
+	CommitHashes      []string        `json:"commit_hashes"`
+	CommitCount       int             `json:"commit_count"`
+	FileCount         int             `json:"file_count"`
+	AnnexFileCount    int             `json:"annex_file_count"`
+	GitFileCount      int             `json:"git_file_count"`
+	MarkdownFileCount int             `json:"markdown_file_count"`
+	TotalSize         int64           `json:"total_size"`
+	ExoVersion        string          `json:"exo_version"`
+	Provenance        *ProvenanceInfo `json:"provenance,omitempty"`
+}
+
+// ProvenanceInfo is bundle.json's optional "provenance" field (design D8.8),
+// present only when exo bundle wrote provenance.jsonld.
+type ProvenanceInfo struct {
+	File        string `json:"file"`
+	RecordCount int    `json:"record_count"`
+	EntityCount int    `json:"entity_count"`
 }
 
 // Artifact represents a per-file artifact JSON (exohub-artifact/v1.json).
 type Artifact struct {
-	Schema    string              `json:"$schema"`
-	RepoURL   string              `json:"repo_url"`
-	Ref       string              `json:"ref"`
-	Path      string              `json:"path"`
-	Key       string              `json:"key"`
-	Backend   string              `json:"backend"`
-	Size      int64               `json:"size"`
-	Metadata  map[string][]string `json:"metadata"`
-	Commits   []Commit            `json:"commits"`
-	Locations []Location          `json:"locations,omitempty"`
+	Schema    string                      `json:"$schema"`
+	RepoURL   string                      `json:"repo_url"`
+	Ref       string                      `json:"ref"`
+	Path      string                      `json:"path"`
+	Key       string                      `json:"key"`
+	Backend   string                      `json:"backend"`
+	Size      int64                       `json:"size"`
+	Metadata  map[string][]string         `json:"metadata"`
+	Commits   []Commit                    `json:"commits"`
+	Locations []Location                  `json:"locations,omitempty"`
+	Lineage   *provenance.ArtifactLineage `json:"lineage,omitempty"`
 }
 
 // Location represents a remote storage location for an annexed file.
@@ -183,20 +194,21 @@ type Section struct {
 
 // MarkdownArtifact represents a per-file markdown artifact JSON (exohub-markdown/v1.json).
 type MarkdownArtifact struct {
-	Schema    string              `json:"$schema"`
-	RepoURL   string              `json:"repo_url"`
-	Ref       string              `json:"ref"`
-	Path      string              `json:"path"`
-	Key       string              `json:"key"`
-	Backend   string              `json:"backend"`
-	Size      int64               `json:"size"`
-	Metadata  map[string][]string `json:"metadata"`
-	Commits   []Commit            `json:"commits"`
-	Locations []Location          `json:"locations,omitempty"`
-	Title     string              `json:"title"`
-	Sections  []Section           `json:"sections"`
-	Content   string              `json:"content"`
-	IsReadme  bool                `json:"is_readme"`
+	Schema    string                      `json:"$schema"`
+	RepoURL   string                      `json:"repo_url"`
+	Ref       string                      `json:"ref"`
+	Path      string                      `json:"path"`
+	Key       string                      `json:"key"`
+	Backend   string                      `json:"backend"`
+	Size      int64                       `json:"size"`
+	Metadata  map[string][]string         `json:"metadata"`
+	Commits   []Commit                    `json:"commits"`
+	Locations []Location                  `json:"locations,omitempty"`
+	Title     string                      `json:"title"`
+	Sections  []Section                   `json:"sections"`
+	Content   string                      `json:"content"`
+	IsReadme  bool                        `json:"is_readme"`
+	Lineage   *provenance.ArtifactLineage `json:"lineage,omitempty"`
 }
 
 // BundleManifest represents the .exohub/bundle configuration.
@@ -283,6 +295,7 @@ func NewCommand(version string) *cobra.Command {
 		flagDryRun            bool
 		flagResume            bool
 		flagMarkdownRecursive bool
+		flagNoProvenance      bool
 	)
 
 	cmd := &cobra.Command{
@@ -290,7 +303,7 @@ func NewCommand(version string) *cobra.Command {
 		Short: "Generate JSON metadata bundle for catalog ingest",
 		Long:  longText,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runBundle(flagScope, flagFromRef, flagPreset, flagOutput, flagRef, flagIncludeHidden, flagIncremental, flagYes, flagDryRun, flagResume, flagMarkdownRecursive, version, args)
+			return runBundle(flagScope, flagFromRef, flagPreset, flagOutput, flagRef, flagIncludeHidden, flagIncremental, flagYes, flagDryRun, flagResume, flagMarkdownRecursive, flagNoProvenance, version, args)
 		},
 	}
 
@@ -305,11 +318,12 @@ func NewCommand(version string) *cobra.Command {
 	cmd.Flags().BoolVar(&flagDryRun, "dry-run", false, "Show what the bundle would do without generating anything")
 	cmd.Flags().BoolVar(&flagResume, "resume", false, "Resume a previous bundle run, skipping existing artifacts")
 	cmd.Flags().BoolVar(&flagMarkdownRecursive, "markdown-recursive", false, "Parse markdown files in all directories (default: root-level only)")
+	cmd.Flags().BoolVar(&flagNoProvenance, "no-provenance", false, "Skip compiling provenance.jsonld (provenance.require is still enforced)")
 
 	return cmd
 }
 
-func runBundle(scope, fromRef, presetName, outputDir, targetRef string, includeHidden, incremental, forceYes, dryRun, flagResume, markdownRecursive bool, version string, pathFilters []string) error {
+func runBundle(scope, fromRef, presetName, outputDir, targetRef string, includeHidden, incremental, forceYes, dryRun, flagResume, markdownRecursive, noProvenance bool, version string, pathFilters []string) error {
 	// Verify we're in a git repo
 	if _, err := os.Stat(".git"); os.IsNotExist(err) {
 		return fmt.Errorf("not a git repository")
@@ -378,16 +392,56 @@ func runBundle(scope, fromRef, presetName, outputDir, targetRef string, includeH
 		return err
 	}
 
+	refHash, err := resolveTargetHash(targetRef)
+	if err != nil {
+		if targetRef != "" {
+			return fmt.Errorf("--ref %q does not resolve to a valid commit", targetRef)
+		}
+		return fmt.Errorf("failed to resolve HEAD: %w", err)
+	}
+
+	// A repository with no provenance records and no provenance.require
+	// rule sees no behavior change (design D8): skip selection resolution,
+	// provenance.require enforcement and compilation entirely, rather than
+	// spending an extra batch of git calls — that could themselves fail — on
+	// every bundle regardless of whether it has adopted provenance (review
+	// MR !258).
+	provReader := provenance.NewRefReader(".", refHash)
+	hasRecords, hasRequireRules, err := provenanceApplicable(provReader)
+	if err != nil {
+		return err
+	}
+
+	var selectedPaths []string
+	var requireViolations []string
+	var provResult *provenance.CompileResult
+	var provReport *provenance.Report
+	if hasRecords || hasRequireRules {
+		// Resolve the bundle's selected file set at the ref (spec "Bundle
+		// selection for provenance"): preset filters, --scope,
+		// --include-hidden and path filters apply; --incremental and
+		// --resume do not, so provenance compilation and provenance.require
+		// enforcement always cover every selected artifact, not only a
+		// changed subset.
+		selectedPaths, err = resolveBundleSelection(provReader, refHash, preset, pathFilters, effectiveScope)
+		if err != nil {
+			return fmt.Errorf("failed to resolve bundle file selection: %w", err)
+		}
+		requireViolations, err = provenance.RequireViolations(provReader, selectedPaths)
+		if err != nil {
+			return fmt.Errorf("failed to check provenance.require: %w", err)
+		}
+		if !noProvenance {
+			provResult, provReport, err = provenance.CompileBundle(provReader, selectedPaths)
+			if err != nil {
+				return fmt.Errorf("failed to compile provenance: %w", err)
+			}
+		}
+	}
+
 	// Dry-run: resolve all parameters, print summary, exit early
 	if dryRun {
 		var refName, refType string
-		refHash, err := resolveTargetHash(targetRef)
-		if err != nil {
-			if targetRef != "" {
-				return fmt.Errorf("--ref %q does not resolve to a valid commit", targetRef)
-			}
-			return fmt.Errorf("failed to resolve HEAD: %w", err)
-		}
 		if targetRef != "" {
 			refName, refType = resolveRefInfoFor(targetRef)
 		} else {
@@ -409,11 +463,16 @@ func runBundle(scope, fromRef, presetName, outputDir, targetRef string, includeH
 		fmt.Fprintf(os.Stderr, "  hidden:     %v\n", preset.IncludeHidden)
 		fmt.Fprintf(os.Stderr, "  incremental: %v\n", incremental)
 		fmt.Fprintf(os.Stderr, "  remotes:    %d configured\n", len(remoteConfigs))
+		printProvenanceDryRun(provReport, requireViolations, noProvenance)
 
 		if status := checkCommitReachability(refHash); status != nil {
 			printReachabilityWarning(status)
 		}
 		return nil
+	}
+
+	if err := reportProvenanceFailure(provReport, requireViolations, refHash); err != nil {
+		return err
 	}
 
 	// If output directory exists, decide whether to resume or regenerate
@@ -508,6 +567,24 @@ func runBundle(scope, fromRef, presetName, outputDir, targetRef string, includeH
 
 	if status := checkCommitReachability(headHash); status != nil {
 		printReachabilityWarning(status)
+	}
+
+	// lineageChanged holds every selected path whose lineage differs between
+	// --from-ref and the target ref (spec "Incremental bundles keep lineage
+	// current"): with --incremental, these are re-emitted even when their
+	// content did not change, so a provenance record added for an
+	// already-committed file still shows up in the bundle.
+	var lineageChanged map[string]bool
+	if incremental && fromCommit != "" && provResult != nil {
+		oldResult, _, err := provenance.CompileBundle(provenance.NewRefReader(".", fromCommit), selectedPaths)
+		if err != nil {
+			return fmt.Errorf("failed to compile provenance at --from-ref: %w", err)
+		}
+		var oldLineage map[string]*provenance.ArtifactLineage
+		if oldResult != nil {
+			oldLineage = oldResult.Lineage
+		}
+		lineageChanged = diffLineage(oldLineage, provResult.Lineage)
 	}
 
 	if incremental && fromCommit != "" {
@@ -618,11 +695,18 @@ func runBundle(scope, fromRef, presetName, outputDir, targetRef string, includeH
 	var totalSize int64
 	var noLocations []string
 
+	// lineage is exo bundle's per-artifact lineage (design D16), nil when
+	// provenance compilation found nothing to compile.
+	var lineage map[string]*provenance.ArtifactLineage
+	if provResult != nil {
+		lineage = provResult.Lineage
+	}
+
 	// Generate markdown artifacts first (to build the markdownFiles set for git exclusion).
 	// Markdown is a documentation artifact class orthogonal to scope; always generated.
 	markdownFiles := make(map[string]bool)
 	{
-		n, sz, mdFiles, err := generateMarkdownArtifacts(filesDir, headHash, repoURL, preset, pathCommits, commitMap, blobInfoMap, incremental, pathFilters, resume, annexedFileSet, nil)
+		n, sz, mdFiles, err := generateMarkdownArtifacts(filesDir, headHash, repoURL, preset, pathCommits, commitMap, blobInfoMap, incremental, pathFilters, resume, annexedFileSet, lineage, lineageChanged, nil)
 		if err != nil {
 			return fmt.Errorf("failed to generate markdown artifacts: %w", err)
 		}
@@ -637,7 +721,7 @@ func runBundle(scope, fromRef, presetName, outputDir, targetRef string, includeH
 		progress := &progressTracker{label: "file artifacts", total: 0}
 
 		if effectiveScope == "all" || effectiveScope == "annex" {
-			n, sz, noloc, processedAnnex, err := generateAnnexArtifacts(filesDir, headHash, repoURL, preset, pathCommits, commitMap, remoteConfigs, incremental, pathFilters, resume, annexedFileSet, progress)
+			n, sz, noloc, processedAnnex, err := generateAnnexArtifacts(filesDir, headHash, repoURL, preset, pathCommits, commitMap, remoteConfigs, incremental, pathFilters, resume, annexedFileSet, lineage, lineageChanged, progress)
 			if err != nil {
 				return fmt.Errorf("failed to generate annex artifacts: %w", err)
 			}
@@ -649,7 +733,7 @@ func runBundle(scope, fromRef, presetName, outputDir, targetRef string, includeH
 			}
 		}
 		if effectiveScope == "all" || effectiveScope == "git" {
-			n, sz, err := generateGitArtifacts(filesDir, headHash, repoURL, preset, pathCommits, commitMap, blobInfoMap, incremental, pathFilters, resume, annexedFileSet, markdownFiles, progress)
+			n, sz, err := generateGitArtifacts(filesDir, headHash, repoURL, preset, pathCommits, commitMap, blobInfoMap, incremental, pathFilters, resume, annexedFileSet, markdownFiles, lineage, lineageChanged, progress)
 			if err != nil {
 				return fmt.Errorf("failed to generate git artifacts: %w", err)
 			}
@@ -662,7 +746,7 @@ func runBundle(scope, fromRef, presetName, outputDir, targetRef string, includeH
 		var g errgroup.Group
 		if effectiveScope == "all" || effectiveScope == "annex" {
 			g.Go(func() error {
-				n, sz, noloc, _, err := generateAnnexArtifacts(filesDir, headHash, repoURL, preset, pathCommits, commitMap, remoteConfigs, incremental, pathFilters, resume, annexedFileSet, nil)
+				n, sz, noloc, _, err := generateAnnexArtifacts(filesDir, headHash, repoURL, preset, pathCommits, commitMap, remoteConfigs, incremental, pathFilters, resume, annexedFileSet, lineage, lineageChanged, nil)
 				if err != nil {
 					return fmt.Errorf("failed to generate annex artifacts: %w", err)
 				}
@@ -676,7 +760,7 @@ func runBundle(scope, fromRef, presetName, outputDir, targetRef string, includeH
 		}
 		if effectiveScope == "all" || effectiveScope == "git" {
 			g.Go(func() error {
-				n, sz, err := generateGitArtifacts(filesDir, headHash, repoURL, preset, pathCommits, commitMap, blobInfoMap, incremental, pathFilters, resume, annexedFileSet, markdownFiles, nil)
+				n, sz, err := generateGitArtifacts(filesDir, headHash, repoURL, preset, pathCommits, commitMap, blobInfoMap, incremental, pathFilters, resume, annexedFileSet, markdownFiles, lineage, lineageChanged, nil)
 				if err != nil {
 					return fmt.Errorf("failed to generate git artifacts: %w", err)
 				}
@@ -741,6 +825,41 @@ func runBundle(scope, fromRef, presetName, outputDir, targetRef string, includeH
 		TotalSize:         totalSize,
 		ExoVersion:        version,
 	}
+
+	if provResult != nil && provResult.Document != nil {
+		data, err := provResult.Document.Serialize()
+		if err != nil {
+			return fmt.Errorf("failed to serialize provenance.jsonld: %w", err)
+		}
+		provenancePath := filepath.Join(outputDir, "provenance.jsonld")
+		if err := os.WriteFile(provenancePath, data, 0o644); err != nil {
+			return fmt.Errorf("failed to write provenance.jsonld: %w", err)
+		}
+		bundleInfo.Provenance = &ProvenanceInfo{
+			File:        "provenance.jsonld",
+			RecordCount: provResult.RecordCount,
+			EntityCount: provResult.EntityCount,
+		}
+		fmt.Fprintf(os.Stderr, "Wrote provenance.jsonld (%d records, %d entities)\n", provResult.RecordCount, provResult.EntityCount)
+
+		if provResult.Catalog != nil {
+			// provenance.json is exo bundle's catalog-facing, flattened
+			// provenance graph (design D16): the same compiled graph as
+			// provenance.jsonld, with no catalog-specific logic, so any
+			// catalog can ingest it without a JSON-LD processor.
+			catalog := *provResult.Catalog
+			catalog.RefName = refName
+			catalogData, err := json.MarshalIndent(catalog, "", "  ")
+			if err != nil {
+				return fmt.Errorf("failed to serialize provenance.json: %w", err)
+			}
+			catalogPath := filepath.Join(outputDir, "provenance.json")
+			if err := os.WriteFile(catalogPath, catalogData, 0o644); err != nil {
+				return fmt.Errorf("failed to write provenance.json: %w", err)
+			}
+		}
+	}
+
 	logStatus("Writing bundle.json...")
 	bundlePath := filepath.Join(outputDir, "bundle.json")
 	if err := writeJSON(bundlePath, bundleInfo); err != nil {
@@ -1017,7 +1136,10 @@ func extractCommits(fromRef string) ([]Commit, error) {
 		if len(fields) < 10 {
 			continue
 		}
-		var parents []string
+		// parents is schema-required array (exohub-commit/v1.json): the
+		// root commit has zero parents, which must serialize as [], not
+		// JSON null.
+		parents := []string{}
 		if p := strings.TrimSpace(fields[1]); p != "" {
 			parents = strings.Split(p, " ")
 		}
@@ -1150,7 +1272,7 @@ func loadRemoteConfigs() (map[string]RemoteConfig, error) {
 // generateAnnexArtifacts generates per-file artifact JSONs for annexed files.
 // Returns (count, totalSize, noLocations, processedFiles, error).
 // processedFiles contains paths of files that were identified as annexed.
-func generateAnnexArtifacts(filesDir, headHash, repoURL string, preset Preset, pathCommits map[string][]string, commitMap map[string]Commit, remoteConfigs map[string]RemoteConfig, incremental bool, pathFilters []string, resume bool, annexedFileSet map[string]bool, progress *progressTracker) (int, int64, []string, map[string]bool, error) {
+func generateAnnexArtifacts(filesDir, headHash, repoURL string, preset Preset, pathCommits map[string][]string, commitMap map[string]Commit, remoteConfigs map[string]RemoteConfig, incremental bool, pathFilters []string, resume bool, annexedFileSet map[string]bool, lineage map[string]*provenance.ArtifactLineage, lineageChanged map[string]bool, progress *progressTracker) (int, int64, []string, map[string]bool, error) {
 	// Build list of annexed files to process
 	var filePaths []string
 	if incremental {
@@ -1166,8 +1288,16 @@ func generateAnnexArtifacts(filesDir, headHash, repoURL string, preset Preset, p
 				headFiles[f] = true
 			}
 		}
+		seenPaths := make(map[string]bool, len(pathCommits))
 		for path := range pathCommits {
-			if headFiles[path] {
+			if headFiles[path] && !seenPaths[path] {
+				seenPaths[path] = true
+				filePaths = append(filePaths, path)
+			}
+		}
+		for path := range lineageChanged {
+			if headFiles[path] && !seenPaths[path] {
+				seenPaths[path] = true
 				filePaths = append(filePaths, path)
 			}
 		}
@@ -1360,6 +1490,7 @@ func generateAnnexArtifacts(filesDir, headHash, repoURL string, preset Preset, p
 			Metadata:  meta,
 			Commits:   fileCommits,
 			Locations: locations,
+			Lineage:   lineage[whereis.File],
 		}
 
 		artifactPath := filepath.Join(filesDir, whereis.File+".json")
@@ -1553,7 +1684,7 @@ func readGitBlobsBatch(hashes []string) (map[string][]byte, error) {
 // generateMarkdownArtifacts generates per-file artifact JSONs for markdown files.
 // When preset.MarkdownRecursive is false, only root-level *.md files are processed.
 // Returns (count, totalSize, markdownFiles set, error).
-func generateMarkdownArtifacts(filesDir, headHash, repoURL string, preset Preset, pathCommits map[string][]string, commitMap map[string]Commit, blobInfoMap map[string]blobInfo, incremental bool, pathFilters []string, resume bool, annexedFiles map[string]bool, progress *progressTracker) (int, int64, map[string]bool, error) {
+func generateMarkdownArtifacts(filesDir, headHash, repoURL string, preset Preset, pathCommits map[string][]string, commitMap map[string]Commit, blobInfoMap map[string]blobInfo, incremental bool, pathFilters []string, resume bool, annexedFiles map[string]bool, lineage map[string]*provenance.ArtifactLineage, lineageChanged map[string]bool, progress *progressTracker) (int, int64, map[string]bool, error) {
 	// Get all tracked files via git ls-files
 	lsArgs := []string{"ls-files"}
 	if len(pathFilters) > 0 {
@@ -1588,7 +1719,8 @@ func generateMarkdownArtifacts(filesDir, headHash, repoURL string, preset Preset
 			continue
 		}
 		if incremental {
-			if _, modified := pathCommits[line]; !modified {
+			_, modified := pathCommits[line]
+			if !modified && !lineageChanged[line] {
 				continue
 			}
 		}
@@ -1649,6 +1781,7 @@ func generateMarkdownArtifacts(filesDir, headHash, repoURL string, preset Preset
 			Sections:  sections,
 			Content:   content,
 			IsReadme:  isReadme(line),
+			Lineage:   lineage[line],
 		}
 
 		artifactPath := filepath.Join(filesDir, line+".json")
@@ -1669,7 +1802,7 @@ func generateMarkdownArtifacts(filesDir, headHash, repoURL string, preset Preset
 
 // generateGitArtifacts generates per-file artifact JSONs for git-only tracked files.
 // Returns (count, totalSize, error).
-func generateGitArtifacts(filesDir, headHash, repoURL string, preset Preset, pathCommits map[string][]string, commitMap map[string]Commit, blobInfoMap map[string]blobInfo, incremental bool, pathFilters []string, resume bool, annexedFiles map[string]bool, markdownFiles map[string]bool, progress *progressTracker) (int, int64, error) {
+func generateGitArtifacts(filesDir, headHash, repoURL string, preset Preset, pathCommits map[string][]string, commitMap map[string]Commit, blobInfoMap map[string]blobInfo, incremental bool, pathFilters []string, resume bool, annexedFiles map[string]bool, markdownFiles map[string]bool, lineage map[string]*provenance.ArtifactLineage, lineageChanged map[string]bool, progress *progressTracker) (int, int64, error) {
 	// Get all tracked files via git ls-files
 	lsArgs := []string{"ls-files"}
 	if len(pathFilters) > 0 {
@@ -1698,7 +1831,8 @@ func generateGitArtifacts(filesDir, headHash, repoURL string, preset Preset, pat
 			continue
 		}
 		if incremental {
-			if _, modified := pathCommits[line]; !modified {
+			_, modified := pathCommits[line]
+			if !modified && !lineageChanged[line] {
 				continue
 			}
 		}
@@ -1736,6 +1870,7 @@ func generateGitArtifacts(filesDir, headHash, repoURL string, preset Preset, pat
 			Metadata:  map[string][]string{},
 			Commits:   fileCommits,
 			Locations: nil,
+			Lineage:   lineage[line],
 		}
 
 		artifactPath := filepath.Join(filesDir, line+".json")
@@ -2327,6 +2462,168 @@ func expandCommits(hashes []string, commitMap map[string]Commit) []Commit {
 // when targetRef is empty) and returns a map from file path to its blob hash
 // and size. This replaces N per-file getGitBlobInfo calls with a single
 // subprocess.
+// resolveBundleSelection returns the bundle's selected file set at reader's
+// ref: every tracked file matching pathFilters and passing the preset's
+// skip/match filters, included or excluded per effectiveScope the same way
+// the real artifact generators decide it, but computed once regardless of
+// --incremental/--resume (spec "Bundle selection for provenance").
+// Markdown files are always eligible (generateMarkdownArtifacts runs
+// regardless of scope); effectiveScope "git" excludes annexed files, and
+// "annex" excludes plain git files that are not markdown.
+//
+// pathFilters is applied via buildBlobInfoMap's git pathspec matching (the
+// same `git ls-tree -- <pathFilters>` every other bundle selection path
+// uses); annexed-vs-git classification comes from reader.AllContentIDs at
+// the ref instead of `git annex find`, which (review MR !258 "reads annex
+// state from the worktree, not the ref") would misclassify files for a
+// bundle of a ref other than the worktree and silently swallowed errors.
+// Both the path listing and the content id classification are batch calls,
+// not one git process per file.
+// diffLineage returns the set of paths whose lineage object differs between
+// old and current (spec "Incremental bundles keep lineage current"): a path
+// present in only one of the two maps counts as changed.
+func diffLineage(old, current map[string]*provenance.ArtifactLineage) map[string]bool {
+	changed := map[string]bool{}
+	for path, c := range current {
+		if !lineageEqual(old[path], c) {
+			changed[path] = true
+		}
+	}
+	for path, o := range old {
+		if _, ok := current[path]; !ok && o != nil {
+			changed[path] = true
+		}
+	}
+	return changed
+}
+
+// lineageEqual compares two lineage objects by their serialized form (both
+// are built deterministically, with sorted slices, by BuildArtifactLineage).
+func lineageEqual(a, b *provenance.ArtifactLineage) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	aj, errA := json.Marshal(a)
+	bj, errB := json.Marshal(b)
+	if errA != nil || errB != nil {
+		return false
+	}
+	return bytes.Equal(aj, bj)
+}
+
+func resolveBundleSelection(reader *provenance.Reader, ref string, preset Preset, pathFilters []string, effectiveScope string) ([]string, error) {
+	blobInfoMap, err := buildBlobInfoMap(ref, pathFilters)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build blob info map: %w", err)
+	}
+
+	entries, err := reader.FileEntries()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list tracked files at ref: %w", err)
+	}
+	contentIDs, err := reader.AllContentIDs(entries)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve content ids at ref: %w", err)
+	}
+
+	selected := make([]string, 0, len(blobInfoMap))
+	for path := range blobInfoMap {
+		if skip, _ := shouldSkipPath(path, preset); skip {
+			continue
+		}
+		if !matchesFilters(path, preset) {
+			continue
+		}
+		isAnnexed := strings.HasPrefix(contentIDs[path], provenance.AnnexURNPrefix)
+		isMarkdown := !isAnnexed && isMarkdownFile(path) && (preset.MarkdownRecursive || isRootLevel(path))
+		switch effectiveScope {
+		case "git":
+			if isAnnexed {
+				continue
+			}
+		case "annex":
+			if !isAnnexed && !isMarkdown {
+				continue
+			}
+		}
+		selected = append(selected, path)
+	}
+	sort.Strings(selected)
+	return selected, nil
+}
+
+// provenanceApplicable cheaply reports whether reader's ref has any
+// provenance records, or whether provenance.require has any rule, so a
+// repository with neither sees no change in `exo bundle` behavior — no
+// extra selection resolution, no extra git/git-annex calls that could fail
+// a bundle that worked before (review MR !258: "The selection always runs,
+// even without provenance"; design D8 "a repository that has not adopted
+// provenance sees no behavior change"). Both checks are cheap:
+// reader.ListRecords lists the provenance record directory (and reads
+// nothing if it is empty), and reader.LoadConfig reads .exohub/config.
+func provenanceApplicable(reader *provenance.Reader) (hasRecords, hasRequireRules bool, err error) {
+	records, err := reader.ListRecords()
+	if err != nil {
+		return false, false, fmt.Errorf("failed to list provenance records: %w", err)
+	}
+	hasRecords = len(records) > 0
+
+	cfg, err := reader.LoadConfig()
+	if err != nil {
+		return false, false, fmt.Errorf("failed to load .exohub/config: %w", err)
+	}
+	hasRequireRules = cfg != nil && cfg.Provenance != nil && len(cfg.Provenance.Require) > 0
+	return hasRecords, hasRequireRules, nil
+}
+
+// printProvenanceDryRun prints the provenance/require summary for
+// `exo bundle --dry-run` (spec "Dry run reports without writing").
+func printProvenanceDryRun(provReport *provenance.Report, requireViolations []string, noProvenance bool) {
+	if noProvenance {
+		fmt.Fprintf(os.Stderr, "  provenance: skipped (--no-provenance)\n")
+	} else if provReport != nil {
+		status := "ok"
+		if provReport.HasErrors() {
+			status = "errors"
+		}
+		fmt.Fprintf(os.Stderr, "  provenance: %d record(s), %s\n", provReport.RecordCount, status)
+		for _, f := range provReport.Findings {
+			if f.Severity == provenance.SeverityError {
+				fmt.Fprintf(os.Stderr, "    error: %s: %s\n", f.Path, f.Message)
+			}
+		}
+	}
+	if len(requireViolations) > 0 {
+		fmt.Fprintf(os.Stderr, "  provenance.require violations: %d\n", len(requireViolations))
+		for _, p := range requireViolations {
+			fmt.Fprintf(os.Stderr, "    %s\n", p)
+		}
+	}
+}
+
+// reportProvenanceFailure returns a non-nil error when requireViolations
+// lists provenance.require violations or provReport has validation
+// errors — both checked before any bundle output is written (design D8.2,
+// spec "Bundle selection for provenance").
+func reportProvenanceFailure(provReport *provenance.Report, requireViolations []string, refHash string) error {
+	if len(requireViolations) > 0 {
+		return fmt.Errorf("exo bundle: provenance.require violations for %d file(s):\n  %s\n\nRun \"exo provenance add\" to record provenance for them, then retry.",
+			len(requireViolations), strings.Join(requireViolations, "\n  "))
+	}
+	if provReport != nil && provReport.HasErrors() {
+		var messages []string
+		for _, f := range provReport.Findings {
+			if f.Severity != provenance.SeverityError {
+				continue
+			}
+			messages = append(messages, fmt.Sprintf("  %s: %s", f.Path, f.Message))
+		}
+		return fmt.Errorf("exo bundle: provenance validation failed:\n%s\n\nRun \"exo provenance validate --ref %s\" for details.",
+			strings.Join(messages, "\n"), refHash)
+	}
+	return nil
+}
+
 func buildBlobInfoMap(targetRef string, pathFilters []string) (map[string]blobInfo, error) {
 	ref := targetRef
 	if ref == "" {
@@ -2531,7 +2828,7 @@ func maybeCreateArtipacks(outputDir string) error {
 		if err != nil {
 			return err
 		}
-		if !info.IsDir() && filepath.Ext(path) != artipackExtension && filepath.Base(path) != "bundle.json" && filepath.Base(path) != ".nolocations" {
+		if !info.IsDir() && filepath.Ext(path) != artipackExtension && filepath.Base(path) != "bundle.json" && filepath.Base(path) != "provenance.jsonld" && filepath.Base(path) != "provenance.json" && filepath.Base(path) != ".nolocations" {
 			files = append(files, path)
 		}
 		return nil

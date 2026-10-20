@@ -1,0 +1,7 @@
+{
+  "Entity": "http://www.w3.org/ns/prov#Entity",
+  "Person": "http://www.w3.org/ns/prov#Person",
+  "wasAttributedTo": "http://www.w3.org/ns/prov#wasAttributedTo",
+  "label": "http://www.w3.org/2000/01/rdf-schema#label",
+  "exo:path": "https://genentech.github.io/exohub/ns/provenance#path"
+}

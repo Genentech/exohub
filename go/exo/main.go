@@ -35,6 +35,7 @@ import (
 	manifest "github.com/Genentech/exohub/go/exo/commands/manifest"
 	mcpcmd "github.com/Genentech/exohub/go/exo/commands/mcp"
 	mirror "github.com/Genentech/exohub/go/exo/commands/mirror"
+	provenancecmd "github.com/Genentech/exohub/go/exo/commands/provenance"
 	publishcmd "github.com/Genentech/exohub/go/exo/commands/publish"
 	pull "github.com/Genentech/exohub/go/exo/commands/pull"
 	safecmd "github.com/Genentech/exohub/go/exo/commands/safe"
@@ -45,6 +46,7 @@ import (
 	unlockcmd "github.com/Genentech/exohub/go/exo/commands/unlock"
 	upgrade "github.com/Genentech/exohub/go/exo/commands/upgrade"
 	versioncmd "github.com/Genentech/exohub/go/exo/commands/version"
+	whoamicmd "github.com/Genentech/exohub/go/exo/commands/whoami"
 	"github.com/Genentech/exohub/go/exo/commandutil"
 	"github.com/Genentech/exohub/go/exo/configdir"
 	"github.com/Genentech/exohub/go/exo/internal/defaults"
@@ -131,6 +133,7 @@ func main() {
 	rootCmd.AddCommand(manifest.NewCommand())
 	rootCmd.AddCommand(mcpcmd.NewCommand(version))
 	rootCmd.AddCommand(mirror.NewCommand())
+	rootCmd.AddCommand(provenancecmd.NewCommand())
 	rootCmd.AddCommand(publishcmd.NewCommand())
 	rootCmd.AddCommand(pull.NewCommand())
 	rootCmd.AddCommand(safecmd.NewCommand())
@@ -149,6 +152,7 @@ func main() {
 	rootCmd.AddCommand(unlockcmd.NewCommand())
 	rootCmd.AddCommand(upgrade.NewCommand())
 	rootCmd.AddCommand(versioncmd.NewCommand(version, commit, date))
+	rootCmd.AddCommand(whoamicmd.NewCommand())
 
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(exitCode(err))

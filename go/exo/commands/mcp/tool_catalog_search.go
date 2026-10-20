@@ -18,6 +18,9 @@ var catalogSearchTool = gomcp.NewTool("catalog_search",
 		"Search the ExoHub catalog for datasets and artifacts. "+
 			"Supports full-text search and field-specific queries using dotfield notation "+
 			"(e.g. _extra.project_id:\"myproject\" or path:*.parquet). "+
+			"Artifact documents carry a \"lineage\" object when provenance was recorded: query lineage.inputs.id:\"<id>\" "+
+			"to find what consumed a given artifact, or lineage.generated_by.agents.id:\"<agent id>\" to find what an "+
+			"agent produced. Prefer 'catalog_lineage' for a single artifact's lineage and direct consumers. "+
 			"Use catalog_schemas to discover available schema names for the schema filter. "+
 			"Requires the catalog URL to be configured (EXOHUB_CATALOG_URL env, exo context, or default). "+
 			"Requires authentication (run 'login' first).",
@@ -107,32 +110,4 @@ func handleCatalogSearch(ctx context.Context, request gomcp.CallToolRequest) (*g
 	}
 
 	return resultJSON(result)
-}
-
-func getNumberParam(request gomcp.CallToolRequest, key string) int {
-	args := request.GetArguments()
-	v, ok := args[key]
-	if !ok {
-		return 0
-	}
-	switch n := v.(type) {
-	case float64:
-		return int(n)
-	case json.Number:
-		i, _ := n.Int64()
-		return int(i)
-	}
-	return 0
-}
-
-func getBoolParam(request gomcp.CallToolRequest, key string, defaultVal bool) bool {
-	args := request.GetArguments()
-	v, ok := args[key]
-	if !ok {
-		return defaultVal
-	}
-	if b, ok := v.(bool); ok {
-		return b
-	}
-	return defaultVal
 }

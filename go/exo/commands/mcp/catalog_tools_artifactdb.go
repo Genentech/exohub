@@ -9,5 +9,6 @@ func catalogTools() []toolEntry {
 		{tool: catalogDownloadTool, handler: handleCatalogDownload},
 		{tool: catalogSemanticSearchTool, handler: handleCatalogSemanticSearch},
 		{tool: catalogEntitiesTool, handler: handleCatalogEntities},
+		{tool: catalogLineageTool, handler: handleCatalogLineage},
 	}
 }

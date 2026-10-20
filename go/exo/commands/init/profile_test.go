@@ -472,7 +472,7 @@ func TestFetchProfile(t *testing.T) {
 	defer srv.Close()
 
 	t.Setenv("EXOHUB_API_URL", srv.URL+"/api")
-	spec, err := fetchProfile("sandbox")
+	spec, err := FetchProfile("sandbox")
 	if err != nil {
 		t.Fatalf("fetchProfile: %v", err)
 	}
@@ -510,7 +510,7 @@ func TestFetchProfileNotFound(t *testing.T) {
 	defer srv.Close()
 
 	t.Setenv("EXOHUB_API_URL", srv.URL+"/api")
-	_, err := fetchProfile("missing")
+	_, err := FetchProfile("missing")
 	if err == nil {
 		t.Fatal("expected error for missing profile")
 	}
@@ -526,7 +526,7 @@ func TestFetchProfileURLEncoding(t *testing.T) {
 	defer srv.Close()
 
 	t.Setenv("EXOHUB_API_URL", srv.URL+"/api")
-	_, _ = fetchProfile("my profile")
+	_, _ = FetchProfile("my profile")
 	if receivedURI != "/api/profiles/my%20profile" {
 		t.Errorf("expected URL-encoded request URI, got %q", receivedURI)
 	}
@@ -540,7 +540,7 @@ func TestFetchProfileBodyLimitTruncates(t *testing.T) {
 	defer srv.Close()
 
 	t.Setenv("EXOHUB_API_URL", srv.URL+"/api")
-	_, err := fetchProfile("big")
+	_, err := FetchProfile("big")
 	if err == nil {
 		t.Fatal("expected error when response body exceeds limit")
 	}
@@ -562,7 +562,7 @@ func TestListProfiles(t *testing.T) {
 	defer srv.Close()
 
 	t.Setenv("EXOHUB_API_URL", srv.URL+"/api")
-	got, err := listProfiles()
+	got, err := ListProfiles()
 	if err != nil {
 		t.Fatalf("listProfiles: %v", err)
 	}
@@ -578,7 +578,7 @@ func TestListProfilesServerNotFound(t *testing.T) {
 	defer srv.Close()
 
 	t.Setenv("EXOHUB_API_URL", srv.URL+"/api")
-	got, err := listProfiles()
+	got, err := ListProfiles()
 	if err != nil || got != nil {
 		t.Errorf("expected nil,nil for 404; got %v, %v", got, err)
 	}
@@ -633,6 +633,143 @@ func TestRunProfileInitNamedProfile(t *testing.T) {
 	content := string(data)
 	if !strings.Contains(content, "read_access: authenticated") {
 		t.Errorf("expected read_access: authenticated in permissions, got:\n%s", content)
+	}
+}
+
+func TestApplySetFlags(t *testing.T) {
+	spec := &ProfileSpec{
+		Name: "sandbox",
+		Prompts: []PromptSpec{
+			{Name: "read_access", Kind: "choice", Choices: []string{"public", "authenticated"}},
+			{Name: "create_repo", Kind: "bool"},
+			{Name: "notes", Kind: "string"},
+		},
+	}
+
+	t.Run("valid values", func(t *testing.T) {
+		answers := map[string]interface{}{}
+		err := applySetFlags(spec, answers, []string{"read_access=authenticated", "create_repo=true", "notes=hello"})
+		if err != nil {
+			t.Fatalf("applySetFlags: %v", err)
+		}
+		if answers["read_access"] != "authenticated" {
+			t.Errorf("read_access = %v", answers["read_access"])
+		}
+		if answers["create_repo"] != true {
+			t.Errorf("create_repo = %v", answers["create_repo"])
+		}
+		if answers["notes"] != "hello" {
+			t.Errorf("notes = %v", answers["notes"])
+		}
+	})
+
+	t.Run("unknown key is an error", func(t *testing.T) {
+		err := applySetFlags(spec, map[string]interface{}{}, []string{"bogus=1"})
+		if err == nil {
+			t.Fatal("expected error for unknown key")
+		}
+	})
+
+	t.Run("invalid choice is an error", func(t *testing.T) {
+		err := applySetFlags(spec, map[string]interface{}{}, []string{"read_access=private"})
+		if err == nil {
+			t.Fatal("expected error for invalid choice")
+		}
+	})
+
+	t.Run("invalid bool is an error", func(t *testing.T) {
+		err := applySetFlags(spec, map[string]interface{}{}, []string{"create_repo=maybe"})
+		if err == nil {
+			t.Fatal("expected error for invalid bool")
+		}
+	})
+
+	t.Run("missing equals is an error", func(t *testing.T) {
+		err := applySetFlags(spec, map[string]interface{}{}, []string{"read_access"})
+		if err == nil {
+			t.Fatal("expected error for malformed key=value")
+		}
+	})
+}
+
+func TestRunProfileInitSetFlagAnswersRenderedWithoutPrompting(t *testing.T) {
+	dir := t.TempDir()
+	orig, _ := os.Getwd()
+	_ = os.Chdir(dir)
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	payload := `{
+		"name": "sandbox",
+		"vars": {},
+		"prompts": [
+			{"key": "read_access", "question": "Who reads?", "type": "choice", "default": "authenticated", "choices": ["public","authenticated"]}
+		],
+		"templates": {
+			"permissions": "owners:\n  - {{.UnixID}}\nread_access: {{.read_access}}\nwrite_access: owners\n"
+		},
+		"actions": []
+	}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/profiles/sandbox" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(payload))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	t.Setenv("EXOHUB_API_URL", srv.URL+"/api")
+
+	// flagYes is off: without --set this would block on an interactive prompt.
+	// --set must answer it so runProfileInit never prompts.
+	oldSet := flagSet
+	flagSet = []string{"read_access=public"}
+	t.Cleanup(func() { flagSet = oldSet })
+
+	if err := runProfileInit("sandbox", nil, nil); err != nil {
+		t.Fatalf("runProfileInit: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(".exohub", "permissions"))
+	if err != nil {
+		t.Fatalf("read .exohub/permissions: %v", err)
+	}
+	if !strings.Contains(string(data), "read_access: public") {
+		t.Errorf("expected read_access: public in permissions, got:\n%s", string(data))
+	}
+}
+
+func TestRunProfileInitSetFlagUnknownKeyErrors(t *testing.T) {
+	dir := t.TempDir()
+	orig, _ := os.Getwd()
+	_ = os.Chdir(dir)
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	payload := `{
+		"name": "sandbox",
+		"vars": {},
+		"prompts": [
+			{"key": "read_access", "question": "Who reads?", "type": "choice", "default": "authenticated", "choices": ["public","authenticated"]}
+		],
+		"templates": {},
+		"actions": []
+	}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(payload))
+	}))
+	defer srv.Close()
+
+	t.Setenv("EXOHUB_API_URL", srv.URL+"/api")
+
+	oldYes, oldSet := flagYes, flagSet
+	flagYes = true
+	flagSet = []string{"nonexistent_key=1"}
+	t.Cleanup(func() { flagYes, flagSet = oldYes, oldSet })
+
+	if err := runProfileInit("sandbox", nil, nil); err == nil {
+		t.Fatal("expected error for unknown --set key")
 	}
 }
 
