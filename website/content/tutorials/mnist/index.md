@@ -3,7 +3,7 @@ title: "Building a MNIST Dataset"
 description: "Learn how to build a data repository with ExoHub using the MNIST dataset as an example"
 ---
 
-This tutorial walks you through creating a complete data repository using `exo` and `git-annex`. You will download raw MNIST data with provenance tracking, process it, and publish it to S3 storage.
+This tutorial walks you through creating a complete data repository using `exo` and `git-annex`. You will download raw MNIST data, process it, record its provenance, and publish it to S3 storage.
 
 ## Prerequisites
 
@@ -59,7 +59,7 @@ To browse all available profiles interactively, run:
 exo init --profile-select
 ```
 
-## 2. Download Raw Data with Provenance
+## 2. Download Raw Data
 
 Use `exo add` to register the original MNIST files. This downloads each file and records where it came from (via `git annex addurl` under the hood), so anyone can verify the data source later.
 
@@ -183,21 +183,84 @@ This reads the gzipped IDX files from `data/raw/` and produces:
 - `data/processed/train.parquet` — 60,000 training samples (~18 MB)
 - `data/processed/test.parquet` — 10,000 test samples (~3.8 MB)
 
-Add the processed files to git-annex:
+Add the processed files to git-annex. Also add the script itself — it needs to be tracked so the next step can reference it as a plan:
 
 ```bash
+exo add scripts/preprocess.py
 exo add data/processed/
 ```
 
-## 5. Commit
+## 5. Record Provenance
 
-The data files were already staged by `exo add`. Commit them:
+Now that the raw files and the Parquet outputs are tracked, record how each one came to be with `exo provenance add`:
 
 ```bash
-git commit -m "feat: initial MNIST dataset, processed to Parquet format for easy loading."
+BASE_URL="https://github.com/golbin/TensorFlow-MNIST/raw/refs/heads/master/mnist/data"
+
+# where each raw file comes from
+for f in train-images-idx3-ubyte train-labels-idx1-ubyte t10k-images-idx3-ubyte t10k-labels-idx1-ubyte; do
+  exo provenance add --generated data/raw/$f.gz --derived-from "$BASE_URL/$f.gz"
+done
+
+# how the Parquet files were produced
+exo provenance add --generated data/processed/train.parquet \
+  --used data/raw/train-images-idx3-ubyte.gz --used data/raw/train-labels-idx1-ubyte.gz \
+  --plan scripts/preprocess.py
+exo provenance add --generated data/processed/test.parquet \
+  --used data/raw/t10k-images-idx3-ubyte.gz --used data/raw/t10k-labels-idx1-ubyte.gz \
+  --plan scripts/preprocess.py
 ```
 
-## 6. Sync Data with Remotes
+```text
+Wrote and staged .exohub/provenance/20261019T210602Z-train-images-idx3-ubyte-55e84a.jsonld
+Wrote and staged .exohub/provenance/20261019T210602Z-train-labels-idx1-ubyte-a6fb4c.jsonld
+Wrote and staged .exohub/provenance/20261019T210602Z-t10k-images-idx3-ubyte-3b1d17.jsonld
+Wrote and staged .exohub/provenance/20261019T210602Z-t10k-labels-idx1-ubyte-7a9872.jsonld
+Wrote and staged .exohub/provenance/20261019T210606Z-train-297a94.jsonld
+Wrote and staged .exohub/provenance/20261019T210607Z-test-5b40ed.jsonld
+```
+
+There's no `--agent` flag here: the tutorial already ran `exo login`, so each record is attributed to the person from your login token. Each `exo provenance add` writes a small, add-only JSON-LD record under `.exohub/provenance/` and stages it automatically — records identify files by content (an annex key or git blob/tree id), not by path, so they stay valid across renames.
+
+## 6. Commit
+
+The data files and the new provenance records were already staged by `exo add` and `exo provenance add`. Commit them together:
+
+```bash
+git commit -m "feat: initial MNIST dataset with provenance, processed to Parquet format for easy loading."
+```
+
+`exo provenance show` resolves a path to its content identifier at a git ref (`HEAD` by default), so it needs this commit to exist first. Inspect what you just recorded:
+
+```bash
+exo provenance show data/processed/train.parquet
+```
+
+A trimmed version of the output:
+
+```text
+Lineage for data/processed/train.parquet (urn:exohub:annex:SHA256E-s18107628--57f75a2c...):
+
+- [Entity] data/processed/train.parquet (urn:exohub:annex:SHA256E-s18107628--57f75a2c...)
+    wasDerivedFrom: data/raw/train-labels-idx1-ubyte.gz (...), data/raw/train-images-idx3-ubyte.gz (...)
+    wasGeneratedBy: urn:exohub:activity:01a155fc-6559-753e-...
+    source: asserted by urn:exohub:agent:person:alice (.exohub/provenance/20261019T210606Z-train-297a94.jsonld)
+
+- [Entity] data/raw/train-images-idx3-ubyte.gz (urn:exohub:annex:SHA256E-s9912422--440fcabf...)
+    wasDerivedFrom: https://github.com/golbin/TensorFlow-MNIST/raw/refs/heads/master/mnist/data/train-images-idx3-ubyte.gz
+    wasGeneratedBy: urn:exohub:activity:01a155fc-552b-7e1f-...
+    source: asserted by urn:exohub:agent:person:alice (.exohub/provenance/20261019T210602Z-train-images-idx3-ubyte-55e84a.jsonld)
+
+- [Activity] urn:exohub:activity:01a155fc-6559-753e-...
+    hadPlan: scripts/preprocess.py (urn:exohub:git:blob:dd3ca9c4...)
+    used: data/raw/train-labels-idx1-ubyte.gz (...), data/raw/train-images-idx3-ubyte.gz (...)
+    wasAssociatedWith: Alice (urn:exohub:agent:person:alice)
+    source: asserted by urn:exohub:agent:person:alice (.exohub/provenance/20261019T210606Z-train-297a94.jsonld)
+
+… (data/raw/train-labels-idx1-ubyte.gz, the [Person] node, and a "Commit history" section with the commit above follow the same pattern)
+```
+
+## 7. Sync Data with Remotes
 
 Sync all annexed data to the remotes and broadcast the metadata:
 
@@ -206,7 +269,7 @@ exo sync
 exo broadcast
 ```
 
-This uploads the data files to the `s3-archive` remote, exports processed files to `s3-export`, and `exohub-atlas` publishes the catalog (`_catalog`) — all as configured by the `tutorials` profile.
+This uploads the data files to the `s3-archive` remote, exports processed files to `s3-export`, and `exohub-atlas` publishes the catalog (`_catalog`) — all as configured by the `tutorials` profile. The published bundle now also carries `provenance.jsonld` (the compiled lineage graph) and `provenance.json` (the same data as flat JSON); each file artifact gains a `lineage` block — what generated it, what it used, and the records behind those claims.
 
 We can verify the content of s3:
 
@@ -241,7 +304,7 @@ Notice the difference in the content between the remote type `annex` vs `export`
   of the files, but the remote type allows to replicate files on s3 that can later be accessed
   directly from there (here, parquet files could be queried directly)
 
-## 7. Verify
+## 8. Verify
 
 Test the full clone workflow from scratch:
 
@@ -277,3 +340,10 @@ Your dataset is now published and can be cloned by anyone with access. Users can
 ```bash
 exo clone --preset data-only {{< exohub "cloneExample" >}}
 ```
+
+
+
+To learn more about `exo provenance` — the record format, folder collections, and the agent workflow — see the exo-cli [provenance documentation](https://github.com/Genentech/exohub/blob/main/docs/provenance.md).
+
+
+If your team wants to enforce lineage, require it with `provenance.require` in `.exohub/config` and install a pre-commit check with `exo provenance install-hook`.
