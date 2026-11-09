@@ -21,6 +21,17 @@
     "wasAttributedTo": { "@id": "prov:wasAttributedTo", "@type": "@id" },
     "actedOnBehalfOf": { "@id": "prov:actedOnBehalfOf", "@type": "@id" },
     "hadPlan": { "@id": "prov:hadPlan", "@type": "@id" },
+    "hadMember": { "@id": "prov:hadMember", "@type": "@id" },
+    "hadPrimarySource": { "@id": "prov:hadPrimarySource", "@type": "@id" },
+    "qualifiedUsage": { "@id": "prov:qualifiedUsage", "@type": "@id" },
+    "qualifiedGeneration": { "@id": "prov:qualifiedGeneration", "@type": "@id" },
+    "entity": { "@id": "prov:entity", "@type": "@id" },
+    "activity": { "@id": "prov:activity", "@type": "@id" },
+
+    "Usage": "prov:Usage",
+    "Generation": "prov:Generation",
+    "hadRole": "prov:hadRole",
+    "value": "prov:value",
 
     "startedAtTime": { "@id": "prov:startedAtTime", "@type": "xsd:dateTime" },
     "endedAtTime": { "@id": "prov:endedAtTime", "@type": "xsd:dateTime" },
@@ -29,6 +40,8 @@
     "label": "rdfs:label",
 
     "exo:path": "exo:path",
+    "exo:repository": "exo:repository",
+    "exo:commit": "exo:commit",
     "exo:assertion": "exo:assertion",
     "exo:assertedBy": { "@id": "exo:assertedBy", "@type": "@id" },
     "exo:evidence": "exo:evidence",
@@ -36,6 +49,8 @@
     "exo:model": "exo:model",
     "exo:version": "exo:version",
     "exo:fromRecord": { "@id": "exo:fromRecord", "@type": "@id" },
-    "exo:records": { "@id": "exo:records", "@container": "@set" }
+    "exo:records": { "@id": "exo:records", "@container": "@set" },
+    "exo:checksum": "exo:checksum",
+    "exo:minVersion": "exo:minVersion"
   }
 }

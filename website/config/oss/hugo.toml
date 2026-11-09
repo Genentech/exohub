@@ -15,6 +15,7 @@ ignoreFiles = [
   'content/docs/components/exoworkers(/|$)',
   'content/docs/components/exogit(/|$)',
   'content/use-cases/gwasdb(/|$)',
+  'content/use-cases/rnaseq(/|$)',
   'content/use-cases/_index\.md$',
   'content/tips(/|$)',
   'content/api/_index\.md$',

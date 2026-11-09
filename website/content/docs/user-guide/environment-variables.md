@@ -80,7 +80,8 @@ Directory layout under `EXO_CONFIG_DIR`:
 | `EXOHUB_GITLAB_TOKEN` | GitLab-specific git token | _(none)_ |
 | `EXOHUB_GITHUB_TOKEN` | GitHub-specific git token | _(none)_ |
 | `EXOHUB_GITEA_TOKEN` | Gitea-specific git token | _(none)_ |
-| `EXO_TOKEN_FILE` | Path to the OAuth token file (overrides `EXO_CONFIG_DIR`-derived path and system default) | `~/.config/exo/credentials/token.json` |
+| `EXO_TOKEN` | Access token passed inline, bypassing the token file entirely. Intended for CI/headless use. Accepts either a JSON-encoded OAuth2 token or a raw JWT/API key string used directly as the access token. Takes precedence over `EXO_TOKEN_FILE`, and is honoured by `exo`, `exo-credential-helper`, and `git-annex-remote-artifactdb-export`. For a raw JWT, `exo` uses its `exp` claim as the token's expiry, so an expired JWT is reported as invalid; an opaque API key has no client-side expiry, and the server decides whether it's still valid. | _(none)_ |
+| `EXO_TOKEN_FILE` | Path to the OAuth token file (overridden by `EXO_TOKEN`; overrides `EXO_CONFIG_DIR`-derived path and system default) | `~/.config/exo/credentials/token.json` |
 
 
 

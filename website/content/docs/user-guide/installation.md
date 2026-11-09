@@ -58,7 +58,14 @@ To upgrade to the latest version:
 exo upgrade
 ```
 
-This re-runs the installer and updates all components.
+This re-runs the installer and updates all components. Pass a specific version as either a bare semver or a `v`-prefixed release tag — both work the same way:
+
+```bash
+exo upgrade 0.134.0
+exo upgrade v0.134.0
+```
+
+> **Note:** Right after a new release, `exo upgrade` with no version may briefly still install the previous version, until the artifact store's `latest` pointer catches up. If that happens, pass the version explicitly.
 
 
 

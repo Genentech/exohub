@@ -3,7 +3,7 @@ title: "Using AI Agents with ExoHub (MCP Server)"
 description: "Learn how to connect AI agents like Claude Code or Cursor to ExoHub via the built-in MCP server"
 ---
 
-ExoHub ships with a built-in [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that exposes data management operations as tools for AI agents. Once registered, an agent like Claude Code or Cursor can clone repositories, sync data, check status, and publish datasets — without you having to remember git-annex commands.
+ExoHub ships with a built-in [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that exposes data management operations as tools for AI agents. Once registered, an agent like Claude Code or Cursor can initialize repositories, sync data, check status, and publish datasets — without you having to remember git-annex commands.
 
 This tutorial walks you through registering the MCP server, discovering its tools, and running a complete workflow with an agent.
 
@@ -60,22 +60,34 @@ exo mcp list
 ```
 
 ```
-add                Add files to tracking with automatic content-type detection
-broadcast          Broadcast git-annex metadata to remotes without transferring file content
-catalog_download   Download files, artifacts, or entire projects from the catalog
-catalog_schemas    List available document schema names in the catalog
-catalog_search     Search the ExoHub catalog for datasets and artifacts
-clone              Clone an existing data repository with git-annex support
-create_repo        Initialize current directory as a git-annex repo with S3 remote
-heartbeat_record   Start recording sync progress metrics in the background
-heartbeat_show     Show the latest sync progress metrics
-locate             Show where git-annex content is physically stored across remotes
-login              Authenticate with {{< exohub "authName" >}} via device flow (non-blocking)
-login_status       Check whether authentication has completed
-publish            Orchestrate the full publish workflow
-status             Show working tree status
-sync               Download and upload git-annex managed data files (background)
-sync_status        Check whether a background sync is still running
+add                       Add files to tracking with automatic content-type detection
+broadcast                 Broadcast git-annex metadata to remotes without transferring file content
+catalog_download          Download files, artifacts, or entire projects from the catalog
+catalog_entities          Retrieve entity details and relationships from the catalog knowledge graph
+catalog_lineage           Show an artifact's recorded lineage from the catalog, plus its direct consumers
+catalog_schemas           List available document schema names in the catalog
+catalog_search            Search the ExoHub catalog for datasets and artifacts
+catalog_semantic_search   Semantic (natural language) search over the catalog using vector similarity
+docs                      Fetch exo usage documentation (the llms.txt index, or a specific page)
+doctor                    Run ExoHub client diagnostics: environment, auth, network, repo config, grants/S3 access, provenance
+get                       Download git-annex managed content for specific paths
+heartbeat_record          Start recording sync progress metrics in the background
+heartbeat_show            Show the latest sync progress metrics
+info                      Show repository information: configured remotes, annex state, and storage statistics
+init                      Initialize or reconfigure git-annex in an existing repository, optionally applying a server-authored profile
+init_remote               Add a new storage remote to the repository
+locate                    Show where git-annex content is physically stored across remotes
+login                     Authenticate with {{< exohub "authName" >}} via device flow (non-blocking)
+login_status              Check whether authentication has completed
+profiles                  List available server-authored setup profiles, or show one profile's prompts
+provenance_add            Record PROV-O provenance for generated/derived files
+provenance_show           Show a path's recorded lineage from the repository's provenance records
+provenance_validate       Validate recorded provenance for schema conformance, dangling references, and coverage
+publish                   Orchestrate the full publish workflow
+status                    Show working tree status
+sync                      Download and upload git-annex managed data files (background)
+sync_status               Check whether a background sync is still running
+whoami                    Show identity, session, organisation, and AWS credential info for the current login
 ```
 
 To see the full parameter list for a specific tool:
@@ -86,13 +98,19 @@ exo mcp show sync
 
 ## 3. Example Workflow: Clone a Repo and Sync Data
 
-Here is a complete example you can paste into your agent. It clones the published MNIST tutorial dataset and downloads the processed Parquet files.
+Here is a complete example you can walk through with your agent. It syncs the published MNIST tutorial dataset you clone below and downloads the processed Parquet files.
+
+First, clone the repository in your terminal (cloning is not an MCP tool):
+
+```bash
+git clone {{< exohub "cloneExample" >}} /tmp/mnist-agent
+```
 
 **Prompt to your agent:**
 
 > Please use the ExoHub MCP tools to:
 > 1. Authenticate with ExoHub
-> 2. Clone `{{< exohub "cloneExample" >}}` into `/tmp/mnist-agent`
+> 2. Initialize git-annex in `/tmp/mnist-agent`
 > 3. Sync the data so the Parquet files are available locally
 > 4. Report the final status
 
@@ -120,15 +138,14 @@ Tool: login_status
 Result: { "status": "ok" }
 ```
 
-### Step 3 — Clone
+### Step 3 — Initialize
+
+There is no `clone` or `create_repo` MCP tool — the agent calls `init` on the repository you already cloned, which runs `exo init --yes` to configure git-annex and wire up the remotes defined in `.exohub/remotes`:
 
 ```
-Tool: clone
-Args: {
-  "repo_url": "{{< exohub "cloneExample" >}}",
-  "directory": "/tmp/mnist-agent"
-}
-Result: { "status": "ok", "directory": "/tmp/mnist-agent" }
+Tool: init
+Args: { "repo_dir": "/tmp/mnist-agent" }
+Result: { "status": "ok" }
 ```
 
 ### Step 4 — Start Sync with Progress Monitoring
@@ -167,29 +184,39 @@ Args: { "repo_dir": "/tmp/mnist-agent" }
 Result: { "clean": true, "untracked": [], "modified": [] }
 ```
 
-The agent reports back: the clone succeeded and all data files are present locally.
+The agent reports back: setup succeeded and all data files are present locally.
 
 ## 4. Example Workflow: Create and Publish a Repository
 
-This workflow shows an agent setting up a brand-new data repository. You tell the agent the Git URL of an already-created GitLab project and the local directory to use:
+This workflow shows an agent setting up a brand-new data repository. First, create a local git repository pointed at an already-created GitLab project yourself (the agent cannot create the git repository):
+
+
+
+```bash
+mkdir /tmp/mydata && cd /tmp/mydata
+git init
+git remote add origin https://github.com/YOUR_NAMESPACE/mydata.git
+```
+
+
+Then tell the agent what to do next:
 
 **Prompt:**
 
-
-
-> Create an ExoHub data repository in `/tmp/mydata` backed by `https://github.com/YOUR_NAMESPACE/mydata.git`. Add the CSV files from `/tmp/source/`, then sync and publish everything.
-
+> Set up ExoHub in `/tmp/mydata`. Add the CSV files from `/tmp/source/`, then sync and publish everything.
 
 The agent will:
 
 | Step | Tool | What happens |
 |------|------|--------------|
 | 1 | `login` → `login_status` | Authenticate |
-| 2 | `create_repo` | `git init`, configure git-annex, create `.exohub/remotes` |
+| 2 | `profiles` → `init` (with `profile`) | Pick a server-authored setup profile, answer its prompts, and apply it; this configures git-annex and sets up the storage remotes the profile defines in `.exohub/remotes` (or add one by hand with `init_remote`) |
 | 3 | `add` | Stage CSV files (text → git, large binaries → annex) |
 | 4 | `sync` | Push content to S3 remotes |
 | 5 | `sync_status` | Wait for background sync to finish |
 | 6 | `publish` | Bundle metadata and sync to catalog |
+
+A brand-new repository has no remotes defined in `.exohub/remotes` yet, so `init` alone configures nothing to push to — the agent calls `profiles` first to find a server-authored profile, then calls `init` with that `profile`, asking you about every one of the profile's prompts along the way (it must never assume a value for `read_access`). Without a suitable profile, use `init_remote` to add a storage remote by hand instead.
 
 At each step the agent shows you what it's doing. If anything goes wrong — a network error, a missing remote, an auth timeout — it stops and explains the problem rather than silently failing.
 
@@ -227,14 +254,14 @@ The MCP server covers the full ExoHub data lifecycle:
 | Category | Tools |
 |----------|-------|
 | **Authentication** | `login`, `login_status` |
-| **Repository setup** | `create_repo`, `clone` |
-| **File tracking** | `add`, `status`, `locate` |
+| **Repository setup** | `init`, `init_remote` |
+| **File tracking** | `add`, `status`, `locate`, `get` |
 | **Sync & publish** | `sync`, `sync_status`, `broadcast`, `publish` |
 | **Progress monitoring** | `heartbeat_record`, `heartbeat_show` |
 | **Catalog** | `catalog_search`, `catalog_schemas`, `catalog_download` |
 
 Operations the agent cannot perform (you still do these yourself):
-- Create the GitLab repository — the agent needs an existing Git URL for `create_repo`
+- Clone or create the git repository — there is no `clone` or `create_repo` MCP tool, so run `git clone <url>` (or `git init` + `git remote add origin <url>`) in a terminal first, then let the agent call `init`
 - Modify `.exohub/remotes` after initialization — edit the file directly, then re-run `exo init`
 - Review and approve access control changes — use the [Permissions guide]({{< ref "docs/user-guide/permissions" >}})
 

@@ -37,6 +37,8 @@ When you run `exo init`, the CLI:
 
 > **Note:** The `grants` setting applies to `annex`, `export`, and `import` remote types only. Exospace remotes use a separate permission model (`public`, `group`, `private`).
 
+
+
 ## The `.exohub/permissions` File
 
 This file controls who gets access and at what level. It lives at `.exohub/permissions` in your repository and is auto-created by `exo init` with the current user as owner.
@@ -142,7 +144,7 @@ owners:
   - bob    # new owner
 ```
 
-> **Important:** `exo init` warns if you are not listed as an owner before provisioning grants. You can use `--yes` to force past this check (e.g., for service accounts). If you proceed without being an owner, the grants API will still reject the request with a 403 error.
+> **Important:** Provisioning grants is owner-only. If you are not listed as an owner, `exo init` checks whether you have read access (via `read_access: public`/`authenticated`, or a listed `viewer` under `read_access: viewers`): if so, it silently skips grants provisioning and continues configuring remotes — this happens regardless of `--yes`. If you have no read access at all, `exo init` prints an informational message naming the current owners and continues without provisioning grants or aborting. To force grants provisioning anyway (service/admin accounts only), use `--force-grants-sync`.
 
 ## Drift Detection
 

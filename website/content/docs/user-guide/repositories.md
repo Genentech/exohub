@@ -180,19 +180,33 @@ exo init --profile sandbox --dry-run
 exo init --profile sandbox --force
 ```
 
+To answer specific profile prompts non-interactively while leaving the rest to default or interactive resolution, use the repeatable `--set key=value` flag:
+
+```bash
+# Answer one prompt, default/prompt for the rest
+exo init --profile sandbox --yes --set read_access=authenticated
+
+# Answer multiple prompts
+exo init --profile sandbox --yes --set read_access=authenticated --set project_id=myproject
+```
+
+Unknown keys are rejected with an error, so typos in a prompt key are caught immediately rather than silently ignored.
+
 **Template variables available inside profiles:**
 
 All variables are exposed at the top level — reference them directly with `.VarName`:
 
 | Variable | Description |
 |----------|-------------|
-| `.UnixID` | Your username (from JWT or OS) |
-| `.Folder` | Current directory base name |
+| `.UnixID` | Your username (JWT `preferred_username` or OS username) on the first `--profile` run for a given profile; on any later run (e.g. a `--remote` refresh or `--dry-run --json` drift report), the `UnixID` recorded in `.exohub/profile.lock` is used instead, so a shared prefix never changes depending on who runs it |
+| `.Folder` | The repo's identity, resolved in order: an explicit `--folder`/`--set Folder=<name>` override, the `Folder` recorded in `.exohub/profile.lock`, the dataset name already baked into an existing remote's rendered fields (e.g. its `s3url`), the git `origin` remote's repo name, then the current directory's base name (with a warning, since this is the least reliable source) |
 | `.<key>` | Values from the profile's `vars` block (by key name) |
 | `.<NAME>` | Value of `EXOHUB_TPL_<NAME>` environment variable (by suffix) |
 | `.<key>` | Responses to the profile's interactive prompts (by prompt key) |
 
 > **Precedence:** Prompt answers override vars; environment variables override vars. On key collision, last write wins.
+
+> **`exo init` no longer infers your dataset's identity from the directory you happen to be in** — when the resolved `.Folder` differs from the current directory name, exo prints a notice naming the source it used (e.g. `Using dataset name "mnist" (from git origin remote), which differs from the current directory "my-clone"`).
 
 ### Re-initializing
 
@@ -214,6 +228,52 @@ exo init --remote s3-annex
 
 This is useful when only one remote's credentials or configuration have changed, or when debugging a specific remote. The orphaned-remote check is skipped when `--remote` is active to avoid false positives.
 
+### Refreshing a Remote From an Updated Profile
+
+If a server profile changes after a repo was initialized from it (e.g. a profile adds a new field to one of its remotes), combine `--profile` with `--remote` on an already-initialized repo to refresh just that one remote, instead of using `--force` (which rewrites everything):
+
+```bash
+exo init --profile my-profile --remote catalog
+```
+
+This re-renders the `catalog` remote from `my-profile` and prints a diff of the changed/added fields, e.g.:
+
+```
+==> Remote catalog drift from profile "my-profile":
+  + atlas_url: https://atlas.example.com/...
+```
+
+Unless `--yes` is also passed, you're asked to confirm. Only the changed/added fields are written to `.exohub/remotes` and applied to the git-annex remote config — comments, key order, and any key the profile doesn't know about are preserved; nothing the profile doesn't define is ever cleared.
+
+```bash
+exo init --profile my-profile --remote catalog --yes
+```
+
+Answers needed to re-render (e.g. a templated path) come from, in order: `--set key=value`, `.exohub/profile.lock` (written automatically by every `exo init --profile` run), or reverse-matched from the remote's current fields. If a prompt can't be resolved any of these ways, the command fails and names exactly which keys are missing.
+
+#### Reporting Drift for Automation
+
+```bash
+exo init --profile my-profile --dry-run --json
+```
+
+Reports drift between every remote in `.exohub/remotes` and what the profile would render, without changing anything, as a JSON array of `{remote, field, current, profile, status, hint?}` entries. `status` is one of `added`, `changed`, `local-only` (the repo has a field the profile doesn't define — reported for visibility, never proposed for removal), or `unresolved`. Combine with `--remote <name>` to scope the report to a single remote. Exits `3` if any `added`/`changed`/`unresolved` entry is found, `0` if none — distinct from the generic exit `1` used for command errors.
+
+#### s3url Changes Are Never Silent
+
+A rendered `s3url` that differs from a remote's current one is treated as a storage **location move**, not a routine update: it's always shown (`old -> new`), but applying it needs `--allow-move` in addition to `--yes` or interactive confirmation — because the remote's UUID stays the same, git-annex's location log would otherwise keep claiming content is present at the old S3 prefix even though nothing was copied to the new one.
+
+```bash
+exo init --profile my-profile --remote catalog --yes --allow-move
+```
+
+This applies both to a `--remote` refresh and to a full `--profile --force` re-apply. After a confirmed move, exo re-verifies presence for that remote (`git annex fsck --from <remote> --fast`), but that check only covers keys reachable from the current work tree, not every historical ref/tag — an older tag's content can still show as stale-present in the location log until a full sweep re-verifies it. Run both of these afterward, in order:
+
+```bash
+exo sync --all            # re-upload anything missing from every ref, not just the current checkout
+exo sync --check --verify # confirm nothing is still silently missing
+```
+
 ### Init Options
 
 | Flag | Description |
@@ -224,10 +284,14 @@ This is useful when only one remote's credentials or configuration have changed,
 | `--name <repo>` | Explicit repository name |
 | `--profile <name>` | Fetch and apply a server-authored profile |
 | `--profile-select` | Interactively select a profile to apply |
+| `--set <key>=<value>` | Answer a profile prompt non-interactively (repeatable; unknown keys error) |
+| `--folder <name>` | Override the resolved `.Folder` template variable instead of inferring it from the repo's identity |
 | `--force` | Overwrite existing `.exohub/` when applying a profile |
 | `--dry-run` | Show what would be done |
+| `--json` | With `--profile --dry-run`, report remote/profile drift as JSON instead of applying a profile |
 | `--reset` | Remove `.exohub/` and `.git/` before initializing |
-| `--remote <name>` | Only configure or validate the named remote |
+| `--remote <name>` | Only configure or validate the named remote; combined with `--profile`, refreshes that remote from the profile |
+| `--allow-move` | Confirm an `s3url` change (`--profile`, with or without `--remote`) is an intentional location move; `--yes` alone does not approve it |
 | `--dead <uuid>` | Mark a remote UUID as dead |
 | `--destroy <uuid>` | Destroy a UUID from git-annex history (destructive) |
 | `--confirm <uuid>` | Confirmation UUID for `--destroy` in non-interactive mode |
@@ -476,6 +540,10 @@ remotes:
 
 > **`grants: true`** — When set, `exo init` provisions S3 Access Grants for this remote. See [Permissions & Access Control]({{< ref "permissions" >}}) for details on configuring owners, viewers, and access levels.
 
+> **`credentials`** — An optional `<provider>: {<key>: <value>}` map for remote-scoped credential settings that only some `exo` builds interpret; unrecognized providers are ignored by `exo` and flagged (**WARN**) by `exo doctor`.
+
+
+
 Remote types:
 - `annex` — Content-addressed storage (S3 or rsync backend)
 - `export` — Human-readable file layout with original filenames
@@ -492,8 +560,11 @@ Catalog remote fields:
 |-------|-------------|
 | `mode` | Required: `export` or `import` |
 | `instance_url` | ArtifactDB instance URL |
+| `atlas_url` | Publish to a specific, non-default Atlas instead of the deployment's default (must be allowlisted by the deployment); see [Choosing the Target Atlas]({{< ref "syncing#choosing-the-target-atlas" >}}) |
 | `publish_on` | When to publish: `tag` (only on tags) or `always` (default) |
 | `project_id` | Custom project ID override (defaults to repo name) |
+
+> When creating a catalog remote through `exo init`'s interactive wizard (not `--profile`), you're also prompted for an optional "ExoHub Atlas URL", which sets `atlas_url`.
 
 ### `.exohub/presets`
 

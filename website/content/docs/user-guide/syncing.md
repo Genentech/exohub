@@ -195,6 +195,53 @@ Add `--json` for machine-readable output:
 exo sync --dry-run --json
 ```
 
+## Checking Completeness Across History
+
+A plain `exo sync` only uploads the annexed content of the **current checkout**. If a repository's history replaces an annexed file commit after commit (e.g. importing several versions of a dataset chronologically and tagging each one), the content an **older** tag or commit points at can end up on no remote at all, unless it was synced while that version was checked out. Nothing about a normal `exo sync` tells you this happened. After importing several versions this way (one commit or tag per version), run `exo sync --all` (then `exo sync --check` to confirm) instead of a plain `exo sync` — the default `exo sync` never uploads older commits' content.
+
+### `exo sync --check`
+
+Reports whether the content referenced by your branches and tags is actually safe, without running any sync:
+
+```bash
+exo sync --check                  # check every local branch and tag
+exo sync --check --ref v1         # check only ref v1 (repeatable)
+exo sync --check --ref v1 --ref v2
+exo sync --check --json           # stable {refs_checked, items, summary} report
+exo sync --check --with my-remote # only require content on my-remote
+```
+
+Every annexed file referenced by a checked ref is classified as:
+
+- **ok** — present on at least one configured annex remote (omitted from `--json` output; only non-ok items are reported).
+- **fixable** — present in this clone, but on no configured remote. Run `exo sync --all` to upload it (or check out that ref and run a plain `exo sync`).
+- **lost** — not in this clone and on no configured remote. If another, unconfigured repository might still have a copy, it's listed under `seen_in`.
+
+Exit codes are designed for automation to branch on without parsing `--json`:
+
+| Exit code | Meaning |
+|-----------|---------|
+| `0` | Every item in the resolved ref set is `ok`. |
+| `3` | At least one `fixable` item, no `lost` item. |
+| `4` | At least one `lost` item (takes precedence over `fixable`). |
+
+Add `--verify` to also check presence on each remote directly (`checkpresentkey`) instead of trusting the location log — this catches a remote whose storage moved without a UUID change, e.g. after a remote's `s3url` was moved (see [s3url Changes Are Never Silent]({{< ref "repositories#s3url-changes-are-never-silent" >}})):
+
+```bash
+exo sync --check --verify
+```
+
+### `exo sync --all`
+
+The explicit, full-cost uploader: pushes the annexed content of **every local branch and tag** to every writable, plain annex remote, respecting each remote's own preferred content expression. Catalog, import, export, readonly, and write-restricted remotes are skipped (they use other sync mechanisms).
+
+```bash
+exo sync --all                     # upload history to every writable remote
+exo sync --all --dry-run --json    # preview without uploading
+```
+
+Use `--all` to repair `fixable` content reported by `--check`, or to seed a remote from an existing repository's full history. `--all` can only upload content that exists in this clone — if some content is `lost`, `--all` still uploads everything it can and reports the loss with the same exit code as `--check`.
+
 ## Parallel Jobs
 
 Speed up syncing by running multiple transfers in parallel:
@@ -299,6 +346,32 @@ When your repository has catalog remotes (e.g., `artifactdb` type), `exo sync` a
 3. Calls the catalog remote's publish binary to register the data
 
 > **Requires a git remote:** Syncing to a catalog remote requires the generated bundle to have a `repo_url` (see [Repository URL in Bundle Metadata]({{< ref "advanced#repository-url-in-bundle-metadata" >}})). If your repository has no usable git remote, sync refuses to publish to the catalog remote with an error instead of registering an entry with no clone URL. Configure a remote (`git remote add origin <url>`) and re-run `exo bundle` before syncing.
+
+### Choosing the Target Atlas
+
+By default, a catalog remote's bundle goes to the ExoHub deployment's **default Atlas**. Set `atlas_url` on the remote in `.exohub/remotes` to publish to a specific, non-default Atlas instead — only Atlas URLs the deployment has allowlisted are accepted.
+
+`exo` always shows, per catalog remote, where the bundle will go before anything is published — in `exo sync --dry-run` and again right before the real publish:
+
+```
+$ exo sync --with atlas --dry-run
+Would publish to catalog remote 'atlas' via git-annex-remote-artifactdb-export
+  api-url:      https://api.exohub.example.com
+  s3url:        s3://my-bucket/my-prefix
+  bundle → https://atlas.example.com/v1/sandbox1 (atlas_url)
+  .artifactdb/ → https://artifactdb.example.com/v1/myproject
+  grants:       false
+```
+
+When no `atlas_url` is configured, exo asks the API for the deployment's default Atlas and visually flags the line, since publishing to the default Atlas without an explicit `atlas_url` is the case most likely to surprise someone expecting a specific destination:
+
+```
+  bundle → ⚠ default Atlas https://atlas.example.com/v1/default
+```
+
+If the API can't be reached or doesn't expose the default Atlas URL (older deployment), the line falls back to `bundle → ⚠ default Atlas (server-chosen)`. Once a real publish succeeds, exo also prints which Atlas actually received the bundle.
+
+If `atlas_url` or `instance_url` isn't on the deployment's allowlist, the publish is refused (HTTP 422) with a clear, non-zero-exit error naming the fix and the allowlisted values. The bundle's files are still uploaded to S3 at that point, but nothing is indexed. To fix it, update `atlas_url`/`instance_url` in `.exohub/remotes` to an allowlisted value (or remove `atlas_url` to use the default Atlas), run `exo init`, and re-run `exo sync`/`exo publish`.
 
 ### Publish Constraints
 
@@ -454,6 +527,8 @@ For URLs, `exo add` uses the filename provided by the server (via the `Content-D
 | `-J, --jobs <N>` | Parallel git-annex operations (default: `$EXOHUB_JOBS` or `1`) |
 
 Files added to git-annex store only a lightweight pointer in Git, while the actual content goes to your configured remotes after syncing.
+
+> If a tracked file was removed from disk (e.g. `rm data/old.csv`), `exo add` skips it and leaves the deletion unstaged — it never aborts the rest of the add for the files around it. It prints a note naming the skipped file(s) and suggesting `git rm` to stage the deletion. `exo bundle`/`exo publish` refuse to run over any uncommitted change to a tracked file, staged or not, so run `git rm` and commit the deletion (or restore the file) before bundling/publishing.
 
 ### 5. Publish
 

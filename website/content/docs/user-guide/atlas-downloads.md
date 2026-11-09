@@ -32,6 +32,10 @@ Each search result displays:
 
 Press `h` to toggle the highlights pane, which shows where your search terms matched within each result. Matched terms are displayed in yellow. The pane auto-closes when no highlights are available.
 
+### Finding What Uses an Artifact
+
+While viewing an artifact document (an `exohub-artifact` or `exohub-markdown` document, opened from a search result), press `u` to search for every other document that lists it as an input. This runs a catalog search for `lineage.inputs.id` matching the document's content id — and, when the document is a member of a folder collection, the collection's id too — and shows the results as "Used by `<path>` (N)". Press `esc` from the results to jump back to the document you started from, rather than to the previous search. `u` has no effect on document types that don't carry lineage (a status message explains why).
+
 ### Web App
 
 In the web app, Atlas supports mouse interaction:
@@ -176,6 +180,13 @@ those only apply to local downloads.
 | `--no-wait` | Submit the download and exit without following progress | `false` |
 | `--max-wait <duration>` | Maximum time to follow the remote download before giving up (the download keeps running on the EDS regardless) | `6h` |
 | `--poll-interval <duration>` | How often to poll the operation status | `10s` |
+| `--no-content` | Clone/update and initialise the project but fetch no annexed content (user scope only); fetch it later with `exo get` or a download without `--no-content` | `false` |
+| `--worktrees` | Lay out the EDS copy as one read-only worktree per version instead of a single plain repository (user scope only) | `false` (keeps existing layout) |
+| `--checkout` | Let an existing plain repository on the EDS switch to the requested version (user scope only) | `false` |
+| `--eds-force` | Let an update or checkout discard unpublished work on the EDS copy: changed/untracked files, commits not on origin, nested repositories (user scope only; distinct from local `-f`/`--force`, which `--eds` already rejects) | `false` |
+| `--eds-params <json>` | A JSON object (inline, or `@path/to/file.json`) of additional download options merged into the request, for options newer than this exo's typed flags | _(none)_ |
+
+`--no-content`, `--worktrees`, `--checkout`, `--eds-force`, and `--eds-params` only make sense with `--eds` and are rejected otherwise. Only the flags you actually set are sent to the EDS, so an exo built against a newer EDS still works against an older one. Setting the same option both as a typed flag (or `--scope`) and inside `--eds-params` is an error, not silently resolved. `--eds-params` also rejects the reserved keys `project_id`, `version`, `repository`, and `ref` (these come from the dataset argument, not free-form options), and any trailing data after the JSON object (e.g. a second concatenated object).
 
 > **Note:** Ctrl-C does not cancel the remote download. The download keeps running on the EDS; the status URL is printed so it can be followed separately.
 
@@ -190,6 +201,13 @@ exo download --eds https://eds.example.com myproject
 
 # Submit and return immediately without following progress
 exo download --eds my-eds myproject@v1 --no-wait
+
+# Clone/initialise the project on the EDS without fetching annexed content
+exo download --eds my-eds myproject@v1 --no-content
+
+# Pass forward-compatible options as a JSON object (inline or from a file)
+exo download --eds my-eds myproject@v1 --eds-params '{"content": false}'
+exo download --eds my-eds myproject@v1 --eds-params @opts.json
 ```
 
 ## Environment Variables

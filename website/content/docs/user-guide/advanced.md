@@ -420,7 +420,7 @@ exo bundle --ref v5.3.0
 exo bundle --ref v5.3.0 --dry-run   # preview first
 ```
 
-`exo bundle --ref` reads the target ref's committed state directly (via git's object database) — it never checks out or otherwise touches your working tree. The working tree must still be clean: if tracked files have uncommitted changes relative to HEAD, the command aborts with an error listing the affected files, since the bundle would otherwise record a ref that doesn't match what's actually published. Commit your changes and re-run. (Untracked files are ignored.)
+`exo bundle --ref` reads the target ref's committed state directly (via git's object database) — it never checks out or otherwise touches your working tree. The working tree must still be clean: if tracked files have uncommitted changes relative to HEAD, the command aborts with an error listing the affected files, grouped by deleted/added/modified/renamed, since the bundle would otherwise record a ref that doesn't match what's actually published. For each group, the error also prints copy-pasteable fix commands (e.g. `git restore --source=HEAD --staged --worktree -- <paths>` to discard edits, or `exo add <paths>` to commit them) so you don't have to work out the right `git`/`exo` invocation yourself. Commit your changes (or apply one of the suggested fixes) and re-run. (Untracked files are ignored.)
 
 ### Dry Run
 

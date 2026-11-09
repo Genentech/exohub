@@ -10,7 +10,7 @@ title: "ExoCLI: Opinionated Git-Annex Interface"
 
 ExoCLI serves as the primary command-line interface within the ExoHub ecosystem, designed to abstract the inherent complexity of [git-annex](https://git-annex.branchable.com/) and provide an accessible entry point for developers, data scientists, and automated systems. 
 
-The source code is available at [https://github.com/genentech/exo-cli](https://github.com/genentech/exo-cli).
+The source code is available at [https://github.com/Genentech/exohub](https://github.com/Genentech/exohub).
 
 
 Instead of requiring users to master the extensive git-annex command set, ExoCLI provides intuitive, high-level commands that handle sophisticated data management workflows.

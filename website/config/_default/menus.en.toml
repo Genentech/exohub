@@ -236,3 +236,8 @@
 # [[footer]]
 #   name = "Privacy"
 #   pageRef = "privacy"
+
+[[use-cases]]
+  name = "RNA-seq dataset walkthrough"
+  pageRef = "use-cases/rnaseq"
+  weight = 20
