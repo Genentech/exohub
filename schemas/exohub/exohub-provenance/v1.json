@@ -254,6 +254,11 @@
                 "type": "keyword"
               }
             }
+          },
+          "member_count": {
+            "type": "integer",
+            "format": "long",
+            "description": "Resolved member count of a Collection-typed entity (folder or named); absent for anything else."
           }
         }
       }

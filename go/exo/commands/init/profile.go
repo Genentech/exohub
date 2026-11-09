@@ -586,19 +586,28 @@ func runProfileInit(profileName string, args []string, summaries []ProfileSummar
 
 	fmt.Printf("==> Profile: %s\n", spec.Name)
 
-	// Resolve identity and environment
+	// Resolve identity and environment. unixID and the existing remotes (if
+	// any, e.g. on a --force re-apply of an already-initialized repo) are
+	// looked at first so Folder resolution can recover the dataset identity
+	// already baked into them, before falling back to git origin / cwd.
 	unixID := resolveUnixID()
+	if locked, ok := resolveUnixIDFromLock(spec.Name); ok {
+		unixID = locked
+	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("could not determine working directory: %w", err)
 	}
-	folder := filepath.Base(cwd)
+	existingRemotes, _ := LoadRemotesConfig()
+	explicitFolder, remainingSets := explicitFolderOverride()
+	folder, folderSource := resolveFolder(explicitFolder, spec, unixID, answersFromLock(spec.Name), existingRemotes, cwd)
+	warnIfFolderDiffersFromDirectory(folder, folderSource, cwd)
 	env := resolveEnv()
 
 	// Run prompts; collect answers, pre-seeded by --set
 	answers := make(map[string]interface{})
-	if len(flagSet) > 0 {
-		if err := applySetFlags(spec, answers, flagSet); err != nil {
+	if len(remainingSets) > 0 {
+		if err := applySetFlags(spec, answers, remainingSets); err != nil {
 			return err
 		}
 	}
@@ -609,6 +618,25 @@ func runProfileInit(profileName string, args []string, summaries []ProfileSummar
 	// Build flat template data map
 	data := buildTplData(spec, unixID, folder, env, answers)
 
+	// Guard against a --force re-apply silently moving an existing remote's
+	// s3url (exo-cli#167, exo-cli#166): a location move must be explicit.
+	if existingRemotes != nil {
+		renderedRemotes, err := renderProfileRemotes(spec, data)
+		if err != nil {
+			return err
+		}
+		for _, cur := range existingRemotes.Remotes {
+			for _, ren := range renderedRemotes {
+				if ren.Name != cur.Name {
+					continue
+				}
+				if err := guardAgainstSilentS3URLMove(cur.Name, cur, ren); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	// Render and write files
 	if err := renderAndWrite(spec, data, flagDryRun, flagForce); err != nil {
 		return err
@@ -617,6 +645,16 @@ func runProfileInit(profileName string, args []string, summaries []ProfileSummar
 	// Run actions
 	if err := runProfileActions(spec, data, flagDryRun); err != nil {
 		return err
+	}
+
+	// Record the profile and answers used, so a later --remote refresh or
+	// --dry-run --json drift check can re-render templates without
+	// re-prompting (exo-cli#164).
+	if !flagDryRun {
+		lock := &ProfileLock{Profile: spec.Name, Hash: ProfileSpecHash(spec), Folder: folder, UnixID: unixID, Answers: answers}
+		if err := SaveProfileLock(lock); err != nil {
+			fmt.Printf("⚠️  Could not save .exohub/profile.lock: %v\n", err)
+		}
 	}
 
 	return nil

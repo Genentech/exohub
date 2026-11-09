@@ -13,6 +13,7 @@ import (
 
 	initcmd "github.com/Genentech/exohub/go/exo/commands/init"
 	"github.com/Genentech/exohub/go/exo/internal/pathglob"
+	"github.com/Genentech/exohub/go/exo/internal/routing"
 )
 
 // Backend identifies where a file's content is stored.
@@ -73,24 +74,17 @@ type Decision struct {
 
 // protectedPatterns are evaluated before any user rule and always route to
 // git; user rules cannot override them (design D3).
-var protectedPatterns = []string{".exohub/**", ".gitignore", ".gitattributes"}
+var protectedPatterns = routing.ProtectedPatterns
 
 // IsProtectedPath reports whether relPath matches one of the built-in
 // protected patterns (design D3). Protected paths always route to git and
 // are never moved by `exo add --reroute` (design D6), regardless of their
-// current backend.
+// current backend. It delegates to internal/routing, which
+// internal/provenance also uses, so that package doesn't need to depend on
+// commands/add (which itself depends on internal/provenance for `exo add
+// exohub:...`'s automatic import records).
 func IsProtectedPath(relPath string) (bool, error) {
-	relPath = filepath.ToSlash(relPath)
-	for _, pattern := range protectedPatterns {
-		ok, err := pathglob.Match(pattern, relPath)
-		if err != nil {
-			return false, fmt.Errorf("protected pattern %q: %w", pattern, err)
-		}
-		if ok {
-			return true, nil
-		}
-	}
-	return false, nil
+	return routing.IsProtectedPath(relPath)
 }
 
 // compiledRule is a RoutingRule with its sizes and destination pre-parsed

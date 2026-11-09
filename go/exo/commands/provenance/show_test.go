@@ -515,3 +515,84 @@ func TestShow_NegativeDepthRejected(t *testing.T) {
 func newRecordIDForTest() string {
 	return lib.NewRecordID()
 }
+
+// TestShow_NamedCollectionFallback covers show's fallback to a covered
+// named collection when the path has no provenance of its own and no
+// covered enclosing folder collection (add-explicit-collections design D6).
+func TestShow_NamedCollectionFallback(t *testing.T) {
+	root, run := addTestRepo(t, false)
+	chdir(t, root)
+	noLoginToken(t)
+
+	writeFile(t, root, "cohort_a/sample1.bam", "s1")
+	writeFile(t, root, lib.CollectionManifestPath("cohort-a-bams"), `{"paths": ["cohort_a/sample1.bam"]}`)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	if _, err := runAddCmd(t, "--generated", "collection:cohort-a-bams", "--agent", "person:alice"); err != nil {
+		t.Fatalf("add error = %v", err)
+	}
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "record")
+
+	out, err := runShowCmd(t, "cohort_a/sample1.bam")
+	if err != nil {
+		t.Fatalf("show error = %v, output: %s", err, out)
+	}
+	if !strings.Contains(out, "named collection collection:cohort-a-bams") {
+		t.Errorf("output = %q, want it to name the named collection fallback", out)
+	}
+	if !strings.Contains(out, "Lineage for collection:cohort-a-bams") {
+		t.Errorf("output = %q, want the lineage header to use the collection label", out)
+	}
+}
+
+// TestShow_NamedCollectionFallbackDisclosesOthers covers the "states the
+// others by name" disclosure for human output, and "--json lists every
+// applicable collection".
+func TestShow_NamedCollectionFallbackDisclosesOthers(t *testing.T) {
+	root, run := addTestRepo(t, false)
+	chdir(t, root)
+	noLoginToken(t)
+
+	writeFile(t, root, "cohort_a/sample1.bam", "s1")
+	writeFile(t, root, "cohort_a/sample2.bam", "s2")
+	writeFile(t, root, lib.CollectionManifestPath("cohort-a-bams"), `{"paths": ["cohort_a/sample1.bam"]}`)
+	writeFile(t, root, lib.CollectionManifestPath("release-2026"), `{"paths": ["cohort_a/sample1.bam", "cohort_a/sample2.bam"]}`)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	if _, err := runAddCmd(t, "--generated", "collection:cohort-a-bams", "--agent", "person:alice"); err != nil {
+		t.Fatalf("add cohort-a-bams error = %v", err)
+	}
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "record cohort-a-bams")
+	if _, err := runAddCmd(t, "--generated", "collection:release-2026", "--agent", "person:alice"); err != nil {
+		t.Fatalf("add release-2026 error = %v", err)
+	}
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "record release-2026")
+
+	out, err := runShowCmd(t, "cohort_a/sample1.bam")
+	if err != nil {
+		t.Fatalf("show error = %v, output: %s", err, out)
+	}
+	if !strings.Contains(out, "named collection collection:cohort-a-bams") {
+		t.Errorf("output = %q, want the first (by name) collection named", out)
+	}
+	if !strings.Contains(out, "collection:release-2026") {
+		t.Errorf("output = %q, want the other covering collection named", out)
+	}
+
+	jsonOut, err := runShowCmd(t, "cohort_a/sample1.bam", "--json")
+	if err != nil {
+		t.Fatalf("show --json error = %v, output: %s", err, jsonOut)
+	}
+	var doc lib.LineageDocument
+	if err := json.Unmarshal([]byte(jsonOut), &doc); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if len(doc.NamedCollections) != 2 {
+		t.Fatalf("NamedCollections = %v, want 2 entries", doc.NamedCollections)
+	}
+}

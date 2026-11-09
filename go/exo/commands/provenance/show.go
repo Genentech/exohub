@@ -38,7 +38,11 @@ path does, folded into a "used as an input by" list.
 
 When the path has no provenance of its own, or lies under a declared
 provenance.collections folder, show falls back to the nearest enclosing
-folder collection with provenance and says so.
+folder collection with provenance and says so. Failing that, it falls back
+to a covered named collection (.exohub/collections/<name>.json) the path is
+a member of; when more than one applies, the human-readable output shows
+the first by name and states the others, while --json lists every
+applicable collection.
 
 The walk follows --depth upstream hops (default unlimited) and detects
 cycles. A separate "Commit history" section shows the path's commits as
@@ -107,8 +111,11 @@ func runShow(cmd *cobra.Command, pathArg string, opts showOptions) error {
 
 func printLineage(cmd *cobra.Command, path string, lineage *lib.Lineage, commits []lib.Commit, maxCommits int) {
 	subjectDisplay := path
-	if lineage.Subject.Source != lib.LineageSourceOwn {
+	switch lineage.Subject.Source {
+	case lib.LineageSourceFolderFallback, lib.LineageSourceDeclaredCollection:
 		subjectDisplay = lineage.Subject.FolderPath + "/"
+	case lib.LineageSourceNamedCollection:
+		subjectDisplay = "collection:" + lineage.Subject.CollectionName
 	}
 
 	switch lineage.Subject.Source {
@@ -118,6 +125,16 @@ func printLineage(cmd *cobra.Command, path string, lineage *lib.Lineage, commits
 	case lib.LineageSourceDeclaredCollection:
 		fmt.Fprintf(cmd.OutOrStdout(), "%s is covered only through the declared collection %s; showing its lineage (%s).\n\n",
 			path, subjectDisplay, lineage.Subject.ID)
+	case lib.LineageSourceNamedCollection:
+		fmt.Fprintf(cmd.OutOrStdout(), "%s has no provenance of its own and no covered enclosing folder collection; showing the lineage of the named collection collection:%s (%s).\n\n",
+			path, lineage.Subject.CollectionName, lineage.Subject.ID)
+		if len(lineage.Subject.OtherCollections) > 0 {
+			others := make([]string, len(lineage.Subject.OtherCollections))
+			for i, name := range lineage.Subject.OtherCollections {
+				others[i] = "collection:" + name
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "It is also covered by: %s (use --json to see all of them).\n\n", strings.Join(others, ", "))
+		}
 	}
 
 	if lineage.Hint != nil {

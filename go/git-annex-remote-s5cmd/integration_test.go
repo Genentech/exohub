@@ -589,6 +589,9 @@ func TestProtocolCommandParsing(t *testing.T) {
 				if !strings.Contains(output, "CONFIG s3url") {
 					t.Errorf("Expected CONFIG s3url, got: %q", output)
 				}
+				if !strings.Contains(output, "CONFIG group") {
+					t.Errorf("Expected CONFIG group, got: %q", output)
+				}
 				if !strings.Contains(output, "CONFIGEND") {
 					t.Errorf("Expected CONFIGEND, got: %q", output)
 				}
@@ -637,6 +640,8 @@ func TestProtocolCommandParsing(t *testing.T) {
 				writeLine("EXTENSIONS")
 			case "LISTCONFIGS":
 				writeLine("CONFIG s3url")
+				writeLine("CONFIG grants")
+				writeLine("CONFIG group")
 				writeLine("CONFIGEND")
 			case "EXPORTSUPPORTED":
 				writeLine("EXPORTSUPPORTED-SUCCESS")

@@ -30,6 +30,11 @@ func NewCommand() *cobra.Command {
 	cmd.Flags().Bool("no-wait", false, "")
 	cmd.Flags().Duration("max-wait", 6*time.Hour, "")
 	cmd.Flags().Duration("poll-interval", 10*time.Second, "")
+	cmd.Flags().Bool("no-content", false, "")
+	cmd.Flags().Bool("worktrees", false, "")
+	cmd.Flags().Bool("checkout", false, "")
+	cmd.Flags().Bool("eds-force", false, "")
+	cmd.Flags().String("eds-params", "", "")
 
 	return cmd
 }

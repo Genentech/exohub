@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -24,11 +25,12 @@ const groupRepo = "Repository Config"
 
 // remoteEntry is used for parsing .exohub/remotes.
 type remoteEntry struct {
-	Name   string `yaml:"name"`
-	Type   string `yaml:"type"`
-	UUID   string `yaml:"uuid,omitempty"`
-	S3URL  string `yaml:"s3url,omitempty"`
-	Grants bool   `yaml:"grants,omitempty"`
+	Name        string                       `yaml:"name"`
+	Type        string                       `yaml:"type"`
+	UUID        string                       `yaml:"uuid,omitempty"`
+	S3URL       string                       `yaml:"s3url,omitempty"`
+	Grants      bool                         `yaml:"grants,omitempty"`
+	Credentials map[string]map[string]string `yaml:"credentials,omitempty"`
 }
 
 type remotesFile struct {
@@ -90,7 +92,52 @@ func runRepoChecks(repoDir string) []CheckResult {
 
 	results = append(results, checkPermissions(repoDir, parsedRemotes)...)
 	results = append(results, checkRegistryDrift(repoDir, parsedRemotes)...)
+	results = append(results, checkRemoteCredentials(parsedRemotes)...)
+	if remoteCredentialGroupsCheck != nil {
+		results = append(results, remoteCredentialGroupsCheck(parsedRemotes)...)
+	}
 	return results
+}
+
+// knownCredentialProviders optionally lists the credentials.<provider> keys
+// this build interprets (e.g. a build-specific provider name). Nil in
+// the OSS build, where every provider in a remote's credentials map is
+// treated as unknown and flagged below.
+var knownCredentialProviders func() map[string]bool
+
+// remoteCredentialGroupsCheck optionally adds a build-specific visibility
+// check over parsed remotes' credentials (e.g. listing remotes with a
+// credentials.<provider>.group in the internal build). Nil in the OSS build.
+var remoteCredentialGroupsCheck func([]remoteEntry) []CheckResult
+
+// checkRemoteCredentials warns about any credentials.<provider> entries that
+// this build does not interpret (exo-cli#131 scope item 2: "Unknown
+// providers or keys are ignored by exo, and flagged by exo doctor"). It
+// never inspects provider-specific keys itself; a build that knows a
+// provider registers it via knownCredentialProviders and may add its own
+// internal-only visibility check (see checks_repo_internal.go).
+func checkRemoteCredentials(remotes []remoteEntry) []CheckResult {
+	known := map[string]bool{}
+	if knownCredentialProviders != nil {
+		known = knownCredentialProviders()
+	}
+
+	var unknown []string
+	for _, r := range remotes {
+		for provider := range r.Credentials {
+			if !known[provider] {
+				unknown = append(unknown, fmt.Sprintf("remote %q: credentials.%s", r.Name, provider))
+			}
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	sort.Strings(unknown)
+	return []CheckResult{warn("repo.remote-credentials", groupRepo,
+		fmt.Sprintf("%d remote(s) declare a credentials provider this build does not interpret", len(unknown)),
+		strings.Join(unknown, "; "),
+		"credentials: holds provider-specific settings that only some builds interpret; unknown providers are ignored here")}
 }
 
 func checkRepoRemotes(remotesPath string) ([]CheckResult, error) {

@@ -2,6 +2,7 @@ package provenance
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -344,5 +345,193 @@ func TestCoverage_StagedRecordAndDataTogether(t *testing.T) {
 	}
 	if report.HasErrors() {
 		t.Errorf("HasErrors() = true, want false: %+v", report.Findings)
+	}
+}
+
+// TestCoverage_NamedCollection covers coverage through a named collection
+// (add-explicit-collections design D6): a record about the collection's id
+// covers every current member.
+func TestCoverage_NamedCollection(t *testing.T) {
+	root, run := stateTestRepo(t, false)
+	writeRepoFile(t, root, "cohort_a/sample1.bam", "s1")
+	writeRepoFile(t, root, "cohort_a/sample2.bam", "s2")
+	writeCollectionManifest(t, root, "cohort-a-bams", `{"paths": ["cohort_a/sample1.bam", "cohort_a/sample2.bam"]}`)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	id, _, _, _, err := ResolveCollection(NewWorktreeReader(root), "cohort-a-bams", false)
+	if err != nil {
+		t.Fatalf("ResolveCollection() error = %v", err)
+	}
+	writeRepoFile(t, root, RecordDir+"/r1.jsonld", entityRecord(id, "wasGeneratedBy", NewActivityID()))
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "record")
+
+	report, err := Validate(NewWorktreeReader(root))
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if report.HasErrors() {
+		t.Fatalf("HasErrors() = true: %+v", report.Findings)
+	}
+	// cohort_a/sample1.bam, cohort_a/sample2.bam, and the manifest itself
+	// (.exohub/collections/cohort-a-bams.json, a protected path) are
+	// tracked: only the two bam files count toward coverage.
+	if report.Coverage == nil || report.Coverage.Covered != 2 || report.Coverage.Uncovered != 0 {
+		t.Errorf("Coverage = %+v, want 2 covered, 0 uncovered", report.Coverage)
+	}
+}
+
+// TestCoverage_NamedCollectionStaleness covers staleness after a membership
+// change: the named collection's id changes, so the old record no longer
+// covers the new member set (design D6, "covered only while the current id
+// matches").
+func TestCoverage_NamedCollectionStaleness(t *testing.T) {
+	root, run := stateTestRepo(t, false)
+	writeRepoFile(t, root, "cohort_a/sample1.bam", "s1")
+	writeCollectionManifest(t, root, "cohort-a-bams", `{"paths": ["cohort_a/sample1.bam"]}`)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	id, _, _, _, err := ResolveCollection(NewWorktreeReader(root), "cohort-a-bams", false)
+	if err != nil {
+		t.Fatalf("ResolveCollection() error = %v", err)
+	}
+	writeRepoFile(t, root, RecordDir+"/r1.jsonld", entityRecord(id, "wasGeneratedBy", NewActivityID()))
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "record")
+
+	report, err := Validate(NewWorktreeReader(root))
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if report.Coverage == nil || report.Coverage.Covered != 1 || report.Coverage.Uncovered != 0 {
+		t.Errorf("before membership change: Coverage = %+v, want 1 covered, 0 uncovered", report.Coverage)
+	}
+
+	writeRepoFile(t, root, "cohort_a/sample2.bam", "s2")
+	writeCollectionManifest(t, root, "cohort-a-bams", `{"paths": ["cohort_a/sample1.bam", "cohort_a/sample2.bam"]}`)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "add sample2")
+
+	report, err = Validate(NewWorktreeReader(root))
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if report.Coverage == nil || report.Coverage.Covered != 0 || report.Coverage.Uncovered != 2 {
+		t.Errorf("after membership change: Coverage = %+v, want 0 covered, 2 uncovered", report.Coverage)
+	}
+}
+
+// TestCoverage_OverlapFolderAndNamedCollection covers overlap between a
+// folder collection and a named collection (design D7): a folder member of
+// a named collection is still covered through the named collection even
+// when the folder itself has no record of its own.
+func TestCoverage_OverlapFolderAndNamedCollection(t *testing.T) {
+	root, run := stateTestRepo(t, false)
+	writeRepoFile(t, root, "data/expr.tdb/fragment1", "f1")
+	writeRepoFile(t, root, "samples/manifest.tsv", "a\tb\n")
+	writeCollectionManifest(t, root, "mixed", `{"paths": ["data/expr.tdb/", "samples/manifest.tsv"]}`)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	id, _, _, _, err := ResolveCollection(NewWorktreeReader(root), "mixed", false)
+	if err != nil {
+		t.Fatalf("ResolveCollection() error = %v", err)
+	}
+	writeRepoFile(t, root, RecordDir+"/r1.jsonld", entityRecord(id, "wasGeneratedBy", NewActivityID()))
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "record")
+
+	report, err := Validate(NewWorktreeReader(root))
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if report.HasErrors() {
+		t.Fatalf("HasErrors() = true: %+v", report.Findings)
+	}
+	// data/expr.tdb/fragment1 (through the folder member) and
+	// samples/manifest.tsv are both covered.
+	if report.Coverage == nil || report.Coverage.Covered != 2 || report.Coverage.Uncovered != 0 {
+		t.Errorf("Coverage = %+v, want 2 covered, 0 uncovered", report.Coverage)
+	}
+}
+
+// TestCoverage_OverlapTwoNamedCollections covers overlap between two named
+// collections (design D7, "a file in several named collections: allowed.
+// Coverage is a union"): a file covered only through the second of two
+// collections it belongs to is still covered.
+func TestCoverage_OverlapTwoNamedCollections(t *testing.T) {
+	root, run := stateTestRepo(t, false)
+	writeRepoFile(t, root, "cohort_a/sample1.bam", "s1")
+	writeCollectionManifest(t, root, "cohort-a", `{"paths": ["cohort_a/sample1.bam"]}`)
+	writeCollectionManifest(t, root, "release-2026", `{"paths": ["cohort_a/sample1.bam"]}`)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	// Only the second collection gets a record.
+	releaseID, _, _, _, err := ResolveCollection(NewWorktreeReader(root), "release-2026", false)
+	if err != nil {
+		t.Fatalf("ResolveCollection() error = %v", err)
+	}
+	writeRepoFile(t, root, RecordDir+"/r1.jsonld", entityRecord(releaseID, "wasGeneratedBy", NewActivityID()))
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "record")
+
+	report, err := Validate(NewWorktreeReader(root))
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if report.HasErrors() {
+		t.Fatalf("HasErrors() = true: %+v", report.Findings)
+	}
+	if report.Coverage == nil || report.Coverage.Covered != 1 || report.Coverage.Uncovered != 0 {
+		t.Errorf("Coverage = %+v, want 1 covered, 0 uncovered", report.Coverage)
+	}
+}
+
+// TestCoverage_NamedCollectionCycleIsAnError covers the "cycle validation
+// error" done-when case: a cyclic named collection declaration makes
+// Validate fail rather than silently skip coverage for it.
+func TestCoverage_NamedCollectionCycleIsAnError(t *testing.T) {
+	root, run := stateTestRepo(t, false)
+	writeConfig(t, root, "provenance:\n  require:\n    - \"**\"\n")
+	writeCollectionManifest(t, root, "a", `{"paths": ["collection:b"]}`)
+	writeCollectionManifest(t, root, "b", `{"paths": ["collection:a"]}`)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	if _, err := Validate(NewWorktreeReader(root)); err == nil {
+		t.Fatal("expected Validate() to return an error for a collection cycle")
+	} else if !strings.Contains(err.Error(), "cycle") {
+		t.Errorf("error = %v, want it to mention a cycle", err)
+	}
+}
+
+// TestCoverage_RequireCoveredThroughNamedCollection covers
+// provenance.require being satisfied through a named collection, unioned
+// with direct and folder coverage (design D6).
+func TestCoverage_RequireCoveredThroughNamedCollection(t *testing.T) {
+	root, run := stateTestRepo(t, false)
+	writeConfig(t, root, "provenance:\n  require:\n    - \"cohort_a/**\"\n")
+	writeRepoFile(t, root, "cohort_a/sample1.bam", "s1")
+	writeCollectionManifest(t, root, "cohort-a-bams", `{"paths": ["cohort_a/sample1.bam"]}`)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	id, _, _, _, err := ResolveCollection(NewWorktreeReader(root), "cohort-a-bams", false)
+	if err != nil {
+		t.Fatalf("ResolveCollection() error = %v", err)
+	}
+	writeRepoFile(t, root, RecordDir+"/r1.jsonld", entityRecord(id, "wasGeneratedBy", NewActivityID()))
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "record")
+
+	report, err := Validate(NewWorktreeReader(root))
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if report.HasErrors() {
+		t.Fatalf("HasErrors() = true, want satisfied provenance.require: %+v", report.Findings)
 	}
 }

@@ -20,6 +20,7 @@ import (
 
 	initcmd "github.com/Genentech/exohub/go/exo/commands/init"
 	"github.com/Genentech/exohub/go/exo/commandutil"
+	"github.com/Genentech/exohub/go/exo/internal/exohub"
 )
 
 const largeTextFileThreshold = 5 * 1024 * 1024 // 5 MB
@@ -89,6 +90,20 @@ Routing flags (consumed by exo, not forwarded to git):
   --large-text-threshold SIZE   Override fallback large-text threshold
 Environment: EXOHUB_LARGE_TEXT_THRESHOLD sets the fallback threshold.
 
+exo add exohub:<project>[:<path>]@<version> reuses an asset, folder, whole
+project, or named collection from another ExoHub project, pinned to a
+version, without copying its annexed content up front:
+  exo add exohub:myproject:data/file.csv@main       # one asset (as file.csv)
+  exo add exohub:myproject:data/@main --to mydata/  # a folder, under --to
+  exo add exohub:myproject@main --to vendor/        # the whole project
+  exo add exohub:myproject:collection:qc@main       # a named collection
+Flags (exohub: references only):
+  --to DIR        Destination directory (or file, for a single asset)
+  --verify        Re-resolve via the source's git remote and fail on any
+                  mismatch with the catalog/local-clone resolution
+  --repo URL      Git remote to resolve from when the project has no local
+                  clone and is not in the catalog
+
 Flags:
   -J, --jobs NUMBER  Number of parallel jobs for git-annex operations
                      (default: $EXOHUB_JOBS or 1)`,
@@ -109,7 +124,7 @@ Flags:
 		DisableFlagsInUseLine: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			mode, force, remaining := extractMode(args)
-			locals, urls, flags, threshold, explain, jsonOutput, reroute, yes, err := splitArgs(remaining)
+			locals, urls, exohubRefs, flags, threshold, toDir, repoURL, explain, jsonOutput, reroute, yes, verify, err := splitArgs(remaining)
 			if err != nil {
 				return err
 			}
@@ -119,6 +134,25 @@ Flags:
 				if f == "--help" || f == "-h" {
 					return cmd.Help()
 				}
+			}
+
+			if len(exohubRefs) > 0 {
+				if explain || reroute || mode != "auto" || force {
+					return fmt.Errorf("exohub: references cannot be combined with --explain, --reroute, --annex, --git, or --force")
+				}
+				if len(locals) > 0 || len(urls) > 0 {
+					return fmt.Errorf("exohub: references cannot be combined with local paths or URLs in the same command")
+				}
+				return runExohubAdd(cmd, exohubRefs, toDir, repoURL, verify)
+			}
+			if toDir != "" {
+				return fmt.Errorf("--to requires an exohub: reference")
+			}
+			if verify {
+				return fmt.Errorf("--verify requires an exohub: reference")
+			}
+			if repoURL != "" {
+				return fmt.Errorf("--repo requires an exohub: reference")
 			}
 
 			if jsonOutput && !explain {
@@ -184,9 +218,11 @@ Flags:
 					if err != nil {
 						return err
 					}
-					var gitFiles, annexFiles, largeTextFiles []string
+					var gitFiles, annexFiles, largeTextFiles, skippedDeleted []string
 					for _, file := range plan {
-						if file.LargeTextFallback {
+						if file.DeletedFromDisk {
+							skippedDeleted = append(skippedDeleted, file.Path)
+						} else if file.LargeTextFallback {
 							largeTextFiles = append(largeTextFiles, file.Path)
 						} else if file.Backend == Annex {
 							annexFiles = append(annexFiles, file.Path)
@@ -194,6 +230,7 @@ Flags:
 							gitFiles = append(gitFiles, file.Path)
 						}
 					}
+					warnSkippedDeleted(cmd.ErrOrStderr(), skippedDeleted)
 
 					// Handle large text files: prompt or default to annex
 					if len(largeTextFiles) > 0 {
@@ -570,12 +607,16 @@ func hasFileFlag(args []string) bool {
 	return false
 }
 
-// splitArgs partitions args into local paths, URLs, and flags. --explain,
-// --json, --reroute and --yes (design D6/D8/D10) are consumed here, like
-// --large-text-threshold, and are never forwarded to git.
-func splitArgs(args []string) (locals, urls, flags []string, threshold string, explain, jsonOutput, reroute, yes bool, err error) {
+// splitArgs partitions args into local paths, URLs, exohub: references, and
+// flags. --explain, --json, --reroute and --yes (design D6/D8/D10) are
+// consumed here, like --large-text-threshold, --to, --repo and --verify
+// (design D1 task 2.1), and are never forwarded to git.
+func splitArgs(args []string) (locals, urls []string, exohubRefs []*exohub.Reference, flags []string, threshold, toDir, repoURL string, explain, jsonOutput, reroute, yes, verify bool, err error) {
 	valueFlagSet := map[string]bool{
 		"-J": true, "--jobs": true, "--file": true,
+	}
+	errorResult := func(e error) ([]string, []string, []*exohub.Reference, []string, string, string, string, bool, bool, bool, bool, bool, error) {
+		return nil, nil, nil, nil, "", "", "", false, false, false, false, false, e
 	}
 
 	for i := 0; i < len(args); i++ {
@@ -596,10 +637,44 @@ func splitArgs(args []string) (locals, urls, flags []string, threshold string, e
 			yes = true
 			continue
 		}
+		if arg == "--verify" {
+			verify = true
+			continue
+		}
+		if arg == "--to" || strings.HasPrefix(arg, "--to=") {
+			if arg == "--to" {
+				if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+					return errorResult(fmt.Errorf("--to requires a value"))
+				}
+				i++
+				toDir = args[i]
+			} else {
+				toDir = strings.TrimPrefix(arg, "--to=")
+			}
+			if toDir == "" {
+				return errorResult(fmt.Errorf("--to requires a value"))
+			}
+			continue
+		}
+		if arg == "--repo" || strings.HasPrefix(arg, "--repo=") {
+			if arg == "--repo" {
+				if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+					return errorResult(fmt.Errorf("--repo requires a value"))
+				}
+				i++
+				repoURL = args[i]
+			} else {
+				repoURL = strings.TrimPrefix(arg, "--repo=")
+			}
+			if repoURL == "" {
+				return errorResult(fmt.Errorf("--repo requires a value"))
+			}
+			continue
+		}
 		if arg == "--large-text-threshold" || strings.HasPrefix(arg, "--large-text-threshold=") {
 			if arg == "--large-text-threshold" {
 				if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
-					return nil, nil, nil, "", false, false, false, false, fmt.Errorf("--large-text-threshold requires a value")
+					return errorResult(fmt.Errorf("--large-text-threshold requires a value"))
 				}
 				i++
 				threshold = args[i]
@@ -607,18 +682,25 @@ func splitArgs(args []string) (locals, urls, flags []string, threshold string, e
 				threshold = strings.TrimPrefix(arg, "--large-text-threshold=")
 			}
 			if threshold == "" {
-				return nil, nil, nil, "", false, false, false, false, fmt.Errorf("--large-text-threshold requires a value")
+				return errorResult(fmt.Errorf("--large-text-threshold requires a value"))
 			}
 			if _, parseErr := resolveThreshold(threshold); parseErr != nil {
-				return nil, nil, nil, "", false, false, false, false, parseErr
+				return errorResult(parseErr)
 			}
 			continue
 		}
 		if arg == "--" {
 			for _, path := range args[i+1:] {
-				if isURL(path) {
+				switch {
+				case exohub.IsReference(path):
+					ref, perr := exohub.ParseReference(path)
+					if perr != nil {
+						return errorResult(perr)
+					}
+					exohubRefs = append(exohubRefs, ref)
+				case isURL(path):
 					urls = append(urls, path)
-				} else {
+				default:
 					locals = append(locals, path)
 				}
 			}
@@ -630,6 +712,12 @@ func splitArgs(args []string) (locals, urls, flags []string, threshold string, e
 				i++
 				flags = append(flags, args[i])
 			}
+		} else if exohub.IsReference(arg) {
+			ref, perr := exohub.ParseReference(arg)
+			if perr != nil {
+				return errorResult(perr)
+			}
+			exohubRefs = append(exohubRefs, ref)
 		} else if isURL(arg) {
 			urls = append(urls, arg)
 		} else {
@@ -770,6 +858,41 @@ func writeRerouteTable(w io.Writer, candidates []PlannedFile) {
 	fmt.Fprintf(w, "%s  %s  %s  → %s  %s\n", padRight("PATH", pathWidth), padRight("SIZE", sizeWidth), padRight("CURRENT", curWidth), padRight("DEST", destWidth), "RULE")
 	for i, file := range candidates {
 		fmt.Fprintf(w, "%s  %s  %s  → %s  %s\n", padRight(file.Path, pathWidth), padRight(sizes[i], sizeWidth), padRight(currents[i], curWidth), padRight(dests[i], destWidth), file.rerouteRule)
+	}
+}
+
+// skippedDeletedListCap caps how many skipped-deleted paths warnSkippedDeleted
+// lists individually before collapsing the rest into "and N more", so `exo
+// add .` after a large deletion stays readable.
+const skippedDeletedListCap = 10
+
+// warnSkippedDeleted prints a note to w listing tracked files whose deletion
+// was left unstaged because they no longer exist on disk (PlannedFile.
+// DeletedFromDisk), whether the path was discovered via directory expansion
+// or named explicitly on the command line. `exo add` still exits 0 (issue
+// #143: it must not fail over a tracked file the caller already removed),
+// but staying silent about it would leave the user unaware that a
+// subsequent `exo bundle`/`exo publish` will refuse to publish until the
+// deletion is committed (or the file restored).
+func warnSkippedDeleted(w io.Writer, paths []string) {
+	if len(paths) == 0 {
+		return
+	}
+	plural := "file"
+	if len(paths) > 1 {
+		plural = "files"
+	}
+	fmt.Fprintf(w, "note: skipped %d tracked %s deleted from disk (deletion left unstaged; use `git rm` to stage it):\n", len(paths), plural)
+	shown, more := paths, 0
+	if len(shown) > skippedDeletedListCap {
+		more = len(shown) - skippedDeletedListCap
+		shown = shown[:skippedDeletedListCap]
+	}
+	for _, p := range shown {
+		fmt.Fprintf(w, "  %s\n", p)
+	}
+	if more > 0 {
+		fmt.Fprintf(w, "  and %d more\n", more)
 	}
 }
 

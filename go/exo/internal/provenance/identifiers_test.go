@@ -1,6 +1,9 @@
 package provenance
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -48,6 +51,46 @@ func TestRecordUUIDRejectsMalformedIDs(t *testing.T) {
 		if _, ok := RecordUUID(id); ok {
 			t.Errorf("RecordUUID(%q) unexpectedly succeeded", id)
 		}
+	}
+}
+
+func TestCollectionIDIsDeterministicAndOrderIndependent(t *testing.T) {
+	members := []string{
+		AnnexEntityID("SHA256E-s2048--ab12.bam"),
+		AnnexEntityID("SHA256E-s4096--cd34.bam"),
+	}
+	reversed := []string{members[1], members[0]}
+
+	id := CollectionID(members)
+	if got := CollectionID(reversed); got != id {
+		t.Errorf("CollectionID(reversed) = %q, want %q (order-independent)", got, id)
+	}
+	if !strings.HasPrefix(id, CollectionURNPrefix) {
+		t.Errorf("CollectionID() = %q, want prefix %q", id, CollectionURNPrefix)
+	}
+	hexDigest := strings.TrimPrefix(id, CollectionURNPrefix)
+	if len(hexDigest) != 64 {
+		t.Errorf("CollectionID() digest = %q, want 64 lowercase hex characters", hexDigest)
+	}
+
+	// Design D1: the digest is the SHA-256 of the sorted, newline-joined
+	// member ids, as hex.
+	sorted := []string{members[0], members[1]}
+	sort.Strings(sorted)
+	sum := sha256.Sum256([]byte(strings.Join(sorted, "\n")))
+	want := CollectionURNPrefix + hex.EncodeToString(sum[:])
+	if id != want {
+		t.Errorf("CollectionID() = %q, want %q", id, want)
+	}
+}
+
+func TestCollectionIDChangesWithMembership(t *testing.T) {
+	members := []string{AnnexEntityID("SHA256E-s2048--ab12.bam")}
+	id := CollectionID(members)
+
+	changed := CollectionID(append(members, AnnexEntityID("SHA256E-s4096--cd34.bam")))
+	if changed == id {
+		t.Errorf("CollectionID() did not change when membership changed")
 	}
 }
 

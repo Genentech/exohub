@@ -1,6 +1,9 @@
 package provenance
 
-import "sort"
+import (
+	"sort"
+	"strings"
+)
 
 // LineageRef is an id with the path it resolves to at the bundle's ref,
 // when known (design D16).
@@ -29,9 +32,32 @@ type LineageActivity struct {
 	Agents  []LineageAgent `json:"agents,omitempty"`
 }
 
+// LineageCollectionEntry is one entry of lineage.collections (design D8):
+// a folder or named collection an artifact is a current member of. Only
+// id and kind are always set; path is set for kind "folder", name for kind
+// "named" — never both (enforced here, not in the schema, design D8
+// amendment "no if/then/oneOf").
+type LineageCollectionEntry struct {
+	ID   string `json:"id"`
+	Kind string `json:"kind"`
+	Path string `json:"path,omitempty"`
+	Name string `json:"name,omitempty"`
+	// Project and Version identify the other ExoHub project and version
+	// this collection comes from: defined there (external members, design
+	// D5 of add-exohub-asset-import) or imported from there (`exo add
+	// exohub:<project>@<version>`, design D4). For an import, both are set
+	// when the collection's node carries hadPrimarySource, read from the
+	// source node's label, "<project>@<version>", split on the last "@".
+	// For an external collection reached through some local manifest's
+	// "members", both are set once some record covers its digest. Never set
+	// for a collection with no external source.
+	Project string `json:"project,omitempty"`
+	Version string `json:"version,omitempty"`
+}
+
 // ArtifactLineage is the "lineage" object exo bundle writes into an
 // artifact document (design D16, spec "Artifact lineage in bundle
-// documents" and "Lineage of folder collection members").
+// documents", and design D8 "Lineage of collection membership").
 type ArtifactLineage struct {
 	Covered      bool                  `json:"covered"`
 	GeneratedBy  *LineageActivity      `json:"generated_by,omitempty"`
@@ -39,23 +65,36 @@ type ArtifactLineage struct {
 	RevisionOf   []string              `json:"revision_of,omitempty"`
 	AttributedTo []string              `json:"attributed_to,omitempty"`
 	Records      []ProvenanceRecordRef `json:"records,omitempty"`
-	Collection   *LineageRef           `json:"collection,omitempty"`
+	// Collection is the legacy single-folder-collection reference
+	// (deprecated, design D8 amendment, 2026-10-21): exo bundle no longer
+	// sets it — kept only so a document decoded from an older bundle still
+	// round-trips.
+	Collection *LineageRef `json:"collection,omitempty"`
+	// Collections is design D8's replacement: one entry per covered folder
+	// or named collection the artifact is a current member of.
+	Collections []LineageCollectionEntry `json:"collections,omitempty"`
 }
 
 // BuildArtifactLineage derives exo bundle's per-artifact lineage (design
 // D16) from doc, the already compiled and scoped provenance.jsonld
 // document, plus contentIDs and treeIDs (Reader.AllContentIDs,
 // Reader.AllTreeIDs — the same batch-resolved maps CompileBundle already
-// has, so building lineage costs no extra git invocation).
+// has, so building lineage costs no extra git invocation) and
+// namedCollections, every named collection resolved once by
+// resolveNamedCollections (compile.go).
 //
 // Every path whose content id, or an ancestor directory's tree id, is an
-// Entity or Collection node of doc.Graph gets an entry. A path under a
-// covered folder collection that has no node of its own (design D13: a
-// TileDB fragment, for example) gets the folder's generated_by, inputs,
-// revision_of and records, plus a collection reference (design D16
-// "Lineage of folder collection members"). Paths without any provenance
-// get no entry, matching "no lineage key" at the call site.
-func BuildArtifactLineage(doc *CompiledDocument, contentIDs, treeIDs map[string]string) map[string]*ArtifactLineage {
+// Entity or Collection node of doc.Graph gets an entry. A path that is a
+// current member of a covered folder or named collection also gets a
+// lineage.collections entry per applicable collection (design D8 "Lineage
+// of collection membership"), in addition to any lineage of its own. A
+// member with no lineage of its own inherits generated_by, inputs,
+// revision_of, attributed_to and records from the first applicable
+// collection (nearest covered ancestor folder, else the first covered
+// named collection by name — the same preference order as show's fallback,
+// design D6). Paths without any provenance get no entry, matching "no
+// lineage key" at the call site.
+func BuildArtifactLineage(doc *CompiledDocument, contentIDs, treeIDs map[string]string, namedCollections []namedCollectionInfo) map[string]*ArtifactLineage {
 	if doc == nil {
 		return nil
 	}
@@ -109,38 +148,126 @@ func BuildArtifactLineage(doc *CompiledDocument, contentIDs, treeIDs map[string]
 			result[dir+"/"] = l
 		}
 	}
+	// A named collection has no path of its own (design D4), so it never
+	// gets a result entry, but its lineage is still built here so the
+	// membership pass below can inherit from it.
+	for _, nc := range namedCollections {
+		buildFor(nc.ID)
+	}
 
-	// Folder collection members (design D13, D16): a path whose own
-	// content id has no lineage of its own inherits its nearest covered
-	// ancestor folder's lineage, matched against the folder's current tree
-	// id — never an older, revised tree at the same path.
-	for path := range contentIDs {
-		if _, ok := result[path]; ok {
-			continue
+	// Collection membership (design D7 "Overlap and nesting", D8 "Lineage
+	// of collection membership"): every file or folder that is a current
+	// member of a covered folder or named collection gets a
+	// lineage.collections entry, regardless of whether it also has
+	// provenance of its own.
+	addMembership := func(path, id string, ancestors []string) {
+		entries := collectionEntriesFor(id, ancestors, lineageByID, treeIDs, namedCollections, nodeByID)
+		if len(entries) == 0 {
+			return
 		}
-		for _, dir := range pathAncestors(path) {
-			tid, ok := treeIDs[dir]
-			if !ok {
-				continue
-			}
-			folder := lineageByID[tid]
-			if folder == nil || !folder.Covered {
-				continue
-			}
-			result[path] = &ArtifactLineage{
-				Covered:      true,
-				GeneratedBy:  folder.GeneratedBy,
-				Inputs:       folder.Inputs,
-				RevisionOf:   folder.RevisionOf,
-				AttributedTo: folder.AttributedTo,
-				Records:      folder.Records,
-				Collection:   &LineageRef{ID: tid, Path: dir + "/"},
-			}
-			break
+		if existing, ok := result[path]; ok {
+			existing.Collections = entries
+			return
 		}
+		source := lineageByID[entries[0].ID]
+		result[path] = &ArtifactLineage{
+			Covered:      true,
+			GeneratedBy:  source.GeneratedBy,
+			Inputs:       source.Inputs,
+			RevisionOf:   source.RevisionOf,
+			AttributedTo: source.AttributedTo,
+			Records:      source.Records,
+			Collections:  entries,
+		}
+	}
+	for path, id := range contentIDs {
+		addMembership(path, id, pathAncestors(path))
+	}
+	for dir, id := range treeIDs {
+		addMembership(dir+"/", id, pathAncestors(dir))
 	}
 
 	return result
+}
+
+// collectionEntriesFor returns id's lineage.collections entries (design
+// D8): one per covered ancestor folder collection (nearest first) and
+// covered named collection (namedCollections' order, i.e. alphabetical by
+// name) that currently counts id, or an ancestor directory's folder tree
+// id, as a member. A collection counts only when it has a lineage object
+// of its own (isLineageSubject) that is itself covered (design D6: "the
+// collection's current id matches the record's subject").
+func collectionEntriesFor(id string, ancestors []string, lineageByID map[string]*ArtifactLineage, treeIDs map[string]string, namedCollections []namedCollectionInfo, nodeByID map[string]Node) []LineageCollectionEntry {
+	var entries []LineageCollectionEntry
+	for _, dir := range ancestors {
+		tid, ok := treeIDs[dir]
+		if !ok {
+			continue
+		}
+		folder := lineageByID[tid]
+		if folder == nil || !folder.Covered {
+			continue
+		}
+		entry := LineageCollectionEntry{ID: tid, Kind: "folder", Path: dir + "/"}
+		entry.Project, entry.Version = importSourceProjectVersion(nodeByID, tid)
+		entries = append(entries, entry)
+	}
+	for _, nc := range namedCollections {
+		member := nc.CoveredIDs[id]
+		if !member {
+			for _, dir := range ancestors {
+				if tid, ok := treeIDs[dir]; ok && nc.CoveredIDs[tid] {
+					member = true
+					break
+				}
+			}
+		}
+		if !member {
+			continue
+		}
+		named := lineageByID[nc.ID]
+		if named == nil || !named.Covered {
+			continue
+		}
+		// nc.Project/nc.Version are already set for an external collection
+		// (design D5, reached through some local manifest's "members"); for
+		// an ordinary same-project named collection, fall back to the import
+		// path (design D4: hadPrimarySource on the collection's own node).
+		entry := LineageCollectionEntry{ID: nc.ID, Kind: "named", Name: nc.Name, Project: nc.Project, Version: nc.Version}
+		if entry.Project == "" {
+			entry.Project, entry.Version = importSourceProjectVersion(nodeByID, nc.ID)
+		}
+		entries = append(entries, entry)
+	}
+	return entries
+}
+
+// importSourceProjectVersion returns the project and version a collection
+// (folder or named, identified by id) was imported from, when id's node
+// carries hadPrimarySource (design D4 of add-exohub-asset-import): both
+// come from the source node's label, "<project>@<version>" (set by `exo
+// add exohub:...`'s automatic import record), split on the last "@". It
+// returns "", "" when id has no node, no hadPrimarySource, or the source's
+// label isn't in that form.
+func importSourceProjectVersion(nodeByID map[string]Node, id string) (project, version string) {
+	node, ok := nodeByID[id]
+	if !ok {
+		return "", ""
+	}
+	srcID := singleRef(node["hadPrimarySource"])
+	if srcID == "" {
+		return "", ""
+	}
+	src, ok := nodeByID[srcID]
+	if !ok {
+		return "", ""
+	}
+	label, _ := src["label"].(string)
+	at := strings.LastIndex(label, "@")
+	if at <= 0 || at == len(label)-1 {
+		return "", ""
+	}
+	return label[:at], label[at+1:]
 }
 
 // isLineageSubject reports whether node is the kind of node exo bundle
@@ -379,6 +506,10 @@ type ProvenanceEntity struct {
 	Covered    bool     `json:"covered"`
 	RevisionOf []string `json:"revision_of,omitempty"`
 	Records    []string `json:"records,omitempty"`
+	// MemberCount is design D8's "Collection entity member counts": set
+	// only for a Collection-typed entity (folder or named), never a member
+	// list.
+	MemberCount *int `json:"member_count,omitempty"`
 }
 
 // ProvenanceDocument is exo bundle's provenance.json (design D16,
@@ -401,12 +532,57 @@ type ProvenanceDocument struct {
 // 8.1).
 const ProvenanceSchemaID = "exohub-provenance/v1.json"
 
+// collectionMemberCount returns node's optional member_count (design D8
+// "Collection entity member counts"): nil for anything that isn't a
+// Collection. A named collection's count is its hadMember list length (the
+// resolved members exo provenance add wrote, design D5) — that recorded
+// set applies to the node regardless of ref, so it is always counted. A
+// folder collection has no hadMember; its count is the number of currently
+// tracked files at or under its own exo:path, but that count only applies
+// to the current tree at that path. An older revision of the same folder
+// (or a folder that no longer matches the ref) is a different node id from
+// treeIDs[dir] and must not be given the current folder's count, so
+// folder collections are counted only when node's id is the ref's current
+// tree id for exo:path.
+func collectionMemberCount(node Node, contentIDs, treeIDs map[string]string) *int {
+	isCollection := false
+	for _, t := range node.Types() {
+		if t == "Collection" {
+			isCollection = true
+			break
+		}
+	}
+	if !isCollection {
+		return nil
+	}
+	if hadMember, ok := node["hadMember"]; ok {
+		n := len(nodeRefs(hadMember))
+		return &n
+	}
+	dir, _ := node["exo:path"].(string)
+	dir = strings.TrimSuffix(dir, "/")
+	if dir == "" {
+		return nil
+	}
+	if treeIDs[dir] != node.ID() {
+		return nil
+	}
+	prefix := dir + "/"
+	n := 0
+	for path := range contentIDs {
+		if path == dir || strings.HasPrefix(path, prefix) {
+			n++
+		}
+	}
+	return &n
+}
+
 // BuildProvenanceDocument flattens doc, the already compiled and scoped
 // provenance.jsonld document, into provenance.json's shape (design D16).
 // ref is the bundle's target ref (commit hash); callers set RefName
 // afterward since CompileBundle's Reader does not resolve a human-readable
 // ref name.
-func BuildProvenanceDocument(doc *CompiledDocument, ref string) *ProvenanceDocument {
+func BuildProvenanceDocument(doc *CompiledDocument, ref string, contentIDs, treeIDs map[string]string) *ProvenanceDocument {
 	if doc == nil {
 		return nil
 	}
@@ -493,12 +669,13 @@ func BuildProvenanceDocument(doc *CompiledDocument, ref string) *ProvenanceDocum
 	for _, id := range entities {
 		node := nodeByID[id]
 		e := ProvenanceEntity{
-			ID:         id,
-			Type:       primaryType(node.Types()),
-			Path:       pathOf(nodeByID, id),
-			Covered:    nodeCovered(node),
-			RevisionOf: sortedRefs(node["wasRevisionOf"]),
-			Records:    recordIDsFor(node),
+			ID:          id,
+			Type:        primaryType(node.Types()),
+			Path:        pathOf(nodeByID, id),
+			Covered:     nodeCovered(node),
+			RevisionOf:  sortedRefs(node["wasRevisionOf"]),
+			Records:     recordIDsFor(node),
+			MemberCount: collectionMemberCount(node, contentIDs, treeIDs),
 		}
 		entityRefs = append(entityRefs, e)
 	}

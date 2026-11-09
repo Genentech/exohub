@@ -21,14 +21,22 @@ type RecordRef struct {
 // which has no JSON-LD term of its own, sits alongside @graph rather than
 // inside it.
 type LineageDocument struct {
-	Context    any                `json:"@context"`
-	Subject    string             `json:"subject"`
-	Source     LineageSource      `json:"source"`
-	FolderPath string             `json:"folderPath,omitempty"`
-	Hint       *FolderHistoryHint `json:"olderCoveredTreeHint,omitempty"`
-	Cycles     []string           `json:"cycles,omitempty"`
-	Graph      []Node             `json:"@graph"`
-	Records    []RecordRef        `json:"exo:records,omitempty"`
+	Context    any           `json:"@context"`
+	Subject    string        `json:"subject"`
+	Source     LineageSource `json:"source"`
+	FolderPath string        `json:"folderPath,omitempty"`
+	// CollectionName and NamedCollections are set when Source ==
+	// LineageSourceNamedCollection (add-explicit-collections design D6):
+	// CollectionName is the chosen subject's bare name; NamedCollections
+	// lists every covered named collection the path is a member of, sorted
+	// by name, CollectionName included — "--json lists every applicable
+	// collection".
+	CollectionName   string             `json:"collectionName,omitempty"`
+	NamedCollections []string           `json:"namedCollections,omitempty"`
+	Hint             *FolderHistoryHint `json:"olderCoveredTreeHint,omitempty"`
+	Cycles           []string           `json:"cycles,omitempty"`
+	Graph            []Node             `json:"@graph"`
+	Records          []RecordRef        `json:"exo:records,omitempty"`
 }
 
 // BuildLineageDocument renders lineage as the --json subgraph document: one
@@ -85,14 +93,23 @@ func BuildLineageDocument(lineage *Lineage) (*LineageDocument, error) {
 	}
 	sort.Slice(records, func(i, j int) bool { return records[i].ID < records[j].ID })
 
+	var namedCollections []string
+	if lineage.Subject.Source == LineageSourceNamedCollection {
+		namedCollections = append(namedCollections, lineage.Subject.CollectionName)
+		namedCollections = append(namedCollections, lineage.Subject.OtherCollections...)
+		sort.Strings(namedCollections)
+	}
+
 	return &LineageDocument{
-		Context:    context,
-		Subject:    lineage.Subject.ID,
-		Source:     lineage.Subject.Source,
-		FolderPath: lineage.Subject.FolderPath,
-		Hint:       lineage.Hint,
-		Cycles:     lineage.Cycles,
-		Graph:      graph,
-		Records:    records,
+		Context:          context,
+		Subject:          lineage.Subject.ID,
+		Source:           lineage.Subject.Source,
+		FolderPath:       lineage.Subject.FolderPath,
+		CollectionName:   lineage.Subject.CollectionName,
+		NamedCollections: namedCollections,
+		Hint:             lineage.Hint,
+		Cycles:           lineage.Cycles,
+		Graph:            graph,
+		Records:          records,
 	}, nil
 }

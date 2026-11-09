@@ -280,7 +280,7 @@ func createExportRemoteTUI(ctx *tuiContext) error {
 		fmt.Printf("Set remote.%s.annex-tracking-branch to '%s'\n", name, trackingBranch)
 	}
 
-	ensureRemoteConfigS3URL(name, s3url)
+	ensureRemoteConfigS3URL(RemoteConfig{Name: name, S3URL: s3url, Type: "export", Grants: useGrants})
 
 	// Save to .exohub/remotes
 	remotesConfig, err := LoadRemotesConfig()

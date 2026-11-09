@@ -369,6 +369,20 @@ type stashModel struct {
 
 	Total int64
 
+	// resultsTitle overrides the results-list header with a friendly label
+	// (e.g. "Used by <path>") when set, in place of the default document
+	// count. Set by a 'u' ("used by") search; cleared on the next manual
+	// search.
+	resultsTitle string
+	// resultsEmptyMessage overrides the default "No artifacts found." empty
+	// state when resultsTitle is set.
+	resultsEmptyMessage string
+	// usedByReturnID is the ArtifactDB id of the document a 'u' ("used by")
+	// search was triggered from, so esc can reopen it instead of staying on
+	// the results list. Cleared once consumed or once a manual search
+	// replaces these results.
+	usedByReturnID string
+
 	// Multi-select for batch download
 	selected map[int]bool
 
@@ -1176,6 +1190,9 @@ func (m *stashModel) handleDocumentBrowsing(msg tea.Msg) tea.Cmd {
 
 				// If selected schema is not "*", automatically run a search with this schema
 				if i, ok := m.schemaList.SelectedItem().(schemaItem); ok && i.InternalValue != "*" {
+					m.resultsTitle = ""
+					m.resultsEmptyMessage = ""
+					m.usedByReturnID = ""
 					return searchArtifacts(*m)
 				}
 
@@ -1447,6 +1464,12 @@ func (m *stashModel) handleSearching(msg tea.Msg) tea.Cmd {
 						if m.filterInput.Value() != "" {
 							m.filterInput.AddToHistory()
 						}
+
+						// A manual search replaces any pending "used by" results.
+						m.resultsTitle = ""
+						m.resultsEmptyMessage = ""
+						m.usedByReturnID = ""
+
 						cmds = append(cmds, tea.ClearScreen)
 						cmds = append(cmds, searchArtifacts(*m))
 						return tea.Batch(cmds...)
@@ -1618,6 +1641,11 @@ func (m *stashModel) handleSearching(msg tea.Msg) tea.Cmd {
 			} else {
 				m.filterInput.AddToHistory()
 			}
+
+			// A manual search replaces any pending "used by" results.
+			m.resultsTitle = ""
+			m.resultsEmptyMessage = ""
+			m.usedByReturnID = ""
 
 			// Force screen clear when starting a new search
 			cmds = append(cmds, tea.ClearScreen)
@@ -2096,6 +2124,9 @@ func (m stashModel) docCountView() string {
 		}
 		return grayFg(fmt.Sprintf("  %s Searching...", m.spinner.View()))
 	}
+	if m.resultsTitle != "" {
+		return grayFg(fmt.Sprintf("  %s (%s)", m.resultsTitle, totalStr))
+	}
 	return grayFg(fmt.Sprintf("  %s documents (%s total)", humanize.Comma(int64(localCount)), totalStr))
 }
 
@@ -2114,7 +2145,11 @@ func (m stashModel) populatedView() string {
 		case documentsSection:
 			if m.loadingDone() {
 				m.Total = 0
-				f("No artifacts found.")
+				if m.resultsTitle != "" && m.resultsEmptyMessage != "" {
+					f(m.resultsEmptyMessage)
+				} else {
+					f("No artifacts found.")
+				}
 			} else {
 				b.WriteString(dimGreenFg(m.common.search.Q))
 				f("Searching... ")
@@ -2273,6 +2308,18 @@ func loadMarkdown(md *markdown) tea.Cmd {
 		}
 
 		md.Extra = *extra
+
+		// Keep the raw document fields (minus _extra) available on Result.Metadata,
+		// as a search result would carry them, so pager features that need
+		// document fields (e.g. backend/key/lineage for the 'u' "used by" key)
+		// work regardless of how the document was opened.
+		metadata := make(map[string]interface{}, len(document))
+		for k, v := range document {
+			metadata[k] = v
+		}
+		delete(metadata, "_extra")
+		delete(metadata, "_highlight")
+		md.Result.Metadata = metadata
 
 		return fetchedMarkdownMsg(md)
 	}

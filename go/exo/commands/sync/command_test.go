@@ -3,11 +3,14 @@ package sync
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -1519,6 +1522,60 @@ func TestDryRunIntegration_DryRunEqualsRealSync(t *testing.T) {
 	}
 }
 
+// TestSync_PlainSync_ReuploadsAfterRemoteMove is the exo-cli#166 end-to-end
+// regression for the path that actually broke: plain `exo sync` (no --all),
+// which runs `git annex sync --content` for annex remotes. Unlike `git
+// annex copy --to <remote>` (used by `exo sync --all`, which re-verifies via
+// CHECKPRESENT and self-corrects), `sync --content` trusts the location log
+// and, left unhandled, performs no transfer at all once a remote's storage
+// moves without a UUID change (reproduced here with a directory special
+// remote re-pointed to a new, empty directory — the same shape as an s3url
+// change in `exo init --remote`, and confirmed against the real
+// git-annex-remote-s5cmd in the MR's root-cause investigation). Applying the
+// fix's `git annex fsck --from <remote> --fast` invalidation right after the
+// move is what makes the next plain `exo sync` actually re-upload.
+func TestSync_PlainSync_ReuploadsAfterRemoteMove(t *testing.T) {
+	repoDir, _, restore := newAnnexRepo(t, "r1")
+	defer restore()
+
+	addAnnexFile(t, repoDir, "a.bin", "version-1")
+	annexRun(t, repoDir, "git", "annex", "sync", "--content", "--no-commit")
+
+	if found := annexFindOnRemote(t, repoDir, "r1"); len(found) != 1 {
+		t.Fatalf("expected a.bin on r1 after the initial sync, got: %v", found)
+	}
+
+	// Re-point the remote to a new, empty directory — same UUID, same shape
+	// as an s3url change: the location log still says r1 has the content.
+	newRemoteDir := t.TempDir()
+	t.Cleanup(func() { chmodRWritable(newRemoteDir) })
+	annexRun(t, repoDir, "git", "annex", "enableremote", "r1", "directory="+newRemoteDir)
+
+	// Without invalidating presence, plain `exo sync` trusts the stale log
+	// and performs no transfer at all: this is the actual bug (unlike
+	// `copy --to`/`exo sync --all`, which would re-verify and re-upload on
+	// its own — see TestSyncAll_ReuploadsAfterRemoteMove).
+	annexRun(t, repoDir, "git", "annex", "sync", "--content", "--no-commit")
+	if entries, err := os.ReadDir(newRemoteDir); err != nil || len(entries) != 0 {
+		t.Fatalf("expected the stale log to make plain sync skip the new location, entries=%v err=%v", entries, err)
+	}
+
+	// Apply the fix: invalidate stale presence after the move, exactly as
+	// ensureRemoteConfigS3URL does post-switch.
+	_ = runCommand([]string{"git", "annex", "fsck", "--from", "r1", "--fast"})
+
+	// Plain `exo sync` must now re-upload to the new location.
+	annexRun(t, repoDir, "git", "annex", "sync", "--content", "--no-commit")
+	if entries, err := os.ReadDir(newRemoteDir); err != nil || len(entries) == 0 {
+		t.Fatalf("expected plain sync to re-upload after invalidation, entries=%v err=%v", entries, err)
+	}
+
+	// The old location is untouched (content kept, not deleted by the move).
+	if found := annexFindOnRemote(t, repoDir, "r1"); len(found) != 1 || found[0] != "a.bin" {
+		t.Fatalf("expected a.bin present on r1 (new location) after re-upload, got: %v", found)
+	}
+}
+
 // newExportRepo creates a temporary git repo with an exporttree=yes remote
 // for export fidelity tests. It also configures annex-tracking-branch=main
 // and sets the provided preferredContent (may be empty).
@@ -1895,6 +1952,326 @@ func TestJsonString(t *testing.T) {
 	}
 }
 
+// TestRunCatalogPublishJSON_Success verifies that runCatalogPublish in JSON
+// mode passes --json to the catalog binary, captures its stdout instead of
+// passing it through, keeps exo's own progress line off stdout, and parses
+// the binary's one-line publish result into a catalogPublishResult carrying
+// the remote's name.
+func TestRunCatalogPublishJSON_Success(t *testing.T) {
+	jsonLine := `{"atlas_url_used":"https://atlas.example.com/v1/sandbox1","published":true}`
+	config, calls, cleanup := setupCatalogSyncEnvJSON(t, "https://example.com/repo.git", jsonLine, 0)
+
+	oldStdout := os.Stdout
+	output, err := os.CreateTemp(t.TempDir(), "stdout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = output
+	result, runErr := runCatalogPublish("atlas", config, "fake-catalog", true)
+	os.Stdout = oldStdout
+	output.Close()
+	stdoutData, readErr := os.ReadFile(output.Name())
+	cleanup()
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+
+	if runErr != nil {
+		t.Fatalf("runCatalogPublish() error = %v", runErr)
+	}
+	if len(stdoutData) != 0 {
+		t.Errorf("exo's own stdout should stay empty in JSON mode, got: %q", stdoutData)
+	}
+	if result == nil {
+		t.Fatal("result = nil")
+	}
+	if result.Remote != "atlas" || !result.Published {
+		t.Errorf("unexpected result: %+v", result)
+	}
+	if result.AtlasURLUsed == nil || *result.AtlasURLUsed != "https://atlas.example.com/v1/sandbox1" {
+		t.Errorf("AtlasURLUsed = %v", result.AtlasURLUsed)
+	}
+	if result.Error != nil {
+		t.Errorf("Error = %+v, want nil on success", result.Error)
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("expected one publish invocation, got %v", *calls)
+	}
+}
+
+// TestRunCatalogPublishJSON_Refusal verifies that a 422-style refusal from
+// the catalog binary (non-zero exit, --json result with published=false and
+// a structured error) is surfaced as both a non-nil error (for exit-code
+// propagation) and a parsed catalogPublishResult carrying the error detail.
+func TestRunCatalogPublishJSON_Refusal(t *testing.T) {
+	jsonLine := `{"atlas_url_used":null,"published":false,"error":{"code":"atlas_url_not_allowlisted","message":"atlas_url not allowed","allowed":["https://atlas.example.com/v1/a","https://atlas.example.com/v1/b"]}}`
+	config, _, cleanup := setupCatalogSyncEnvJSON(t, "https://example.com/repo.git", jsonLine, 1)
+
+	result, runErr := runCatalogPublish("atlas", config, "fake-catalog", true)
+	cleanup()
+	if runErr == nil {
+		t.Fatal("expected a non-nil error for a refused publish")
+	}
+	if result == nil {
+		t.Fatal("result = nil, want a parsed result even on refusal")
+	}
+	if result.Remote != "atlas" || result.Published {
+		t.Errorf("unexpected result: %+v", result)
+	}
+	if result.AtlasURLUsed != nil {
+		t.Errorf("AtlasURLUsed = %v, want nil", result.AtlasURLUsed)
+	}
+	if result.Error == nil || result.Error.Code != "atlas_url_not_allowlisted" || result.Error.Message != "atlas_url not allowed" {
+		t.Errorf("unexpected error: %+v", result.Error)
+	}
+	if !reflect.DeepEqual(result.Error.Allowed, []string{"https://atlas.example.com/v1/a", "https://atlas.example.com/v1/b"}) {
+		t.Errorf("Allowed = %v", result.Error.Allowed)
+	}
+}
+
+// TestCatalogPublishResult_SchemaStable locks the post-publish JSON record's
+// wire shape: {remote, atlas_url_used, published, error}. atlas_url_used
+// must serialize to null (not be absent) when nil; renaming or dropping any
+// of these keys should fail this test.
+func TestCatalogPublishResult_SchemaStable(t *testing.T) {
+	record := catalogPublishResult{Remote: "atlas", Published: true}
+	data, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]interface{}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"remote", "atlas_url_used", "published"} {
+		if _, ok := fields[key]; !ok {
+			t.Errorf("missing key %q: %s", key, data)
+		}
+	}
+	if fields["atlas_url_used"] != nil {
+		t.Errorf("atlas_url_used = %v, want null", fields["atlas_url_used"])
+	}
+	if _, present := fields["error"]; present {
+		t.Errorf("success record should omit \"error\" entirely, got: %s", data)
+	}
+}
+
+// setupStaleRoutingRepo creates a real plain git repo with a "main" branch:
+// tag "1" is committed with pre-migration routing for remoteName (no
+// atlas_url, old s3url prefix), then main moves on with post-migration
+// routing (new prefix + atlas_url) committed on top. It chdirs into the
+// repo for the duration of the test (restored via t.Cleanup) and returns
+// the pre-migration RemoteConfig as checked out at tag 1.
+func setupStaleRoutingRepo(t *testing.T, remoteName string) (staleRemote *initcmd.RemoteConfig) {
+	t.Helper()
+	repoDir := t.TempDir()
+	run := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = repoDir
+		cmd.Env = append(os.Environ(),
+			"GIT_CONFIG_NOSYSTEM=1", "HOME="+repoDir,
+			"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
+			"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com",
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("command %v failed: %v\n%s", args, err, out)
+		}
+		return string(out)
+	}
+
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(oldWd) }) //nolint:errcheck
+
+	run("git", "init", "-q", "-b", "main")
+
+	preMigration := &initcmd.RemotesConfig{
+		Remotes: []initcmd.RemoteConfig{{Name: remoteName, Type: "artifactdb", S3URL: "s3://bucket/sandbox/old-prefix"}},
+	}
+	if err := initcmd.SaveRemotesConfig(preMigration); err != nil {
+		t.Fatalf("SaveRemotesConfig: %v", err)
+	}
+	run("git", "add", ".exohub/remotes")
+	run("git", "commit", "-q", "-m", "pre-migration routing")
+	run("git", "tag", "1")
+
+	postMigration := &initcmd.RemotesConfig{
+		Remotes: []initcmd.RemoteConfig{{Name: remoteName, Type: "artifactdb", S3URL: "s3://bucket/styx/psyche-poc", AtlasURL: "https://atlas.example/sandbox1"}},
+	}
+	if err := initcmd.SaveRemotesConfig(postMigration); err != nil {
+		t.Fatalf("SaveRemotesConfig: %v", err)
+	}
+	run("git", "add", ".exohub/remotes")
+	run("git", "commit", "-q", "-m", "migrate routing")
+
+	// Check out the old tag: this is the dangerous, pre-#176 scenario.
+	run("git", "checkout", "-q", "1")
+
+	checkedOut, err := initcmd.LoadRemotesConfig()
+	if err != nil {
+		t.Fatalf("LoadRemotesConfig: %v", err)
+	}
+	return getRemoteConfigByName(remoteName, checkedOut)
+}
+
+// TestCheckRoutingNotStale_RefusesOnDetachedHeadWithStaleRouting reproduces
+// the exo-cli#176 tracer incident: tag 1 predates a routing migration (prefix
+// move + atlas_url added on main). Checking out tag 1 directly and
+// publishing (no --ref/--bundle-dir) must be refused instead of silently
+// using tag 1's stale/missing atlas_url.
+func TestCheckRoutingNotStale_RefusesOnDetachedHeadWithStaleRouting(t *testing.T) {
+	staleRemote := setupStaleRoutingRepo(t, "atlas")
+	if staleRemote == nil {
+		t.Fatal("expected atlas remote in the checked-out (tag 1) config")
+	}
+
+	err := checkRoutingNotStale("atlas", staleRemote)
+	if err == nil {
+		t.Fatal("expected refusal when a detached HEAD's routing differs from main's")
+	}
+	if !strings.Contains(err.Error(), "refusing to publish") || !strings.Contains(err.Error(), "--ref") {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+// TestCheckRoutingNotStale_AllowsOnBranch verifies the guard never triggers
+// while HEAD is on a named branch, regardless of what main's routing is —
+// the guard exists specifically for the detached-HEAD (checked-out tag)
+// scenario, not ordinary branch-based development.
+func TestCheckRoutingNotStale_AllowsOnBranch(t *testing.T) {
+	setupStaleRoutingRepo(t, "atlas")
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command(args[0], args[1:]...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("command %v failed: %v\n%s", args, err, out)
+		}
+	}
+	run("git", "checkout", "-q", "main")
+
+	current, err := initcmd.LoadRemotesConfig()
+	if err != nil {
+		t.Fatalf("LoadRemotesConfig: %v", err)
+	}
+	rc := getRemoteConfigByName("atlas", current)
+
+	if err := checkRoutingNotStale("atlas", rc); err != nil {
+		t.Errorf("expected no refusal on a named branch, got: %v", err)
+	}
+}
+
+// TestCheckRoutingNotStale_AllowsMatchingRouting verifies that a detached
+// HEAD whose routing already matches main's (e.g. HEAD == main's tip, or a
+// tag made after the last routing change) is never refused.
+func TestCheckRoutingNotStale_AllowsMatchingRouting(t *testing.T) {
+	setupStaleRoutingRepo(t, "atlas")
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command(args[0], args[1:]...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("command %v failed: %v\n%s", args, err, out)
+		}
+	}
+	// Detach HEAD directly onto main's tip (post-migration routing) instead of
+	// the stale tag.
+	run("git", "checkout", "-q", "main")
+	commit, err := exec.Command("git", "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	run("git", "checkout", "-q", strings.TrimSpace(string(commit)))
+
+	current, err := initcmd.LoadRemotesConfig()
+	if err != nil {
+		t.Fatalf("LoadRemotesConfig: %v", err)
+	}
+	rc := getRemoteConfigByName("atlas", current)
+
+	if err := checkRoutingNotStale("atlas", rc); err != nil {
+		t.Errorf("expected no refusal when detached-HEAD routing already matches main's, got: %v", err)
+	}
+}
+
+// TestCheckRoutingNotStale_RefusesOnNonDefaultBranchWithStaleRouting verifies
+// the guard also triggers on a named branch other than the default (not just
+// detached HEAD): checking out a feature branch cut from the stale tag, with
+// the stale tag's own routing, must still be refused.
+func TestCheckRoutingNotStale_RefusesOnNonDefaultBranchWithStaleRouting(t *testing.T) {
+	setupStaleRoutingRepo(t, "atlas") // leaves HEAD detached at tag 1
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command(args[0], args[1:]...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("command %v failed: %v\n%s", args, err, out)
+		}
+	}
+	run("git", "checkout", "-q", "-b", "feature-from-tag-1", "1")
+
+	current, err := initcmd.LoadRemotesConfig()
+	if err != nil {
+		t.Fatalf("LoadRemotesConfig: %v", err)
+	}
+	rc := getRemoteConfigByName("atlas", current)
+
+	err = checkRoutingNotStale("atlas", rc)
+	if err == nil {
+		t.Fatal("expected refusal on a non-default branch whose routing differs from main's")
+	}
+	if !strings.Contains(err.Error(), "refusing to publish") || !strings.Contains(err.Error(), "feature-from-tag-1") {
+		t.Errorf("unexpected error message (want it to name the current checkout): %v", err)
+	}
+}
+
+// TestRunPublishJSON_CombinesTargetAndOutcome verifies that exo sync --json
+// (without --dry-run) prints a single document with BOTH the pre-publish
+// target info ("catalog_remotes", the same shape as the dry-run report) and
+// the post-publish outcome ("published"), per the issue's final JSON
+// contract.
+func TestRunPublishJSON_CombinesTargetAndOutcome(t *testing.T) {
+	jsonLine := `{"atlas_url_used":"https://atlas.example.com/v1/sandbox1","published":true}`
+	config, _, cleanup := setupCatalogSyncEnvJSON(t, "https://example.com/repo.git", jsonLine, 0)
+	config.Remotes[0].AtlasURL = "https://atlas.example.com/v1/sandbox1"
+
+	oldStdout := os.Stdout
+	output, err := os.CreateTemp(t.TempDir(), "stdout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = output
+	runPublishJSON([]string{"atlas"}, config)
+	os.Stdout = oldStdout
+	output.Close()
+	data, readErr := os.ReadFile(output.Name())
+	cleanup()
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+
+	var report struct {
+		CatalogRemotes []catalogTargetJSON    `json:"catalog_remotes"`
+		Published      []catalogPublishResult `json:"published"`
+	}
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatalf("invalid JSON report %q: %v", data, err)
+	}
+	if len(report.CatalogRemotes) != 1 || report.CatalogRemotes[0].Remote != "atlas" ||
+		report.CatalogRemotes[0].BundleTarget == nil || *report.CatalogRemotes[0].BundleTarget != "https://atlas.example.com/v1/sandbox1" ||
+		report.CatalogRemotes[0].BundleTargetSource != "atlas_url" {
+		t.Errorf("unexpected catalog_remotes: %+v", report.CatalogRemotes)
+	}
+	if len(report.Published) != 1 || report.Published[0].Remote != "atlas" || !report.Published[0].Published ||
+		report.Published[0].AtlasURLUsed == nil || *report.Published[0].AtlasURLUsed != "https://atlas.example.com/v1/sandbox1" {
+		t.Errorf("unexpected published: %+v", report.Published)
+	}
+}
+
 // TestCatalogBinaryInheritsAWSProfile verifies that the catalog binary launched by
 // syncCatalogRemote is constructed via commandutil.Command so that AWS_PROFILE=exohub
 // is automatically injected into its environment (fixing issue #15).
@@ -1998,6 +2375,83 @@ func setupCatalogSyncEnv(t *testing.T, repoURL string) (remotesConfig *initcmd.R
 	remotesConfig = &initcmd.RemotesConfig{
 		Remotes: []initcmd.RemoteConfig{
 			{Name: "atlas", Type: "artifactdb", S3URL: "s3://bucket/atlas"},
+		},
+	}
+
+	cleaned := false
+	cleanup = func() {
+		if cleaned {
+			return
+		}
+		cleaned = true
+		if data, err := os.ReadFile(logFile); err == nil {
+			for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+				if line != "" {
+					*recorded = append(*recorded, line)
+				}
+			}
+		}
+		os.Setenv("PATH", oldPath)
+		os.Chdir(oldDir) //nolint:errcheck
+	}
+	t.Cleanup(cleanup)
+	return remotesConfig, recorded, cleanup
+}
+
+// setupCatalogSyncEnvJSON is like setupCatalogSyncEnv, but the fake catalog
+// binary recognizes a trailing --json flag: when present, it prints
+// jsonLine to its own stdout (simulating the real binary's --json publish
+// result) before exiting with exitCode; otherwise it behaves like the plain
+// fake binary (log args, exit 0).
+func setupCatalogSyncEnvJSON(t *testing.T, repoURL string, jsonLine string, exitCode int) (remotesConfig *initcmd.RemotesConfig, calls *[]string, cleanup func()) {
+	t.Helper()
+
+	repoDir := t.TempDir()
+	bundleDir := filepath.Join(repoDir, ".exohub", "bundles", "main")
+	if err := os.MkdirAll(bundleDir, 0o755); err != nil {
+		t.Fatalf("mkdir bundle dir: %v", err)
+	}
+	manifest := bundleManifest{RefName: "main", Ref: "abc123", RepoURL: repoURL}
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(bundleDir, "bundle.json"), data, 0o644); err != nil {
+		t.Fatalf("write bundle.json: %v", err)
+	}
+
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	binDir := t.TempDir()
+	recorded := &[]string{}
+	logFile := filepath.Join(binDir, "calls.log")
+	script := "#!/bin/sh\necho \"$@\" >> " + logFile + "\n" +
+		"case \" $* \" in\n" +
+		"  *\" --json \"*)\n" +
+		"    echo '" + jsonLine + "'\n" +
+		"    ;;\n" +
+		"esac\n" +
+		"exit " + strconv.Itoa(exitCode) + "\n"
+	// Install under both a plain name (for tests that pass the binary name
+	// directly) and the git-annex-remote-<type>-<mode> name getCatalogRemoteBinary
+	// looks up (for tests that go through runPublishJSON's remote discovery).
+	for _, name := range []string{"fake-catalog", "git-annex-remote-artifactdb-export"} {
+		if err := os.WriteFile(filepath.Join(binDir, name), []byte(script), 0o755); err != nil {
+			t.Fatalf("write fake catalog binary %q: %v", name, err)
+		}
+	}
+	oldPath := os.Getenv("PATH")
+	os.Setenv("PATH", binDir+":"+oldPath)
+
+	remotesConfig = &initcmd.RemotesConfig{
+		Remotes: []initcmd.RemoteConfig{
+			{Name: "atlas", Type: "artifactdb", Mode: "export", S3URL: "s3://bucket/atlas"},
 		},
 	}
 
@@ -2155,7 +2609,7 @@ func TestCatalogExplicitDryRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.Stdout = output
-	err = runDryRun([]string{"atlas"}, nil, false, "1", "", config, "selected")
+	err = runDryRun([]string{"atlas"}, nil, false, "1", "", config, nil, "selected")
 	os.Stdout = oldStdout
 	output.Close()
 	data, readErr := os.ReadFile(output.Name())
@@ -2192,10 +2646,391 @@ func TestBundleFlagHelp(t *testing.T) {
 func TestCatalogExplicitJSONDryRunFailsClearly(t *testing.T) {
 	config, calls, cleanup := setupCatalogSyncEnv(t, "https://example.com/repo.git")
 	writeSelectedBundle(t, "selected", "old")
-	err := runDryRun([]string{"atlas"}, nil, true, "1", "", config, "selected")
+	err := runDryRun([]string{"atlas"}, nil, true, "1", "", config, nil, "selected")
 	cleanup()
 	if err == nil || !strings.Contains(err.Error(), "--json") || len(*calls) != 0 {
 		t.Fatalf("expected clear JSON error without publication: %v, %v", err, *calls)
+	}
+}
+
+func TestRunDryRunTextShowsBundleTargetWithAtlasURL(t *testing.T) {
+	config, calls, cleanup := setupCatalogSyncEnv(t, "https://example.com/repo.git")
+	config.Remotes[0].AtlasURL = "https://atlas.example.com/v1/sandbox1"
+	config.Remotes[0].InstanceURL = "https://catalog.example.com"
+
+	oldStdout := os.Stdout
+	output, err := os.CreateTemp(t.TempDir(), "preview")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = output
+	err = runDryRun([]string{"atlas"}, nil, false, "1", "", config, nil)
+	os.Stdout = oldStdout
+	output.Close()
+	data, readErr := os.ReadFile(output.Name())
+	cleanup()
+	if err != nil || readErr != nil {
+		t.Fatalf("preview: %v, %v", err, readErr)
+	}
+	for _, want := range []string{"bundle \u2192 https://atlas.example.com/v1/sandbox1 (atlas_url)", ".artifactdb/ \u2192 https://catalog.example.com"} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("missing %q in preview: %s", want, data)
+		}
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("dry-run invoked publisher: %v", *calls)
+	}
+}
+
+func TestRunDryRunTextShowsBundleTargetDefault(t *testing.T) {
+	config, calls, cleanup := setupCatalogSyncEnv(t, "https://example.com/repo.git")
+
+	oldStdout := os.Stdout
+	output, err := os.CreateTemp(t.TempDir(), "preview")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = output
+	err = runDryRun([]string{"atlas"}, nil, false, "1", "", config, nil)
+	os.Stdout = oldStdout
+	output.Close()
+	data, readErr := os.ReadFile(output.Name())
+	cleanup()
+	if err != nil || readErr != nil {
+		t.Fatalf("preview: %v, %v", err, readErr)
+	}
+	if !strings.Contains(string(data), "bundle \u2192 \u26a0 default Atlas (server-chosen)") {
+		t.Errorf("missing flagged default-target line in preview: %s", data)
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("dry-run invoked publisher: %v", *calls)
+	}
+}
+
+// catalogTargetJSON mirrors the stable "catalog_remotes" wire shape
+// ({remote, bundle_target, bundle_target_source, instance_url}) for
+// decoding in tests; bundle_target/instance_url are pointers so a test can
+// tell "null" apart from "absent".
+type catalogTargetJSON struct {
+	Remote             string  `json:"remote"`
+	BundleTarget       *string `json:"bundle_target"`
+	BundleTargetSource string  `json:"bundle_target_source"`
+	InstanceURL        *string `json:"instance_url"`
+}
+
+func TestBuildCatalogTargetsJSON_WithAtlasURL(t *testing.T) {
+	config := &initcmd.RemotesConfig{
+		Remotes: []initcmd.RemoteConfig{
+			{Name: "atlas", Type: "artifactdb", AtlasURL: "https://atlas.example.com/v1/sandbox1", InstanceURL: "https://catalog.example.com"},
+		},
+	}
+	got := buildCatalogTargetsJSON([]string{"atlas"}, config)
+
+	var targets []catalogTargetJSON
+	if err := json.Unmarshal([]byte(got), &targets); err != nil {
+		t.Fatalf("invalid JSON %q: %v", got, err)
+	}
+	if len(targets) != 1 {
+		t.Fatalf("len(targets) = %d, want 1", len(targets))
+	}
+	if targets[0].Remote != "atlas" || targets[0].BundleTarget == nil || *targets[0].BundleTarget != "https://atlas.example.com/v1/sandbox1" ||
+		targets[0].BundleTargetSource != "atlas_url" || targets[0].InstanceURL == nil || *targets[0].InstanceURL != "https://catalog.example.com" {
+		t.Errorf("unexpected target: %+v", targets[0])
+	}
+}
+
+func TestBuildCatalogTargetsJSON_Default(t *testing.T) {
+	config := &initcmd.RemotesConfig{
+		Remotes: []initcmd.RemoteConfig{{Name: "atlas", Type: "artifactdb"}},
+	}
+	got := buildCatalogTargetsJSON([]string{"atlas"}, config)
+
+	// Decode into raw maps to assert the keys are present and null (not
+	// absent) when the live default-Atlas lookup fails (no API reachable).
+	var raw []map[string]interface{}
+	if err := json.Unmarshal([]byte(got), &raw); err != nil {
+		t.Fatalf("invalid JSON %q: %v", got, err)
+	}
+	if len(raw) != 1 {
+		t.Fatalf("len(raw) = %d, want 1", len(raw))
+	}
+	for _, key := range []string{"remote", "bundle_target", "bundle_target_source", "instance_url"} {
+		if _, ok := raw[0][key]; !ok {
+			t.Errorf("missing key %q: %s", key, got)
+		}
+	}
+	if raw[0]["bundle_target"] != nil {
+		t.Errorf("bundle_target = %v, want null (prose must stay in human output only)", raw[0]["bundle_target"])
+	}
+	if raw[0]["instance_url"] != nil {
+		t.Errorf("instance_url = %v, want null", raw[0]["instance_url"])
+	}
+	if raw[0]["bundle_target_source"] != "default" {
+		t.Errorf("bundle_target_source = %v, want \"default\"", raw[0]["bundle_target_source"])
+	}
+}
+
+func TestBuildCatalogTargetsJSON_Empty(t *testing.T) {
+	if got := buildCatalogTargetsJSON(nil, nil); got != "" {
+		t.Errorf("buildCatalogTargetsJSON(nil) = %q, want empty string", got)
+	}
+}
+
+// gitInitWithCommits creates a plain (non-annex) git repo at dir with one
+// commit tagged "1", then a second commit on the same branch (simulating a
+// routing migration landing after the tag), returning the tag's resolved
+// commit hash.
+func gitInitWithCommits(t *testing.T, dir string) (tagCommit string) {
+	t.Helper()
+	run := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_CONFIG_NOSYSTEM=1", "HOME="+dir,
+			"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
+			"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com",
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("command %v failed: %v\n%s", args, err, out)
+		}
+		return string(out)
+	}
+	run("git", "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("v1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("git", "add", "README.md")
+	run("git", "commit", "-q", "-m", "v1")
+	run("git", "tag", "1")
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("v2 (post-migration)"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("git", "add", "README.md")
+	run("git", "commit", "-q", "-m", "v2")
+	return strings.TrimSpace(run("git", "rev-parse", "1"))
+}
+
+// TestRunRefDryRunJSON_UsesCurrentRoutingAndRefIdentity reproduces the
+// tracer scenario (exo-cli#176): a routing change (prefix move + atlas_url
+// added) lands after tag 1. `exo sync --dry-run --json --ref 1` must show
+// the NEW routing (current .exohub/remotes) while ref/ref_commit stay tag
+// 1's, never HEAD's.
+func TestRunRefDryRunJSON_UsesCurrentRoutingAndRefIdentity(t *testing.T) {
+	repoDir := t.TempDir()
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(oldWd) //nolint:errcheck
+
+	tagCommit := gitInitWithCommits(t, repoDir)
+
+	config := &initcmd.RemotesConfig{
+		Remotes: []initcmd.RemoteConfig{
+			{Name: "s3", Type: "annex", S3URL: "s3://bucket/styx/psyche-poc"},
+			{Name: "atlas", Type: "artifactdb", S3URL: "s3://bucket/atlas-meta", AtlasURL: "https://atlas.example/sandbox1", InstanceURL: "https://catalog.example"},
+		},
+	}
+
+	output := captureStdout(t, func() {
+		if err := runRefDryRunJSON([]string{"1"}, []string{"s3", "atlas"}, config, "1", ""); err != nil {
+			t.Fatalf("runRefDryRunJSON: %v", err)
+		}
+	})
+
+	var report struct {
+		Refs []refTarget `json:"refs"`
+	}
+	if err := json.Unmarshal([]byte(output), &report); err != nil {
+		t.Fatalf("invalid JSON: %v\noutput: %s", err, output)
+	}
+	if len(report.Refs) != 1 {
+		t.Fatalf("expected 1 ref, got %d: %s", len(report.Refs), output)
+	}
+
+	got := report.Refs[0]
+	if got.Ref != "1" {
+		t.Errorf("ref = %q, want %q", got.Ref, "1")
+	}
+	if got.RefCommit != tagCommit {
+		t.Errorf("ref_commit = %q, want tag 1's commit %q (not HEAD's)", got.RefCommit, tagCommit)
+	}
+	if len(got.ContentRemotes) != 1 || got.ContentRemotes[0].S3URL != "s3://bucket/styx/psyche-poc" {
+		t.Errorf("expected current (new-prefix) content routing, got: %+v", got.ContentRemotes)
+	}
+	if len(got.CatalogRemotes) != 1 || got.CatalogRemotes[0].BundleTarget == nil || *got.CatalogRemotes[0].BundleTarget != "https://atlas.example/sandbox1" {
+		t.Errorf("expected current atlas_url in catalog_remotes, got: %+v", got.CatalogRemotes)
+	}
+	if got.CatalogRemotes[0].BundleTargetSource != "atlas_url" {
+		t.Errorf("bundle_target_source = %q, want %q", got.CatalogRemotes[0].BundleTargetSource, "atlas_url")
+	}
+}
+
+// TestRunRefDryRunJSON_RequiresCatalogRemote verifies the explicit error
+// when --ref is used with only content remotes selected.
+func TestRunRefDryRunJSON_RequiresCatalogRemote(t *testing.T) {
+	repoDir := t.TempDir()
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(oldWd) //nolint:errcheck
+	gitInitWithCommits(t, repoDir)
+
+	config := &initcmd.RemotesConfig{Remotes: []initcmd.RemoteConfig{{Name: "s3", Type: "annex", S3URL: "s3://bucket/x"}}}
+	err = runRefDryRunJSON([]string{"1"}, []string{"s3"}, config, "1", "")
+	if err == nil || !strings.Contains(err.Error(), "catalog remote") {
+		t.Fatalf("expected a catalog-remote-required error, got: %v", err)
+	}
+}
+
+// TestCheckRefSchema_UnaffectedByDryRunRefSchema locks that 'exo sync
+// --check --ref' keeps its own stable {refs_checked, items, summary} shape
+// (checkReport) and is not polluted by --dry-run --json --ref's distinct
+// {refs: [...]} shape (refTarget) — the two --ref consumers (#163's obol
+// guard via --dry-run, and the completeness engine via --check) must stay on
+// separate, independently stable schemas (exo-cli#176).
+func TestCheckRefSchema_UnaffectedByDryRunRefSchema(t *testing.T) {
+	repoDir, _, restore := newAnnexRepo(t, "r1")
+	defer restore()
+
+	addAnnexFile(t, repoDir, "a.bin", "v1")
+	if out, err := exec.Command("git", "tag", "1").CombinedOutput(); err != nil {
+		t.Fatalf("git tag: %v\n%s", err, out)
+	}
+	if out, err := exec.Command("git", "annex", "copy", "--to", "r1").CombinedOutput(); err != nil {
+		t.Fatalf("git annex copy: %v\n%s", err, out)
+	}
+
+	output := captureStdout(t, func() {
+		exitCode := runCheckCommand([]string{"1"}, nil, true, false)
+		if exitCode != exitCheckClean {
+			t.Fatalf("runCheckCommand exit = %d, want clean (%d)", exitCode, exitCheckClean)
+		}
+	})
+
+	var report checkReport
+	if err := json.Unmarshal([]byte(output), &report); err != nil {
+		t.Fatalf("--check --ref --json did not decode as checkReport: %v\noutput: %s", err, output)
+	}
+	if len(report.RefsChecked) != 1 || report.RefsChecked[0] != "1" {
+		t.Errorf("refs_checked = %v, want [\"1\"]", report.RefsChecked)
+	}
+
+	// The schema must NOT carry the --dry-run --json --ref shape's keys.
+	var raw map[string]interface{}
+	if err := json.Unmarshal([]byte(output), &raw); err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"refs", "catalog_remotes", "ref_commit"} {
+		if _, present := raw[forbidden]; present {
+			t.Errorf("--check --ref output unexpectedly carries %q (schema bleed from --dry-run --json --ref): %s", forbidden, output)
+		}
+	}
+	for _, required := range []string{"refs_checked", "items", "summary"} {
+		if _, present := raw[required]; !present {
+			t.Errorf("--check --ref output missing required key %q: %s", required, output)
+		}
+	}
+}
+
+func TestGetDefaultAtlasURL_WithField(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"default_atlas_url":"https://atlas.example.com/v1/default"}`))
+	}))
+	defer server.Close()
+
+	got, ok := getDefaultAtlasURL(server.URL)
+	if !ok || got != "https://atlas.example.com/v1/default" {
+		t.Errorf("getDefaultAtlasURL() = (%q, %v), want (%q, true)", got, ok, "https://atlas.example.com/v1/default")
+	}
+}
+
+func TestGetDefaultAtlasURL_OlderServerWithoutField(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"version":"1.0.0"}`))
+	}))
+	defer server.Close()
+
+	if _, ok := getDefaultAtlasURL(server.URL); ok {
+		t.Error("getDefaultAtlasURL() ok = true, want false for a server without default_atlas_url")
+	}
+}
+
+func TestGetDefaultAtlasURL_Unreachable(t *testing.T) {
+	if _, ok := getDefaultAtlasURL("http://127.0.0.1:1"); ok {
+		t.Error("getDefaultAtlasURL() ok = true, want false for an unreachable server")
+	}
+}
+
+func TestBuildCatalogTargetsJSON_ResolvesLiveDefault(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"default_atlas_url":"https://atlas.example.com/v1/default"}`))
+	}))
+	defer server.Close()
+	t.Setenv("EXOHUB_API_URL", server.URL)
+
+	config := &initcmd.RemotesConfig{
+		Remotes: []initcmd.RemoteConfig{{Name: "atlas", Type: "artifactdb"}},
+	}
+	got := buildCatalogTargetsJSON([]string{"atlas"}, config)
+
+	var targets []catalogTargetJSON
+	if err := json.Unmarshal([]byte(got), &targets); err != nil {
+		t.Fatalf("invalid JSON %q: %v", got, err)
+	}
+	if len(targets) != 1 || targets[0].BundleTargetSource != "default" || targets[0].BundleTarget == nil || *targets[0].BundleTarget != "https://atlas.example.com/v1/default" {
+		t.Errorf("unexpected target: %+v", targets)
+	}
+}
+
+func TestRunDryRunJSONIncludesCatalogRemotes(t *testing.T) {
+	config, calls, cleanup := setupCatalogSyncEnv(t, "https://example.com/repo.git")
+	config.Remotes[0].AtlasURL = "https://atlas.example.com/v1/sandbox1"
+
+	oldStdout := os.Stdout
+	output, err := os.CreateTemp(t.TempDir(), "preview")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = output
+	err = runDryRun([]string{"atlas"}, nil, true, "1", "", config, nil)
+	os.Stdout = oldStdout
+	output.Close()
+	data, readErr := os.ReadFile(output.Name())
+	cleanup()
+	if err != nil || readErr != nil {
+		t.Fatalf("preview: %v, %v", err, readErr)
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("dry-run invoked publisher: %v", *calls)
+	}
+
+	var report struct {
+		Remotes        []json.RawMessage   `json:"remotes"`
+		CatalogRemotes []catalogTargetJSON `json:"catalog_remotes"`
+	}
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatalf("invalid JSON report %q: %v", data, err)
+	}
+	if len(report.Remotes) != 0 {
+		t.Errorf("catalog remote leaked into \"remotes\": %v", report.Remotes)
+	}
+	if len(report.CatalogRemotes) != 1 || report.CatalogRemotes[0].Remote != "atlas" ||
+		report.CatalogRemotes[0].BundleTarget == nil || *report.CatalogRemotes[0].BundleTarget != "https://atlas.example.com/v1/sandbox1" ||
+		report.CatalogRemotes[0].BundleTargetSource != "atlas_url" {
+		t.Errorf("unexpected catalog_remotes: %+v", report.CatalogRemotes)
 	}
 }
 

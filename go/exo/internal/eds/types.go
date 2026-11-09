@@ -4,6 +4,8 @@
 // never touches the catalog from the CLI's side.
 package eds
 
+import "encoding/json"
+
 // Endpoints are the EDS-advertised, origin-relative paths for its REST API.
 type Endpoints struct {
 	Download   string `json:"download"`
@@ -36,11 +38,51 @@ type IndexResponse struct {
 	Deployments []IndexEntry `json:"deployments"`
 }
 
-// SubmitRequest is the body posted to endpoints.download.
+// SubmitRequest is the body posted to endpoints.download. Content,
+// Worktrees, Checkout, and Force are pointers so that a flag the caller
+// never set is omitted from the request entirely (as opposed to being sent
+// as its Go zero value) — the EDS rejects any body key it doesn't
+// recognise (model_config = {"extra": "forbid"}), so an EDS predating a
+// field must never see it, and a flag that wasn't explicitly set should
+// defer to the EDS's own default rather than overriding it.
+//
+// Extra carries additional keys from --eds-params, merged into the body at
+// marshal time. Callers (command_eds.go) are responsible for rejecting any
+// Extra key that collides with a typed field before constructing a
+// SubmitRequest; MarshalJSON does not re-check for collisions.
 type SubmitRequest struct {
 	ProjectID string `json:"project_id"`
 	Version   string `json:"version,omitempty"`
 	Scope     string `json:"scope,omitempty"`
+	Content   *bool  `json:"content,omitempty"`
+	Worktrees *bool  `json:"worktrees,omitempty"`
+	Checkout  *bool  `json:"checkout,omitempty"`
+	Force     *bool  `json:"force,omitempty"`
+
+	Extra map[string]any `json:"-"`
+}
+
+// MarshalJSON encodes the typed fields and then merges Extra on top, so
+// --eds-params can carry forward-compatible keys the typed fields don't
+// know about yet.
+func (r SubmitRequest) MarshalJSON() ([]byte, error) {
+	type typed SubmitRequest
+	base, err := json.Marshal(typed(r))
+	if err != nil {
+		return nil, err
+	}
+	if len(r.Extra) == 0 {
+		return base, nil
+	}
+
+	var merged map[string]any
+	if err := json.Unmarshal(base, &merged); err != nil {
+		return nil, err
+	}
+	for k, v := range r.Extra {
+		merged[k] = v
+	}
+	return json.Marshal(merged)
 }
 
 // SubmitResponse is the 202 body returned by endpoints.download.

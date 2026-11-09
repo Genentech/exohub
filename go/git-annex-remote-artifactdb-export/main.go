@@ -31,6 +31,8 @@ import (
 //
 // Required init param: s3url=s3://bucket/prefix
 // Optional init param: instance_url=https://artifactdb-api/v1/project
+// Optional init param: atlas_url=https://atlas.example.com/v1/sandbox1 (alternate ExoHub Atlas
+// to receive .exohub-bundle/ instead of the deployment's default Atlas)
 // Optional env: S5CMD_BIN, EXOHUB_CLI_DEBUG, EXO_CREDENTIAL_HELPER_BIN
 
 var appVersion = "dev"
@@ -296,6 +298,9 @@ func handleInitRemote() {
 	if v, ok := config["instance_url"]; ok && v != "" {
 		writeLine("CONFIG instance_url=" + v)
 	}
+	if v, ok := config["atlas_url"]; ok && v != "" {
+		writeLine("CONFIG atlas_url=" + v)
+	}
 	if v, ok := config["grants"]; ok && v != "" {
 		writeLine("CONFIG grants=" + v)
 	}
@@ -504,11 +509,13 @@ func runPublish(args []string) {
 	artifactdbDir := fs.String("artifactdb-dir", "", "Path to .artifactdb/ directory (optional)")
 	grants := fs.Bool("grants", false, "Use S3 Access Grants for credentials")
 	instanceURL := fs.String("instance-url", "", "ArtifactDB instance URL (optional)")
+	atlasURL := fs.String("atlas-url", "", "ExoHub Atlas URL (optional)")
 	projectIDFlag := fs.String("project-id", "", "Project ID override (defaults to repo name from bundle.json)")
 	apiURL := fs.String("api-url", resolveAPIBase(), "ExoHub API URL")
+	outputJSON := fs.Bool("json", false, "Print a single JSON publish result line to stdout")
 	fs.Parse(args)
 
-	debugStderr("publish: s3url=%s bundle-dir=%s api-url=%s instance-url=%s grants=%v", *s3url, *bundleDir, *apiURL, *instanceURL, *grants)
+	debugStderr("publish: s3url=%s bundle-dir=%s api-url=%s instance-url=%s atlas-url=%s grants=%v", *s3url, *bundleDir, *apiURL, *instanceURL, *atlasURL, *grants)
 
 	if *s3url == "" || *bundleDir == "" {
 		fmt.Fprintln(os.Stderr, "Error: --s3url and --bundle-dir are required")
@@ -539,6 +546,7 @@ func runPublish(args []string) {
 
 	fmt.Fprintf(os.Stderr, "📊  Project: %s, Version: %s\n", orange(projectID), orange(info.RefName))
 	fmt.Fprintf(os.Stderr, "☁️  Target: %s\n", yellow(s3Base+"/"))
+	printBundleTarget(*apiURL, *atlasURL, *instanceURL)
 
 	// Get credentials if grants enabled
 	if *grants {
@@ -581,16 +589,29 @@ func runPublish(args []string) {
 
 	// Notify ExoHub API
 	s3Location := s3Base + "/"
-	respBody, err := publishNotify(*apiURL, projectID, info.RepoURL, info.Ref, info.RefName, s3Location, *s3url, *instanceURL)
+	respBody, err := publishNotify(*apiURL, projectID, info.RepoURL, info.Ref, info.RefName, s3Location, *s3url, *instanceURL, *atlasURL)
 	if err != nil {
+		var apiErr *apiError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusUnprocessableEntity {
+			fmt.Fprintf(os.Stderr, "❌  %s\n", describePublishError(apiErr.Body))
+			fmt.Fprintf(os.Stderr, "⚠️  bundle uploaded to %s but NOT published: %v\n", s3Location, err)
+			if *outputJSON {
+				printPublishJSON(publishJSONResult{Published: false, Error: publishJSONErrorFromBody(apiErr.Body)})
+			}
+			os.Exit(1)
+		}
 		fmt.Fprintf(os.Stderr, "⚠️  ExoHub API notification failed: %v\n", err)
 		fmt.Fprintln(os.Stderr, "⚠️  Upload completed but indexing may not have been triggered.")
+		if *outputJSON {
+			printPublishJSON(publishJSONResult{Published: false, Error: &publishJSONError{Message: err.Error()}})
+		}
 	} else {
 		fmt.Fprintf(os.Stderr, "📡  Notified ExoHub API (project: %s, version: %s)\n", orange(projectID), orange(info.RefName))
 		// Display per-target results
 		var resp struct {
-			Status  string `json:"status"`
-			Results []struct {
+			Status       string `json:"status"`
+			AtlasURLUsed string `json:"atlas_url_used,omitempty"`
+			Results      []struct {
 				URL    string `json:"url"`
 				Type   string `json:"type"`
 				Status string `json:"status"`
@@ -612,7 +633,193 @@ func runPublish(args []string) {
 				}
 			}
 		}
+		if resp.AtlasURLUsed != "" {
+			fmt.Fprintf(os.Stderr, "✅  Published to %s\n", orange(resp.AtlasURLUsed))
+		}
+		if *outputJSON {
+			var atlasURLUsed *string
+			if resp.AtlasURLUsed != "" {
+				v := resp.AtlasURLUsed
+				atlasURLUsed = &v
+			}
+			printPublishJSON(publishJSONResult{AtlasURLUsed: atlasURLUsed, Published: true})
+		}
 	}
+}
+
+// printBundleTarget prints, before publishing, where the bundle will be sent:
+// the configured atlas_url, or the deployment's default Atlas (read from the
+// API when available). The default case is visually flagged with ⚠ — it's
+// the case that caused the original incident, a bundle silently landing in
+// the wrong Atlas — while an explicit atlas_url is not flagged. Falls back
+// to a generic "server-chosen" marker for older servers that don't expose
+// default_atlas_url.
+func printBundleTarget(apiBase, atlasURL, instanceURL string) {
+	if atlasURL != "" {
+		fmt.Fprintf(os.Stderr, "📍  bundle → %s (atlas_url)\n", atlasURL)
+	} else if defaultURL, ok := getServiceInfo(apiBase); ok {
+		fmt.Fprintf(os.Stderr, "📍  bundle → ⚠ default Atlas %s\n", defaultURL)
+	} else {
+		fmt.Fprintln(os.Stderr, "📍  bundle → ⚠ default Atlas (server-chosen)")
+	}
+	if instanceURL != "" {
+		fmt.Fprintf(os.Stderr, "📍  .artifactdb/ → %s\n", instanceURL)
+	}
+}
+
+// getServiceInfo fetches the deployment's default Atlas URL from the ExoHub
+// API's service-info endpoint (GET /api/), added as a companion change.
+// It tolerates connection errors, non-200 responses, and a missing field
+// (older servers) by reporting ok=false.
+func getServiceInfo(apiBase string) (defaultAtlasURL string, ok bool) {
+	endpoint := strings.TrimRight(apiBase, "/") + "/"
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", false
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", false
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", false
+	}
+	var info struct {
+		DefaultAtlasURL string `json:"default_atlas_url"`
+	}
+	if err := json.Unmarshal(body, &info); err != nil || info.DefaultAtlasURL == "" {
+		return "", false
+	}
+	return info.DefaultAtlasURL, true
+}
+
+// publishErrorDetail is the structured 422 "detail" shape the ExoHub API
+// returns for a refused publish (exohub-workers#115): a stable code plus a
+// human message, so exo maps the code to a concrete fix instead of guessing
+// from free text.
+type publishErrorDetail struct {
+	Code    string   `json:"code"`
+	Message string   `json:"message"`
+	Allowed []string `json:"allowed,omitempty"`
+}
+
+// publishErrorFixes maps a known refusal code to the action that resolves it.
+// The API returns these two allowlist-check codes (evaluated before
+// dry_run): atlas_url_not_allowlisted when the remote's atlas_url isn't on
+// the deployment's allowlist, and instance_url_not_allowlisted when its
+// instance_url isn't. Unknown codes fall back to the server's own message
+// (see describePublishError).
+var publishErrorFixes = map[string]string{
+	"atlas_url_not_allowlisted":    "update the catalog remote's atlas_url in .exohub/remotes to an allowed value, then run exo init",
+	"instance_url_not_allowlisted": "update the catalog remote's instance_url in .exohub/remotes to an allowed value, then run exo init",
+}
+
+// parseStructuredPublishError extracts the structured {"detail": {"code",
+// "message", "allowed"}} shape from a /publish error body, if present
+// (ok=false when the body doesn't have a non-empty "code").
+func parseStructuredPublishError(body []byte) (publishErrorDetail, bool) {
+	var structured struct {
+		Detail publishErrorDetail `json:"detail"`
+	}
+	if err := json.Unmarshal(body, &structured); err == nil && structured.Detail.Code != "" {
+		return structured.Detail, true
+	}
+	return publishErrorDetail{}, false
+}
+
+// describePublishError renders a readable message from a /publish error body.
+// It tries the structured {"detail": {"code", "message", "allowed"}} shape
+// first and maps known codes to a concrete fix; unknown codes fall back to
+// the server's message. It then falls back to the existing FastAPI
+// string/list "detail" shapes (plain message, or pydantic validation-error
+// list), and finally to the raw body.
+func describePublishError(body []byte) string {
+	if detail, ok := parseStructuredPublishError(body); ok {
+		msg := detail.Message
+		if msg == "" {
+			msg = detail.Code
+		}
+		if fix, ok := publishErrorFixes[detail.Code]; ok {
+			msg = fmt.Sprintf("%s — fix: %s", msg, fix)
+		}
+		if len(detail.Allowed) > 0 {
+			msg = fmt.Sprintf("%s (allowed: %s)", msg, strings.Join(detail.Allowed, ", "))
+		}
+		return msg
+	}
+
+	var withString struct {
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal(body, &withString); err == nil && withString.Detail != "" {
+		return withString.Detail
+	}
+
+	var withList struct {
+		Detail []struct {
+			Loc []interface{} `json:"loc"`
+			Msg string        `json:"msg"`
+		} `json:"detail"`
+	}
+	if err := json.Unmarshal(body, &withList); err == nil && len(withList.Detail) > 0 {
+		lines := make([]string, 0, len(withList.Detail))
+		for _, e := range withList.Detail {
+			parts := make([]string, 0, len(e.Loc))
+			for _, p := range e.Loc {
+				parts = append(parts, fmt.Sprintf("%v", p))
+			}
+			lines = append(lines, fmt.Sprintf("%s: %s", strings.Join(parts, "."), e.Msg))
+		}
+		return strings.Join(lines, "\n")
+	}
+
+	return string(body)
+}
+
+// publishJSONError is the "error" object in the --json publish result line:
+// {code, message, allowed}. code/message are always present (empty string
+// when the server's error shape doesn't carry a code, e.g. an old-server
+// plain-string detail); allowed is omitted when empty.
+type publishJSONError struct {
+	Code    string   `json:"code"`
+	Message string   `json:"message"`
+	Allowed []string `json:"allowed,omitempty"`
+}
+
+// publishJSONResult is the single-line JSON object --json prints to stdout
+// after a publish attempt: {atlas_url_used, published, error}.
+// atlas_url_used is null on failure or when the response didn't carry it.
+// error is present only when published is false.
+type publishJSONResult struct {
+	AtlasURLUsed *string           `json:"atlas_url_used"`
+	Published    bool              `json:"published"`
+	Error        *publishJSONError `json:"error,omitempty"`
+}
+
+// publishJSONErrorFromBody builds the structured JSON error object for a
+// /publish error body: the server's {code, message, allowed} when present,
+// otherwise code="" and message=describePublishError's rendered fallback
+// (plain-string detail, FastAPI validation-error list, or raw body).
+func publishJSONErrorFromBody(body []byte) *publishJSONError {
+	if detail, ok := parseStructuredPublishError(body); ok {
+		return &publishJSONError{Code: detail.Code, Message: detail.Message, Allowed: detail.Allowed}
+	}
+	return &publishJSONError{Message: describePublishError(body)}
+}
+
+// printPublishJSON writes a single-line JSON publish result to stdout.
+func printPublishJSON(result publishJSONResult) {
+	data, err := json.Marshal(result)
+	if err != nil {
+		return
+	}
+	fmt.Println(string(data))
 }
 
 // isTTY checks if stderr is a terminal.
@@ -722,8 +929,6 @@ func uploadPermissions(s5cmd, s3Base, rootDir string) error {
 	return nil
 }
 
-
-
 func repoNameFromURL(repoURL string) string {
 	u := strings.TrimSuffix(repoURL, ".git")
 	if idx := strings.LastIndex(u, "/"); idx >= 0 {
@@ -776,7 +981,7 @@ func createPublishArtipack(archivePath string, uploads []publishEntry, s3Base st
 	return nil
 }
 
-func publishNotify(apiBase, projectID, repoURL, ref, refName, s3Location, s3url, instanceURL string) ([]byte, error) {
+func publishNotify(apiBase, projectID, repoURL, ref, refName, s3Location, s3url, instanceURL, atlasURL string) ([]byte, error) {
 	endpoint := strings.TrimRight(apiBase, "/") + "/publish"
 
 	// Build targets: only include instance_url if set.
@@ -797,6 +1002,12 @@ func publishNotify(apiBase, projectID, repoURL, ref, refName, s3Location, s3url,
 		"s3_location": s3Location,
 		"s3url":       s3url,
 		"targets":     targets,
+	}
+	// atlas_url is only added when set, so the payload stays byte-identical
+	// to pre-atlas_url requests for remotes that don't configure it (an API
+	// that predates atlas_url support may reject unknown keys).
+	if atlasURL != "" {
+		payload["atlas_url"] = atlasURL
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -825,26 +1036,67 @@ func publishNotify(apiBase, projectID, repoURL, ref, refName, s3Location, s3url,
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
-		return respBody, fmt.Errorf("API returned %d: %s", resp.StatusCode, string(respBody))
+		return respBody, &apiError{StatusCode: resp.StatusCode, Body: respBody}
 	}
 	return respBody, nil
 }
 
-// loadExoToken reads the JWT access token from the exo login token store.
+// apiError is returned by publishNotify for a non-2xx /publish response, so
+// callers can distinguish a 422 refusal (readable message, hard failure)
+// from other failures (soft warning, as before) without string-matching the
+// error text.
+type apiError struct {
+	StatusCode int
+	Body       []byte
+}
+
+func (e *apiError) Error() string {
+	return fmt.Sprintf("API returned %d: %s", e.StatusCode, string(e.Body))
+}
+
+// loadExoToken resolves the exo login bearer token.
+// Mirrors go/exo/commands/login/storage.go LoadToken and
+// go/exo-credential-helper/main.go loadBearerToken; keep these three in sync.
+// Precedence: EXO_TOKEN > EXO_TOKEN_FILE > EXO_CONFIG_DIR-derived path > default path.
 func loadExoToken() string {
-	configDir, err := os.UserConfigDir()
-	if err != nil {
-		return ""
+	if inline := os.Getenv("EXO_TOKEN"); inline != "" {
+		return extractAccessToken([]byte(inline))
 	}
-	tokenPath := filepath.Join(configDir, "exo", "credentials", "token.json")
+
+	tokenPath := os.Getenv("EXO_TOKEN_FILE")
+	if tokenPath == "" {
+		if configRoot := os.Getenv("EXO_CONFIG_DIR"); configRoot != "" {
+			tokenPath = filepath.Join(configRoot, "exo", "credentials", "token.json")
+		} else {
+			configDir, err := os.UserConfigDir()
+			if err != nil {
+				return ""
+			}
+			tokenPath = filepath.Join(configDir, "exo", "credentials", "token.json")
+		}
+	}
+
 	data, err := os.ReadFile(tokenPath)
 	if err != nil {
 		return ""
 	}
+	return extractAccessToken(data)
+}
+
+// extractAccessToken parses a JSON oauth2 token ({"access_token": "..."}),
+// or, if the data isn't JSON, treats it as a raw JWT/API key string.
+func extractAccessToken(data []byte) string {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 {
+		return ""
+	}
+	if trimmed[0] != '{' {
+		return string(trimmed)
+	}
 	var tok struct {
 		AccessToken string `json:"access_token"`
 	}
-	if err := json.Unmarshal(data, &tok); err != nil {
+	if err := json.Unmarshal(trimmed, &tok); err != nil {
 		return ""
 	}
 	return tok.AccessToken
@@ -921,6 +1173,7 @@ func main() {
 		case line == "LISTCONFIGS":
 			writeLine("CONFIG s3url")
 			writeLine("CONFIG instance_url")
+			writeLine("CONFIG atlas_url")
 			writeLine("CONFIG grants")
 			writeLine("CONFIGEND")
 			continue

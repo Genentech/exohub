@@ -1,6 +1,7 @@
 package login
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -9,6 +10,18 @@ import (
 
 	"golang.org/x/oauth2"
 )
+
+// makeJWT builds an unsigned JWT (header.payload.signature) with the given
+// payload claims, for testing raw-JWT token parsing.
+func makeJWT(t *testing.T, payload map[string]any) string {
+	t.Helper()
+	pb, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	header := "eyJhbGciOiJub25lIn0" // {"alg":"none"}
+	return header + "." + base64.RawURLEncoding.EncodeToString(pb) + ".sig"
+}
 
 // TestGetCredentialsDir verifies that the credentials directory is created correctly
 func TestGetCredentialsDir(t *testing.T) {
@@ -178,12 +191,13 @@ func TestLoadTokenNonExistent(t *testing.T) {
 }
 
 // TestLoadTokenInvalidJSON verifies error handling for corrupted token files
+// that look like JSON (leading '{') but fail to parse.
 func TestLoadTokenInvalidJSON(t *testing.T) {
 	tempDir := t.TempDir()
 	tokenFile := filepath.Join(tempDir, "invalid_token.json")
 
-	// Write invalid JSON
-	err := os.WriteFile(tokenFile, []byte("not valid json"), 0600)
+	// Write malformed JSON
+	err := os.WriteFile(tokenFile, []byte(`{"access_token": `), 0600)
 	if err != nil {
 		t.Fatalf("Failed to write test file: %v", err)
 	}
@@ -191,6 +205,108 @@ func TestLoadTokenInvalidJSON(t *testing.T) {
 	_, err = LoadToken(tokenFile)
 	if err == nil {
 		t.Error("LoadToken() should fail for invalid JSON")
+	}
+}
+
+// TestLoadTokenRawJWT verifies that a plain (non-JSON) token file is treated
+// as a raw JWT/API key access token.
+func TestLoadTokenRawJWT(t *testing.T) {
+	tempDir := t.TempDir()
+	tokenFile := filepath.Join(tempDir, "raw_token")
+
+	raw := "eyJhbGciOiJIUzI1NiJ9.payload.signature"
+	if err := os.WriteFile(tokenFile, []byte(raw), 0600); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	token, err := LoadToken(tokenFile)
+	if err != nil {
+		t.Fatalf("LoadToken() failed: %v", err)
+	}
+	if token.AccessToken != raw {
+		t.Errorf("AccessToken = %q, want %q", token.AccessToken, raw)
+	}
+}
+
+// TestLoadTokenRawJWTExpired verifies that a raw JWT with a past exp claim
+// decodes its expiry, so Valid() correctly reports false.
+func TestLoadTokenRawJWTExpired(t *testing.T) {
+	tempDir := t.TempDir()
+	tokenFile := filepath.Join(tempDir, "expired_raw_token")
+
+	raw := makeJWT(t, map[string]any{
+		"sub": "test-user",
+		"exp": time.Now().Add(-1 * time.Hour).Unix(),
+	})
+	if err := os.WriteFile(tokenFile, []byte(raw), 0600); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	token, err := LoadToken(tokenFile)
+	if err != nil {
+		t.Fatalf("LoadToken() failed: %v", err)
+	}
+	if token.AccessToken != raw {
+		t.Errorf("AccessToken = %q, want %q", token.AccessToken, raw)
+	}
+	if token.Expiry.IsZero() {
+		t.Fatal("Expiry should be set from the JWT's exp claim")
+	}
+	if token.Valid() {
+		t.Error("Valid() = true, want false for an expired raw JWT")
+	}
+}
+
+// TestLoadTokenRawOpaqueKey verifies that a raw token that isn't a decodable
+// JWT (an opaque API key) is left with a zero Expiry, i.e. never expiring.
+func TestLoadTokenRawOpaqueKey(t *testing.T) {
+	tempDir := t.TempDir()
+	tokenFile := filepath.Join(tempDir, "opaque_key")
+
+	raw := "sk-opaque-api-key-not-a-jwt"
+	if err := os.WriteFile(tokenFile, []byte(raw), 0600); err != nil {
+		t.Fatalf("Failed to write test file: %v", err)
+	}
+
+	token, err := LoadToken(tokenFile)
+	if err != nil {
+		t.Fatalf("LoadToken() failed: %v", err)
+	}
+	if token.AccessToken != raw {
+		t.Errorf("AccessToken = %q, want %q", token.AccessToken, raw)
+	}
+	if !token.Expiry.IsZero() {
+		t.Errorf("Expiry = %v, want zero for an opaque API key", token.Expiry)
+	}
+	if !token.Valid() {
+		t.Error("Valid() = false, want true for a non-expiring opaque key")
+	}
+}
+
+// TestLoadTokenFromEnvJSON verifies EXO_TOKEN as a JSON oauth2 token.
+func TestLoadTokenFromEnvJSON(t *testing.T) {
+	t.Setenv("EXO_TOKEN", `{"access_token": "json-token", "token_type": "Bearer"}`)
+
+	token, err := LoadToken("/nonexistent/path/should/not/be/used")
+	if err != nil {
+		t.Fatalf("LoadToken() failed: %v", err)
+	}
+	if token.AccessToken != "json-token" {
+		t.Errorf("AccessToken = %q, want %q", token.AccessToken, "json-token")
+	}
+}
+
+// TestLoadTokenFromEnvRawJWT verifies EXO_TOKEN as a raw JWT string (no leading '{').
+func TestLoadTokenFromEnvRawJWT(t *testing.T) {
+	raw := "eyJhbGciOiJIUzI1NiJ9.payload.signature"
+	t.Setenv("EXO_TOKEN", raw)
+
+	token, err := LoadToken("/nonexistent/path/should/not/be/used")
+	if err != nil {
+		t.Fatalf("LoadToken() failed: %v", err)
+	}
+	if token.AccessToken != raw {
+		t.Errorf("AccessToken = %q, want %q", token.AccessToken, raw)
 	}
 }
 

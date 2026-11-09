@@ -36,9 +36,19 @@ exo login
 After a successful login:
 
 - The OAuth token (access + refresh token) is stored in
-  `~/.config/exo/credentials/token.json` (or `$EXO_CONFIG_DIR/exo/credentials/token.json`).
+  `~/.config/exo/credentials/token.json` (or `$EXO_CONFIG_DIR/exo/credentials/token.json`,
+  or `$EXO_TOKEN_FILE` when set).
 - Base AWS credentials are written to `~/.aws/credentials` under the
   `exohub` profile (overridable via `$EXOHUB_AWS_PROFILE`).
+
+`EXO_TOKEN` passes a token inline, bypassing the token file entirely (useful
+for CI/headless use). It takes precedence over `EXO_TOKEN_FILE` and the
+default token path, and is honoured by `exo`, `exo-credential-helper`, and
+`git-annex-remote-artifactdb-export`. It accepts either:
+
+- a JSON-encoded OAuth2 token, e.g. `{"access_token": "...", "token_type": "Bearer"}`
+- a raw JWT or API key string (no leading `{`), used directly as the bearer
+  token (e.g. for headless publish/indexing in CI).
 
 Both the internal SSO provider and the generic OIDC provider write credentials in
 the same format, so the files are interchangeable between builds.

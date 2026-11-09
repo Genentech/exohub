@@ -70,6 +70,7 @@ the id of the commit it lives in and because paths change on rename:
 | Annexed file | `urn:exohub:annex:<git-annex key>` |
 | Git-tracked file | `urn:exohub:git:blob:<object id>` |
 | Folder collection | `urn:exohub:git:tree:<object id>` |
+| Named collection | `urn:exohub:collection:sha256:<hex digest>` |
 | Record | `urn:exohub:record:<UUIDv7>` |
 | Activity | `urn:exohub:activity:<UUIDv7>` |
 | Person | `urn:exohub:agent:person:<unix id>` |
@@ -284,6 +285,255 @@ Dropping `--dry-run` writes and stages this record. `--revision-of` is
 repeatable and also accepts an IRI (taken as-is) or a plain path (resolved
 from the index, like `--used`).
 
+### Named collections
+
+A folder collection covers one directory. A **named collection** covers an
+arbitrary, named set of files that is not one folder — "the 48 BAMs of
+cohort A" scattered across directories, a release subset, a sample sheet
+plus its FASTQs. It is a PROV `Collection`, identified by a digest over its
+current members' own content ids, immutable like a folder collection: any
+member change gives the collection a new id.
+
+Declare a named collection with a committed manifest,
+`.exohub/collections/<name>.json`, where `<name>` matches
+`[a-z0-9][a-z0-9-]*`:
+
+<!-- excerpt -->
+```json
+{
+  "paths": ["samples/cohortA_manifest.tsv", "cohort_a/sample1.bam", "data/expr.tdb/"],
+  "globs": ["cohort_a/**/*.bam", "release_subset/**/*.vcf.gz"],
+  "members": ["exohub:other-project:collection:raw-fastqs@v3"]
+}
+```
+
+- `paths` is a literal list: plain file paths, a folder path ending in `/`
+  (a nested folder collection member), or `collection:<other-name>` (a
+  nested named collection — see "Overlap and nesting" below).
+- `globs` uses the exact `annex.routing`/`provenance.require` glob syntax
+  (see [annex-routing.md](annex-routing.md)) and matches tracked file
+  paths, not folders.
+- `members` is a list of pinned ExoHub references — anything `exo add
+  exohub:...` accepts (a file, a folder, a whole project version, or
+  another project's `collection:<name>`), always pinned to an exact
+  `@<version>`; an unpinned reference is a format error. This is how a
+  named collection includes content defined and versioned in *another*
+  project (design "external pinned members in collection manifests"): a
+  reference to another project's `collection:<name>` flattens that
+  project's current member set into this one exactly like a local
+  `collection:<other-name>` nested `paths` entry does, so a change to the
+  upstream collection changes this one's id too; a reference to a single
+  file or a whole project/folder resolves to that content's git blob or
+  tree id. `exo add exohub:...` is what actually imports the referenced
+  content into the worktree with a matching content id — the manifest only
+  declares that an imported copy, once present, is a member.
+- At least one of `paths`/`globs`/`members` must be non-empty. Resolved
+  members from all three are unioned and de-duplicated by resolved content
+  id.
+- A `paths` entry that no longer exists at the checked state is dropped,
+  the same way a glob naturally stops matching a deleted file — not an
+  error for read-only resolution (`validate`, `show`, `bundle`). Writing a
+  new record (`exo provenance add --generated collection:<name>`) rejects a
+  missing or modified member instead, the same "untracked or modified, run
+  `exo add` first" error a folder collection already gives.
+
+**A `members` reference is resolved over the network, and the result
+locked, only by `exo provenance add --generated collection:<name>` (or
+`--revision-of collection:<name>`)**. That command writes/refreshes a
+committed lock file, `.exohub/collections/<name>.lock.json`, mapping each
+`members` reference to the commit and content/tree/collection id it
+resolved to. Every other reader — `exo provenance validate`, `show`,
+`provenance.require`, `exo doctor`, and `exo bundle` by default — reads that
+lock file only and never touches the network, so a collection's id and
+coverage stay stable even if the source project's pinned branch (`@main`)
+later moves; a `members` reference with no lock entry is a validate error
+naming the `exo provenance add` command that resolves and locks it. Run
+`exo bundle --verify` to re-resolve every `members` reference over the
+network and fail the bundle if any no longer matches its lock entry — the
+way to confirm a lock isn't stale before shipping a bundle.
+
+`exo provenance validate` checks every manifest's `paths`/`globs`/`members`
+shape and every `members` reference's format, pinning, and presence of a
+lock entry fully offline — a malformed manifest or an unlocked reference is
+always reported even with no network reachable.
+
+Use `collection:<name>` wherever a path is accepted for the collection as a
+whole:
+
+```sh
+exo provenance add \
+  --generated collection:cohort-a-bams \
+  --agent person:alice
+```
+
+resolves the manifest at the worktree+index, computes the member list and
+the collection id, and writes the generated node as a `Collection` with
+`label "collection:cohort-a-bams"` and `hadMember` set to every resolved
+member's content id — the command line never lists members; the manifest is
+the single source of truth for membership. `--revision-of
+collection:<name>` and `--revision-of <ref>:collection:<name>` resolve the
+manifest at the index or at `<ref>`'s tree respectively, exactly parallel to
+a folder's `<ref>:<path>/`; a `--revision-of` value resolving to the same
+collection id as a `--generated` value is rejected, since an entity cannot
+be a revision of itself.
+
+`exo provenance validate`, `provenance.require` and `exo bundle` treat a
+named collection exactly like a folder collection: a record covers its
+members only while the collection's current id matches the record's
+subject. `exo provenance show <path>` falls back, when `<path>` has no
+record of its own, in this order: (1) the nearest enclosing covered folder
+collection, then (2) a covered named collection `<path>` is a member of;
+when more than one named collection applies, the human-readable output
+shows the first by name (lexicographically) and names the others, while
+`--json` lists every applicable collection.
+
+#### Overlap and nesting
+
+- **A file in several named collections** is allowed: coverage is a union,
+  and the compiled bundle's `lineage.collections` (below) lists every
+  applicable collection.
+- **A file in both a folder collection and a named collection** is allowed:
+  a folder collection is itself a valid `paths` member of a named
+  collection (`"paths": ["data/expr.tdb/"]`), so a named collection can
+  group a TileDB array together with loose files. `show`'s fallback order
+  above still prefers the folder when both apply and the file itself has no
+  record, since the folder is the more specific, filesystem-scoped fact.
+- **Nested named collections** are allowed via `collection:<other-name>` in
+  `paths`: the nested collection's current id becomes one member of the
+  outer collection's digest, so a change inside the nested collection
+  changes the outer collection's id too. A cycle through nested collections
+  (`collection:a` nesting `collection:b` nesting `collection:a`) is
+  rejected by `exo provenance validate` and `exo provenance add` as an
+  error naming the cycle.
+
+#### Minimum `exo` version
+
+The `hadMember` PROV term and the `urn:exohub:collection:sha256:` identifier
+kind, along with the `exo:repository` and `exo:commit` terms `exo add
+exohub:...`'s automatic import records use (see "Importing from another
+project" below), are recognized starting in **exo v0.132.0**. A repository only needs
+this version once it creates its first `.exohub/collections/*.json`
+manifest or its first collection record; repositories that never do are
+unaffected on any `exo` version. An older `exo` binary cannot be patched
+retroactively to understand either one, so it fails outright, with one of
+two exact errors, rather than a friendlier message:
+
+- an unrecognized `hadMember` term: `@graph[%d] (%s): property "hadMember"
+  is not a context term or a declared prefix`
+- an unrecognized `collection:sha256:` id:
+  `%s is not a recognized urn:exohub: identifier kind`
+
+Either failure stops `exo provenance validate` and, since `exo bundle` runs
+the same parse/validate path before compiling, stops `exo bundle` from
+publishing. `exo doctor` prints an informational line naming this minimum
+version whenever it finds any `.exohub/collections/*.json` manifest, so the
+requirement is visible up front instead of discovered from a parse error.
+
+**Migration note.** The two datasets using provenance today,
+`rnaseq-yeast-gse110004-analysis-mini` (a folder collection) and
+`rnaseq-yeast-gse110004-fastq-mini`, do not use named collections and
+remain valid on every `exo` version without changes. They must still be
+**re-bundled** with `exo` at or above v0.132.0 so their catalog documents
+carry `lineage.collections` going forward (see "The bundle output" below)
+and **re-published** so the live index picks up the new shape. Re-bundling
+and verifying the output locally is this change's responsibility; **the
+operator runs the actual publish to the catalog, not the worker**.
+
+### Importing from another project (`exo add exohub:...`)
+
+`exo add exohub:<project>[:path]@<version>` imports an asset, a folder, a
+whole project, or a named collection from another exohub project. Importing
+writes an automatic `recorded` import record alongside the materialized
+files -- the user never runs `exo provenance add` for this: the record
+states what was imported, from where, and who did the import, without
+claiming the imported content was regenerated.
+
+```sh
+exo add exohub:rnaseq-yeast-gse110004-fastq-mini:fastq/SRR6357070_1.fastq.gz@main
+```
+
+writes a record whose `@graph` has an `Activity` that `used` the file's own
+content id (its git-annex key or git blob id -- the same id the source
+project itself uses, since the file is imported byte-identical) and is
+`wasAssociatedWith` the importing person, and an `Entity` for that content
+id carrying the source's `label` (`"<project>@<version>"`), `exo:path` (the
+file's path in the source project), `exo:repository` and `exo:commit`:
+
+```json
+{
+  "@context": "https://genentech.github.io/exohub/ns/provenance/v1.jsonld",
+  "@id": "urn:exohub:record:01a13bc5-6a2a-7309-b782-95be6a4916d8",
+  "exo:assertion": "recorded",
+  "exo:assertedBy": "urn:exohub:agent:person:alice",
+  "generatedAtTime": "2026-10-14T18:55:51Z",
+  "@graph": [
+    {
+      "@id": "urn:exohub:activity:01a13bc5-6a2a-72f8-983f-8f5c1d457563",
+      "@type": "Activity",
+      "used": "urn:exohub:annex:SHA256E-s2239317--d4e4877bac978b7952f0d544fc52ebff5411d351d129f1f056fa43f11da9af2.fastq.gz",
+      "wasAssociatedWith": "urn:exohub:agent:person:alice"
+    },
+    {
+      "@id": "urn:exohub:agent:person:alice",
+      "@type": "Person"
+    },
+    {
+      "@id": "urn:exohub:annex:SHA256E-s2239317--d4e4877bac978b7952f0d544fc52ebff5411d351d129f1f056fa43f11da9af2.fastq.gz",
+      "@type": "Entity",
+      "label": "rnaseq-yeast-gse110004-fastq-mini@main",
+      "exo:path": "fastq/SRR6357070_1.fastq.gz",
+      "exo:repository": "git@gitlab.example.com:exohub/rnaseq-yeast-gse110004-fastq-mini.git",
+      "exo:commit": "a1b2c3d4e5f6071829384756473829100a0b0c0"
+    }
+  ]
+}
+```
+
+There is no `wasGeneratedBy` for the imported file: it keeps the content id
+and generation history it already has in the source project, not a new one
+local to the importer. `exo provenance show` and `exo bundle`'s
+`lineage.inputs`/`lineage.generated_by` for this file therefore come from
+the source project's own records, copied alongside the import record (see
+below) -- not from the import record itself.
+
+Importing a whole project or a folder also records the local destination:
+
+```sh
+exo add exohub:rnaseq-yeast-gse110004-fastq-mini@main --to inputs/fastq-mini/
+```
+
+adds, in the same record, a `Collection` node for `inputs/fastq-mini/`'s
+own tree id with `wasDerivedFrom` and `hadPrimarySource` the source
+project's root tree id (`urn:exohub:git:tree:<oid>`) -- "this folder came
+from `rnaseq-yeast-gse110004-fastq-mini@main`" is explicit, queryable
+provenance, not just a path convention. A single-asset import, or a folder
+or collection import left at the current directory (no `--to`), has no
+such node: there is no discrete local folder to name. A `collection:<name>`
+reference's source id is the collection's own digest over its members'
+content ids, computed the same way `exo provenance add --generated
+collection:<name>` computes it in the source project.
+
+Alongside the import record, `exo add exohub:...` copies, byte-identical,
+every record in the source project's own `.exohub/provenance/` that
+directly covers the imported content -- the records documenting how it was
+generated and what it was derived from (not the source project's whole
+history, and not records for files the import didn't select). A record
+already present locally (matched by its own repo-relative path, which is
+derived from its own id) is never duplicated. This is what lets `exo
+provenance show`/`validate`/`bundle` resolve the imported files'
+generation, inputs and coverage without any network access once the import
+is staged.
+
+`exo bundle`'s `lineage.collections` (see "The bundle output" below) also
+carries the import's source: `project`/`version` on a `lineage.collections`
+entry name the other ExoHub project and version the collection comes
+from -- defined there (an external member pinned into a local manifest) or
+imported from there (`exo add exohub:...`). For an import, a folder or
+named collection entry gets these fields set from the source project and
+version whenever the collection was created by an import (`hadPrimarySource`
+on its node), so a catalog consumer can tell where a locally-grouped
+collection of files originally came from.
+
 ### An AI agent acting on behalf of a user
 
 An AI agent or script identifies itself as a `SoftwareAgent`, states who it
@@ -364,8 +614,11 @@ agent has no `exo:evidence`.
 A file is **covered** at a ref when its content id is the subject of a
 `wasGeneratedBy`, `wasDerivedFrom`, `wasAttributedTo` or `wasRevisionOf`
 statement in a non-superseded record, or when an enclosing folder collection
-with the same tree id is covered. Being only `used` as an input does not
-cover a file. `exo provenance validate` always reports a coverage summary.
+or a named collection ([above](#named-collections)) with the same current
+id is covered. Being only `used` as an input does not cover a file. `exo
+provenance validate` always reports a coverage summary. Coverage through a
+folder collection and through one or more named collections is unioned: a
+file can be covered through any applicable mechanism.
 
 Two keys under `provenance` in `.exohub/config` use the same glob syntax as
 `annex.routing` (see [annex-routing.md](annex-routing.md)):
@@ -392,7 +645,11 @@ provenance:
 - `provenance.collections` declares folders that are units by default
   (patterns end in `/` and match directory paths). Files under a declared
   folder are covered only through the folder, and `exo provenance show`
-  resolves them to the folder.
+  resolves them to the folder. This mechanism is distinct from named
+  collections ([above](#named-collections)): `provenance.collections` picks
+  out folders automatically by glob, while a named collection is an
+  explicit, arbitrary set declared in its own manifest; a file can be
+  covered through both.
 
 ### `install-hook` and the `pre-commit` framework
 
@@ -432,11 +689,18 @@ When the bundle ref's tree contains `.exohub/provenance/` records (and
   filters, `--scope`, `--include-hidden` and path filters — **ignoring**
   `--incremental` and `--resume`, plus their transitive upstream chain and
   the asserting agents (and `actedOnBehalfOf` chains) that back every kept
-  statement;
+  statement; matching named collections ([above](#named-collections)) and
+  their current members are included in this scope and in `provenance.require`
+  enforcement alongside folder collections;
 - `exo:path` on a kept node is set to its path at the bundle ref whenever its
   content id or folder tree id exists anywhere at the ref, selected or not;
   a node whose content no longer exists anywhere at the ref keeps its
   recorded `exo:path`, if any.
+- by default, a named collection with external `members` resolves them from
+  its committed `.exohub/collections/<name>.lock.json` only, never the
+  network (see [above](#named-collections)); `exo bundle --verify`
+  re-resolves every such `members` reference over the network instead and
+  fails the bundle if any no longer matches its lock entry.
 
 `bundle.json` gains an optional `provenance` object (`file`, `record_count`,
 `entity_count`). `provenance.jsonld` is excluded from artipacks, like
@@ -460,10 +724,23 @@ folder collection, gets a `lineage` object:
 - `revision_of` and `attributed_to`;
 - `records` — the contributing records (superseded records are never
   listed, only the correcting one);
-- `collection` — set instead of the above, with the enclosing folder's `id`
-  and `path`, when the artifact has no record of its own but lies under a
-  covered folder collection; members are matched against the folder's
-  **current** tree at the ref.
+- `collections` — one entry per folder or named collection the artifact is
+  a **current** member of, each `{id, kind}` plus either `path` (`kind:
+  "folder"`) or `name` (`kind: "named"`, the bare manifest name with no
+  `collection:` prefix) — never both on one entry. A `kind: "named"` entry
+  for a collection reached through another manifest's `members` (an
+  external collection) additionally carries `project` and `version`, the
+  ExoHub project and pinned version it is defined in; both are omitted for
+  an ordinary same-project named collection. An artifact with no
+  record of its own but covered only through a collection gets `covered:
+  true` with no `generated_by`/`inputs`/etc. of its own; those are inherited
+  from the collection's record instead. `exo bundle` writes **only**
+  `lineage.collections`; it no longer writes the single-object
+  `lineage.collection` field for any artifact, folder-collection member or
+  otherwise. `collection` stays in the `exohub-artifact`/`exohub-markdown`
+  schemas, marked deprecated in its description, so a document from an
+  older bundle, or any document not yet re-bundled, still validates — it is
+  simply no longer produced.
 
 Lineage only carries these direct, PROV-aligned facts — not the transitive
 closure of upstream nodes. Transitive traversal belongs to consumers, and
@@ -479,9 +756,12 @@ file's document is unchanged from a bundle without this feature.
 exohub-provenance/v1.json`) next to `provenance.jsonld` at the bundle root:
 `ref`, `ref_name`, `record_count`, `entity_count`, and the whole compiled
 dataset flattened into `records`, `agents`, `activities` and `entities`
-lists, plus `graph_file: provenance.jsonld`. It always describes the whole
-dataset at the ref, including with `--incremental`. Like `provenance.jsonld`
-and `bundle.json`, it is excluded from artipacks.
+lists, plus `graph_file: provenance.jsonld`. A `Collection`-typed entity
+(folder or named) gets an optional `member_count` — an integer, not the
+member list, which stays only in `provenance.jsonld`'s `hadMember`
+statements. It always describes the whole dataset at the ref, including
+with `--incremental`. Like `provenance.jsonld` and `bundle.json`, it is
+excluded from artipacks.
 
 #### `--incremental` and lineage
 
@@ -516,8 +796,11 @@ A path that is only `used` as an input, with no statement of its own, falls
 back the same way an uncovered path does: it is folded into a **"used as an
 input by"** list instead of being shown as covered. When the path has no
 provenance of its own, or lies under a declared `provenance.collections`
-folder, `show` falls back to the nearest enclosing covered folder collection
-and says so.
+folder, `show` falls back, in order: (1) the nearest enclosing covered
+folder collection, and says so; failing that, (2) a covered named
+collection ([above](#named-collections)) the path is a member of. When more
+than one named collection applies, the default output shows the first by
+name and names the others; `--json` lists every applicable collection.
 
 The walk follows `--depth` upstream hops (default unlimited) and detects
 cycles. A separate "Commit history" section lists the path's commits as
@@ -546,6 +829,11 @@ repository should:
 2. Identify as a `SoftwareAgent` with `--agent software:<name>`, pass
    `--model` when applicable, and state who you acted for with
    `--on-behalf-of person:<unix id>`.
+   - Use `--generated collection:<name>` instead of a path when the output
+     is a declared named collection ([above](#named-collections)) rather
+     than a single file or folder; the manifest, not the command line,
+     lists its members. This requires `exo` at or above the version that
+     added named collections (see "Minimum `exo` version" above).
 3. Include `--evidence` for inferred claims — anything you did not directly
    observe (for example, claiming a generation when you read the activity's
    output from a log rather than from writing it yourself).

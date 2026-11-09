@@ -92,7 +92,12 @@ func runValidate(cmd *cobra.Command, opts validateOptions) error {
 }
 
 func printReport(cmd *cobra.Command, report *lib.Report, hasRequireRules bool) {
-	if report.RecordCount == 0 && !hasRequireRules {
+	// A repository with a malformed collection manifest but no records and
+	// no provenance.require rules (design D5 of add-exohub-asset-import:
+	// offline format/pinning checks always run) still has a Finding to
+	// report, not just "no records" — matching exo doctor's own "SKIP
+	// requires no records and no rules and no findings" rule.
+	if report.RecordCount == 0 && !hasRequireRules && len(report.Findings) == 0 {
 		fmt.Fprintln(cmd.OutOrStdout(), "No provenance records found.")
 		return
 	}

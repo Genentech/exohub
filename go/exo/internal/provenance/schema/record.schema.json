@@ -79,7 +79,7 @@
         "exo", "prov", "rdfs", "xsd",
         "Entity", "Collection", "Activity", "Agent", "Person", "SoftwareAgent", "Organization",
         "used", "wasGeneratedBy", "wasDerivedFrom", "wasRevisionOf", "wasAssociatedWith",
-        "wasAttributedTo", "actedOnBehalfOf", "hadPlan", "startedAtTime", "endedAtTime",
+        "wasAttributedTo", "actedOnBehalfOf", "hadPlan", "hadMember", "hadPrimarySource", "startedAtTime", "endedAtTime",
         "generatedAtTime", "label"
       ]
     },
@@ -148,6 +148,8 @@
         "wasAttributedTo": { "$ref": "#/definitions/idRefOrArray" },
         "actedOnBehalfOf": { "$ref": "#/definitions/idRefOrArray" },
         "hadPlan": { "$ref": "#/definitions/idRefOrArray" },
+        "hadMember": { "$ref": "#/definitions/idRefOrArray" },
+        "hadPrimarySource": { "$ref": "#/definitions/idRefOrArray" },
         "startedAtTime": { "type": "string", "format": "date-time" },
         "endedAtTime": { "type": "string", "format": "date-time" },
         "generatedAtTime": { "type": "string", "format": "date-time" },

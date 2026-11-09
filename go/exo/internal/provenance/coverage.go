@@ -6,16 +6,16 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Genentech/exohub/go/exo/commands/add"
 	"github.com/Genentech/exohub/go/exo/internal/pathglob"
+	"github.com/Genentech/exohub/go/exo/internal/routing"
 )
 
 // coveringProperties lists the node properties whose presence on a node
-// covers it (design D14): generation, derivation, attribution and
-// revision statements. Being only "used" as an input does not cover a
-// node.
+// covers it (design D14): generation, derivation, attribution, revision
+// and primary-source (exo-cli#147, imported assets) statements. Being
+// only "used" as an input does not cover a node.
 var coveringProperties = []string{
-	"wasGeneratedBy", "wasDerivedFrom", "wasAttributedTo", "wasRevisionOf",
+	"wasGeneratedBy", "wasDerivedFrom", "wasAttributedTo", "wasRevisionOf", "hadPrimarySource",
 }
 
 // CoverageSummary is the result of evaluating coverage at a Reader's
@@ -40,7 +40,7 @@ func supersededIDs(parsed []parsedRecord) map[string]bool {
 
 // coveredEntityIDs returns the set of node ids covered by a non-superseded
 // record (design D14): any node with a wasGeneratedBy, wasDerivedFrom,
-// wasAttributedTo or wasRevisionOf property.
+// wasAttributedTo, wasRevisionOf or hadPrimarySource property.
 func coveredEntityIDs(parsed []parsedRecord, superseded map[string]bool) map[string]bool {
 	covered := map[string]bool{}
 	for _, p := range parsed {
@@ -62,7 +62,7 @@ func coveredEntityIDs(parsed []parsedRecord, superseded map[string]bool) map[str
 // trackedFileEntries returns every tracked file's git entry at reader's
 // checked state, excluding protected paths (design D15 "Coverage
 // universe": .exohub/**, .gitignore, .gitattributes, the same list as
-// add.IsProtectedPath). It resolves the whole file set in a single git
+// routing.IsProtectedPath). It resolves the whole file set in a single git
 // invocation via Reader.FileEntries (review: "coverage spawns several git
 // processes per tracked file").
 func trackedFileEntries(reader *Reader) (map[string]FileEntry, error) {
@@ -72,7 +72,7 @@ func trackedFileEntries(reader *Reader) (map[string]FileEntry, error) {
 	}
 	entries := make(map[string]FileEntry, len(all))
 	for path, e := range all {
-		protected, err := add.IsProtectedPath(path)
+		protected, err := routing.IsProtectedPath(path)
 		if err != nil {
 			return nil, fmt.Errorf("check protected path %s: %w", path, err)
 		}
@@ -154,8 +154,27 @@ func evaluateCoverageForEntries(reader *Reader, entries map[string]FileEntry, pa
 	}
 
 	covered := coveredEntityIDs(parsed, superseded)
+
+	// A tracked file is also covered when it is a (possibly nested) member
+	// of a named collection (design D6, D7) whose own current id is covered
+	// by a non-superseded record, exactly like a folder collection's tree
+	// id. namedCoverage flattens every such covered named collection's
+	// member ids (leaf content ids and folder tree ids) up front, so
+	// fileIsCovered only needs a map lookup per file, not a per-file
+	// manifest resolution.
+	namedCoverage, err := namedCollectionCoverage(reader, covered)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve named collections: %w", err)
+	}
+
 	hasTreeCoverage := false
 	for id := range covered {
+		if strings.HasPrefix(id, GitTreeURNPrefix) {
+			hasTreeCoverage = true
+			break
+		}
+	}
+	for id := range namedCoverage {
 		if strings.HasPrefix(id, GitTreeURNPrefix) {
 			hasTreeCoverage = true
 			break
@@ -183,7 +202,7 @@ func evaluateCoverageForEntries(reader *Reader, entries map[string]FileEntry, pa
 	summary := &CoverageSummary{}
 	var uncovered []string
 	for _, path := range files {
-		isCovered, err := fileIsCovered(path, declared, covered, hasTreeCoverage, contentIDs, treeIDs)
+		isCovered, err := fileIsCovered(path, declared, covered, namedCoverage, hasTreeCoverage, contentIDs, treeIDs)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -197,7 +216,39 @@ func evaluateCoverageForEntries(reader *Reader, entries map[string]FileEntry, pa
 	return summary, uncovered, nil
 }
 
-func fileIsCovered(path string, declared []string, covered map[string]bool, hasTreeCoverage bool, contentIDs, treeIDs map[string]string) (bool, error) {
+// namedCollectionCoverage resolves every named collection declared at
+// reader's checked state (design D2) and, for each one whose current id
+// (D1) is present in covered (a non-superseded record's subject), unions
+// its flattened coverage set (ResolveCollectionCoverage: every leaf content
+// id and folder tree id it covers, directly or through a nested named
+// collection, design D6, D7) into the result. A named collection whose id
+// is not covered contributes nothing: it is reported as uncovered exactly
+// like an ordinary file would be.
+func namedCollectionCoverage(reader *Reader, covered map[string]bool) (map[string]bool, error) {
+	names, err := ListCollectionNames(reader)
+	if err != nil {
+		return nil, err
+	}
+	if len(names) == 0 {
+		return nil, nil
+	}
+	result := map[string]bool{}
+	for _, name := range names {
+		id, coveredIDs, _, err := ResolveCollectionCoverage(reader, name)
+		if err != nil {
+			return nil, fmt.Errorf("collection:%s: %w", name, err)
+		}
+		if !covered[id] {
+			continue
+		}
+		for cid := range coveredIDs {
+			result[cid] = true
+		}
+	}
+	return result, nil
+}
+
+func fileIsCovered(path string, declared []string, covered, namedCoverage map[string]bool, hasTreeCoverage bool, contentIDs, treeIDs map[string]string) (bool, error) {
 	if len(declared) > 0 {
 		dir, err := findDeclaredAncestor(path, declared)
 		if err != nil {
@@ -205,17 +256,17 @@ func fileIsCovered(path string, declared []string, covered map[string]bool, hasT
 		}
 		if dir != "" {
 			id, ok := treeIDs[dir]
-			return ok && covered[id], nil
+			return ok && (covered[id] || namedCoverage[id]), nil
 		}
 	}
 
-	if id, ok := contentIDs[path]; ok && covered[id] {
+	if id, ok := contentIDs[path]; ok && (covered[id] || namedCoverage[id]) {
 		return true, nil
 	}
 
 	if hasTreeCoverage {
 		for _, dir := range pathAncestors(path) {
-			if id, ok := treeIDs[dir]; ok && covered[id] {
+			if id, ok := treeIDs[dir]; ok && (covered[id] || namedCoverage[id]) {
 				return true, nil
 			}
 		}
@@ -271,10 +322,11 @@ func evaluateRequire(reader *Reader, uncoveredPaths, requireGlobs []string) ([]s
 // provenance.require pattern and are not covered by any non-superseded
 // record, at reader's checked state (design D8 "Bundle enforces
 // provenance.require", D15 "Bundle scope"): coverage (declared
-// collections, folder collections, D14) is evaluated exactly like `exo
-// provenance validate`, restricted to selected instead of every tracked
-// file, since a bundle only needs to enforce its own selected artifacts.
-// selected is repo-relative file paths (not directories).
+// collections, folder collections, named collections, D14, D6) is
+// evaluated exactly like `exo provenance validate`, restricted to selected
+// instead of every tracked file, since a bundle only needs to enforce its
+// own selected artifacts. selected is repo-relative file paths (not
+// directories).
 func RequireViolations(reader *Reader, selected []string) ([]string, error) {
 	cfg, err := reader.LoadConfig()
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 
+	initcmd "github.com/Genentech/exohub/go/exo/commands/init"
 	"github.com/Genentech/exohub/go/exo/commandutil"
 	logging "github.com/Genentech/exohub/go/exo/commandutil/logging"
 	"github.com/Genentech/exohub/go/exo/internal/defaults"
@@ -187,6 +188,10 @@ Note: Multiple --path flags require --branch-prefix flag.`,
 					continue
 				}
 
+				if isReadonlyRemote(remote) {
+					exitWithError(fmt.Errorf("remote '%s' is declared readonly in .exohub/remotes and cannot be an export target", remote))
+				}
+
 				fmt.Printf("Enabling git-annex remote '%s'\n", remote)
 				if err := runCommand([]string{"git", "annex", "enableremote", remote}); err != nil {
 					exitWithError(fmt.Errorf("failed to enable remote '%s'", remote))
@@ -279,6 +284,22 @@ Note: Multiple --path flags require --branch-prefix flag.`,
 	rootCmd.Flags().BoolVar(&autoYes, "yes", false, "Automatically confirm tracking branch updates")
 
 	return rootCmd
+}
+
+// isReadonlyRemote reports whether remote is declared `readonly: true` in
+// .exohub/remotes (exo-cli#147): such a remote (e.g. one importing another
+// project's storage) must never be an export/copy target.
+func isReadonlyRemote(remote string) bool {
+	remotesConfig, err := initcmd.LoadRemotesConfig()
+	if err != nil {
+		return false
+	}
+	for _, r := range remotesConfig.Remotes {
+		if r.Name == remote {
+			return r.Readonly
+		}
+	}
+	return false
 }
 
 func exitWithError(err error) {

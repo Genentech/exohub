@@ -188,7 +188,7 @@ func TestSplitArgs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			locals, urls, flags, _, _, _, _, _, err := splitArgs(tt.args)
+			locals, urls, _, flags, _, _, _, _, _, _, _, _, err := splitArgs(tt.args)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1341,6 +1341,116 @@ func TestAddPlainModeSkipsDroppedAnnexContent(t *testing.T) {
 	}
 	if strings.Contains(explainOut, "--reroute") {
 		t.Fatalf("expected no reroute hint for a dropped, locked annex file: %q", explainOut)
+	}
+}
+
+// TestAddPlainModeSkipsDeletedTrackedFile is an end-to-end regression test
+// for issue #143: `exo add <dir>` must not fail as a whole when a tracked
+// file covered by <dir> was removed from disk (deletion not yet staged); it
+// must still stage the other new/modified files found alongside it, and
+// leave the deleted file's deletion unstaged, like `git annex add` would.
+func TestAddPlainModeSkipsDeletedTrackedFile(t *testing.T) {
+	_, restore := initGitAnnexRepo(t)
+	defer restore()
+
+	if err := os.MkdirAll("data", 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("data/old.csv", []byte("o\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("data/keep.csv", []byte("k\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "add", "data").CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
+	}
+	if out, err := exec.Command("git", "commit", "-q", "-m", "init").CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
+	}
+
+	// Remove a tracked file from disk without staging the deletion, then
+	// create a new file next to it, mirroring the issue's reproduction.
+	if err := os.Remove("data/old.csv"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("data/new.csv", []byte("n\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := NewCommand()
+	cmd.SetArgs([]string{"data"})
+	var errBuf bytes.Buffer
+	cmd.SetErr(&errBuf)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("exo add data returned error when a tracked file was deleted: %v", err)
+	}
+
+	out, err := exec.Command("git", "status", "--porcelain").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := string(out)
+	if !strings.Contains(status, " D data/old.csv") {
+		t.Errorf("expected old.csv's deletion to remain unstaged (\" D data/old.csv\"), got status:\n%s", status)
+	}
+	if !strings.Contains(status, "new.csv") || strings.Contains(status, "?? data/new.csv") {
+		t.Errorf("expected new.csv to be staged, got status:\n%s", status)
+	}
+
+	// The maître's review on MR !278 asked for a stderr notice naming the
+	// skipped file, since a user running `exo add data` would otherwise have
+	// no way to learn a deletion was left unstaged (which `exo bundle`/`exo
+	// publish` then refuses to publish over).
+	if notice := errBuf.String(); !strings.Contains(notice, "skipped 1 tracked file") || !strings.Contains(notice, "data/old.csv") {
+		t.Errorf("expected a stderr notice naming the skipped deleted file, got: %q", notice)
+	}
+}
+
+// TestAddPlainModeSkipsDeletedTrackedFileExplicitPath mirrors
+// TestAddPlainModeSkipsDeletedTrackedFile but names the deleted file
+// explicitly on the command line, per the maître's review on MR !278:
+// `exo add data/old.csv` must not silently do nothing when old.csv was
+// removed from disk — it must still exit 0 (issue #143) but print a notice
+// naming the skipped file.
+func TestAddPlainModeSkipsDeletedTrackedFileExplicitPath(t *testing.T) {
+	_, restore := initGitAnnexRepo(t)
+	defer restore()
+
+	if err := os.MkdirAll("data", 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile("data/old.csv", []byte("o\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "add", "data").CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
+	}
+	if out, err := exec.Command("git", "commit", "-q", "-m", "init").CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
+	}
+	if err := os.Remove("data/old.csv"); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := NewCommand()
+	cmd.SetArgs([]string{"data/old.csv"})
+	var errBuf bytes.Buffer
+	cmd.SetErr(&errBuf)
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("exo add data/old.csv (explicit, deleted) returned error: %v", err)
+	}
+
+	if notice := errBuf.String(); !strings.Contains(notice, "skipped 1 tracked file") || !strings.Contains(notice, "data/old.csv") {
+		t.Errorf("expected a stderr notice naming the explicitly-named skipped file, got: %q", notice)
+	}
+
+	out, err := exec.Command("git", "status", "--porcelain").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status := string(out); !strings.Contains(status, " D data/old.csv") {
+		t.Errorf("expected old.csv's deletion to remain unstaged (\" D data/old.csv\"), got status:\n%s", status)
 	}
 }
 

@@ -344,6 +344,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				batch := m.unloadDocument()
 				return m, tea.Batch(batch...)
 			}
+			// Back out of a 'u' ("used by") results list to the document it was
+			// triggered from, rather than just sitting on the results.
+			if m.state == stateShowStash && m.stash.usedByReturnID != "" &&
+				m.stash.filterState != filtering && !m.stash.schemaListVisible && !m.stash.versionListVisible {
+				id := m.stash.usedByReturnID
+				m.stash.usedByReturnID = ""
+				m.stash.resultsTitle = ""
+				m.stash.resultsEmptyMessage = ""
+				md := &markdown{ArfifactDBID: id, Extra: Extra{ID: id}}
+				cmds = append(cmds, m.stash.openMarkdown(md))
+				return m, tea.Batch(cmds...)
+			}
 
 		case "t":
 			// Toggle download pane/panel — but not when a text input is focused
@@ -618,6 +630,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// normalize/sanitize, ensuring _extra is always their
 		m.common.search.Fields = SanitizeFields(m.common.search.Fields)
 		cmds = append(cmds, search(*m.common))
+
+	// 'u' ("used by") search from the pager: run the normal catalog search
+	// for msg.query, label the results list with msg.title, and remember
+	// the originating document so esc can reopen it.
+	case usedBySearchMsg:
+		cmds = append(cmds, m.unloadDocument()...)
+		m.stash.filterInput.SetValue(msg.query)
+		m.stash.filterInput.Blur()
+		m.stash.projectInput.Blur()
+		m.stash.filterState = filterApplied
+		m.stash.selectedProject = ""
+		m.stash.selectedVersion = ""
+		m.stash.selectedSchema = ""
+		m.stash.resultsTitle = msg.title
+		m.stash.resultsEmptyMessage = msg.emptyNote
+		m.stash.usedByReturnID = msg.originID
+		cmds = append(cmds, tea.ClearScreen, searchArtifacts(m.stash))
 
 	}
 

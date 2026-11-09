@@ -59,6 +59,7 @@ func TestExpandTermKnownAliases(t *testing.T) {
 		{"Entity", ProvNamespace + "Entity"},
 		{"Activity", ProvNamespace + "Activity"},
 		{"wasGeneratedBy", ProvNamespace + "wasGeneratedBy"},
+		{"hadMember", ProvNamespace + "hadMember"},
 		{"label", RDFSNamespace + "label"},
 		{"exo:path", ExoNamespace + "path"},
 		{"exo:fromRecord", ExoNamespace + "fromRecord"},

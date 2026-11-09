@@ -147,6 +147,47 @@ func TestRunProvenanceChecksDeletedRecordHistoryNotSkipped(t *testing.T) {
 	}
 }
 
+// TestRunProvenanceChecksCollectionManifestNotSkipped covers design D9: a
+// repository with a named collection manifest but no records and no
+// provenance.require rules must not SKIP, and must report an informational
+// line naming the minimum exo version.
+func TestRunProvenanceChecksCollectionManifestNotSkipped(t *testing.T) {
+	root, run := provenanceTestRepo(t)
+	writeProvenanceFile(t, root, lib.CollectionManifestPath("cohort-a-bams"), `{"globs": ["**/*.bam"]}`)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	results := runProvenanceChecks(root)
+	var sawCollectionInfo bool
+	for _, r := range results {
+		if r.Status == StatusSkip {
+			t.Fatalf("results = %+v, must not SKIP: a named collection manifest exists", results)
+		}
+		if strings.Contains(r.Summary, "named collection manifest") && strings.Contains(r.Summary, minCollectionsExoVersion) {
+			sawCollectionInfo = true
+		}
+	}
+	if !sawCollectionInfo {
+		t.Fatalf("results = %+v, want an informational line naming %s", results, minCollectionsExoVersion)
+	}
+}
+
+// TestRunProvenanceChecksNoCollectionManifest covers the negative case: no
+// collection manifest means no informational line.
+func TestRunProvenanceChecksNoCollectionManifest(t *testing.T) {
+	root, run := provenanceTestRepo(t)
+	writeProvenanceFile(t, root, "README.md", "hi")
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	results := runProvenanceChecks(root)
+	for _, r := range results {
+		if strings.Contains(r.Summary, "named collection manifest") {
+			t.Fatalf("results = %+v, want no collection info line without a manifest", results)
+		}
+	}
+}
+
 func TestRunProvenanceChecksRequireRulesWithoutRecords(t *testing.T) {
 	root, run := provenanceTestRepo(t)
 	writeProvenanceFile(t, root, ".exohub/config", "provenance:\n  require:\n    - \"results/**\"\n")

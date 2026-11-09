@@ -46,11 +46,17 @@ func toolRegistry() []toolEntry {
 						"Use 'annex' or 'git' mode to override detection. "+
 						"Use this instead of 'git add' or 'git annex add' to ensure files are tracked by the correct backend. "+
 						"Requires git-annex to be initialized in the repository. "+
-						"Returns the list of files added and which backend (git or annex) each was assigned to.",
+						"Returns the list of files added and which backend (git or annex) each was assigned to. "+
+						"'paths' also accepts 'exohub:<project>[:path]@<version>' references to import assets from another "+
+						"exohub project (cannot be mixed with local paths or URLs, or with 'mode'); use 'to', 'repo' and "+
+						"'verify' to control where they land and how they're resolved.",
 				),
 				mcp.WithString("repo_dir", mcp.Required(), mcp.Description("Path to the git repository")),
-				mcp.WithArray("paths", mcp.Required(), mcp.Description("File paths to add"), mcp.WithStringItems()),
-				mcp.WithString("mode", mcp.Description("Add mode: auto (default, mimetype-based), annex (force git-annex), git (force git)"), mcp.Enum("auto", "annex", "git")),
+				mcp.WithArray("paths", mcp.Required(), mcp.Description("File paths, URLs, or exohub: references to add"), mcp.WithStringItems()),
+				mcp.WithString("mode", mcp.Description("Add mode: auto (default, mimetype-based), annex (force git-annex), git (force git); not used with exohub: references"), mcp.Enum("auto", "annex", "git")),
+				mcp.WithString("to", mcp.Description("Destination path for an exohub: reference (--to)")),
+				mcp.WithString("repo", mcp.Description("Git remote URL to resolve an exohub: reference against when it isn't reachable via a local clone or the catalog (--repo)")),
+				mcp.WithBoolean("verify", mcp.Description("Verify an exohub: reference's catalog resolution against git (--verify)")),
 			),
 			handler: handleAdd,
 		},
@@ -120,10 +126,16 @@ func toolRegistry() []toolEntry {
 						"Step 2: Runs exo bundle to generate metadata. "+
 						"Step 3: Syncs to artifactdb/catalog remotes only. "+
 						"Use 'sync' parameter to override step 1 and sync only to specified remotes. "+
+						"Use 'ref' to publish one or more tags/commits: content and metadata come from each ref, "+
+						"while routing (remotes, atlas_url, instance_url) comes from the current checked-out "+
+						".exohub/remotes — this is how an older tag whose own routing predates a migration "+
+						"gets published to the current catalog instead of a stale or missing target. "+
 						"If no artifactdb remote is configured, step 3 is skipped with a warning.",
 				),
 				mcp.WithString("repo_dir", mcp.Required(), mcp.Description("Path to the git repository")),
 				mcp.WithArray("sync", mcp.Description("Remote names to sync in step 1 (overrides auto-discovery)"), mcp.WithStringItems()),
+				mcp.WithArray("ref", mcp.Description("Tags or commits to publish with the current routing (repeatable)"), mcp.WithStringItems()),
+				mcp.WithBoolean("force", mcp.Description("With 'ref', publish even if the ref's content-availability check finds fixable/lost content on the current remote(s)")),
 			),
 			handler: handlePublish,
 		},
@@ -224,12 +236,18 @@ func toolRegistry() []toolEntry {
 						"to discover available profiles and their prompts, ask the user about every prompt (never assume a value, "+
 						"especially 'read_access' — it controls who can see the published catalog entries, e.g. public vs "+
 						"authenticated, and some profiles default to public), then pass the answers here as 'answers' "+
-						"(key -> value, matching the profile's prompt keys and types).",
+						"(key -> value, matching the profile's prompt keys and types). With both 'profile' and 'remote' on an "+
+						"already-initialized repo, refreshes just that remote from the profile (diff, no --force) instead of "+
+						"running the full profile flow. With 'profile', 'dry_run', and 'json', reports remote/profile drift "+
+						"as JSON without changing anything.",
 				),
 				mcp.WithString("repo_dir", mcp.Required(), mcp.Description("Path to the git repository; must already exist (see 'git clone' / 'git init' first)")),
 				mcp.WithString("profile", mcp.Description("Name of a server-authored profile to apply (see the 'profiles' tool)")),
 				mcp.WithString("name", mcp.Description("Explicit repository name (passed through as --name)")),
 				mcp.WithObject("answers", mcp.Description("Answers to the chosen profile's prompts, keyed by prompt key; unanswered prompts fall back to their default")),
+				mcp.WithString("remote", mcp.Description("With 'profile', on an existing repo, refresh only this remote from the profile instead of running the full profile flow")),
+				mcp.WithBoolean("dry_run", mcp.Description("Show what would change without applying it; combine with 'json' for a structured drift report")),
+				mcp.WithBoolean("json", mcp.Description("With 'profile' and 'dry_run', report remote/profile drift as JSON ({remote, field, current, profile} entries) instead of applying a profile")),
 			),
 			handler: handleInit,
 		},

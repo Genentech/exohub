@@ -21,6 +21,16 @@ type PlannedFile struct {
 	Reason            string  `json:"reason"`
 	LargeTextFallback bool    `json:"-"`
 
+	// DeletedFromDisk marks a tracked file that `git ls-files -c` still
+	// lists but that no longer exists on disk (os.Lstat: os.IsNotExist).
+	// It is excluded from routing (no Backend decision is made for it) so
+	// callers must not stage it; its deletion is left unstaged, matching
+	// `git annex add` rather than aborting the whole plan (issue #143).
+	// Callers that build a git/annex file list from the plan must skip
+	// entries with DeletedFromDisk set, and should surface them to the
+	// user instead of silently doing nothing about them.
+	DeletedFromDisk bool `json:"-"`
+
 	// Reroute decisions are separate from the file's unchanged current backend.
 	rerouteTo    Backend
 	rerouteRule  string
@@ -273,8 +283,23 @@ func PlanAutoAddWithOptions(dir string, paths []string, threshold string, opts P
 				continue
 			}
 			info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(rel)))
-			if err != nil && !(tracked[rel] && (opts.reroute || opts.RerouteHints)) {
-				return nil, err
+			if err != nil {
+				// A tracked file removed from disk (but not yet staged as a
+				// deletion) is listed by `ls-files -c` with nothing on disk to
+				// Lstat. Leaving its deletion unstaged (like `git annex add`)
+				// rather than aborting the whole plan lets the rest of the
+				// pathspec still get added (design D5: tracked files are never
+				// touched implicitly). It is still reported in the plan (via
+				// DeletedFromDisk) so callers can tell the user about it
+				// instead of silently doing nothing, including when the path
+				// was named explicitly on the command line (issue #143).
+				if tracked[rel] && os.IsNotExist(err) && !opts.reroute && !opts.RerouteHints {
+					result = append(result, PlannedFile{Path: local, repoRel: rel, DeletedFromDisk: true})
+					continue
+				}
+				if !(tracked[rel] && (opts.reroute || opts.RerouteHints)) {
+					return nil, err
+				}
 			}
 			file := PlannedFile{Path: local, repoRel: rel}
 			if info != nil {

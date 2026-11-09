@@ -232,6 +232,9 @@ func handleInitRemote() {
 	if v, ok := config["grants"]; ok && v != "" {
 		writeLine("CONFIG grants=" + v)
 	}
+	if v, ok := config["group"]; ok && v != "" {
+		writeLine("CONFIG group=" + v)
+	}
 	writeLine("INITREMOTE-SUCCESS")
 }
 
@@ -297,8 +300,12 @@ func fetchGrantsCredentials(s3url string, permission ...string) error {
 // Callers treat failure as non-fatal: on error we leave the environment
 // untouched so s5cmd falls back to whatever ambient credentials it can find
 // (the prior behaviour), so non-grants remotes are not regressed.
-func fetchBaseCredentials(s3url string) error {
-	cmd := exec.Command(credHelperBin, "--s3url", s3url, "--grants=false")
+func fetchBaseCredentials(s3url, group string) error {
+	args := []string{"--s3url", s3url, "--grants=false"}
+	if group != "" {
+		args = append(args, "--group", group)
+	}
+	cmd := exec.Command(credHelperBin, args...)
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
@@ -344,10 +351,20 @@ func refreshCredentialsIfNeeded() {
 	// grants:false — proactively refresh base credentials.
 	if !baseCredsExpiration.IsZero() && time.Until(baseCredsExpiration) <= 5*time.Minute {
 		debugStderr("grants=false: base credentials expiring soon, refreshing")
-		if err := fetchBaseCredentials(config["s3url"]); err != nil {
+		if err := fetchBaseCredentials(config["s3url"], configuredGroup()); err != nil {
 			debugStderr("grants=false: proactive refresh failed: %s", err.Error())
 		}
 	}
+}
+
+// configuredGroup returns the remote's "group" special-remote config value
+// (e.g. written by 'exo init' from credentials.<provider>.group in internal
+// builds), falling back to whatever git-annex has on file for this remote.
+func configuredGroup() string {
+	if g := config["group"]; g != "" {
+		return g
+	}
+	return getConfigFromAnnex("group")
 }
 
 // isCredentialError checks if an error message indicates an AWS credential issue.
@@ -415,7 +432,7 @@ func runS5cmd(args ...string) runResult {
 		// AWS_ACCESS_KEY_ID so a caller that supplied explicit credentials is never
 		// overridden.
 		debugStderr("grants=false: credential error detected, fetching base credentials and retrying")
-		if err := fetchBaseCredentials(config["s3url"]); err != nil {
+		if err := fetchBaseCredentials(config["s3url"], configuredGroup()); err != nil {
 			debugStderr("grants=false: base credential fetch failed: %s", err.Error())
 			return r
 		}
@@ -449,7 +466,7 @@ func handlePrepare() {
 		// to whatever ambient creds exist / the reactive retry in runS5cmd, so
 		// remotes that work via ambient creds are not regressed.
 		debugStderr("grants=false: fetching base credentials for %s", config["s3url"])
-		if err := fetchBaseCredentials(config["s3url"]); err != nil {
+		if err := fetchBaseCredentials(config["s3url"], configuredGroup()); err != nil {
 			debugStderr("grants=false: base credential fetch failed (continuing): %s", err.Error())
 		} else {
 			debugStderr("grants=false: base credentials acquired")
@@ -1113,6 +1130,7 @@ func main() {
 		case line == "LISTCONFIGS":
 			writeLine("CONFIG s3url")
 			writeLine("CONFIG grants")
+			writeLine("CONFIG group")
 			writeLine("CONFIGEND")
 			continue
 		case line == "INFO":

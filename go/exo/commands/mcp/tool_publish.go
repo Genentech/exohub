@@ -29,10 +29,18 @@ func handlePublish(_ context.Context, request gomcp.CallToolRequest) (*gomcp.Cal
 	}
 
 	syncWith := getStringArrayParam(request, "sync")
+	refs := getStringArrayParam(request, "ref")
+	force := getBoolParam(request, "force", false)
 
 	args := []string{"exo", "publish"}
 	for _, r := range syncWith {
 		args = append(args, "--sync", r)
+	}
+	for _, ref := range refs {
+		args = append(args, "--ref", ref)
+	}
+	if force {
+		args = append(args, "--force")
 	}
 
 	out, err := runInDir(repoAbs, args...)

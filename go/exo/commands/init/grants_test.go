@@ -113,8 +113,8 @@ write_access: owners
 }
 
 func TestSyncGrantsForRemote(t *testing.T) {
-	flagYes = true
-	defer func() { flagYes = false }()
+	flagForceGrantsSync = true
+	defer func() { flagForceGrantsSync = false }()
 	// Set up a mock API server that handles both verify and sync
 	var received grantsSyncRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -180,8 +180,8 @@ write_access: owners
 }
 
 func TestSyncGrantsForRemoteInSync(t *testing.T) {
-	flagYes = true
-	defer func() { flagYes = false }()
+	flagForceGrantsSync = true
+	defer func() { flagForceGrantsSync = false }()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/grants/verify" {
 			w.WriteHeader(http.StatusOK)
@@ -220,8 +220,8 @@ write_access: owners
 }
 
 func TestSyncGrantsForRemote403(t *testing.T) {
-	flagYes = true
-	defer func() { flagYes = false }()
+	flagForceGrantsSync = true
+	defer func() { flagForceGrantsSync = false }()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/grants/verify" {
 			// Return drift so sync is attempted
@@ -265,8 +265,8 @@ write_access: owners
 }
 
 func TestSyncGrantsForRemote404NonFatal(t *testing.T) {
-	flagYes = true
-	defer func() { flagYes = false }()
+	flagForceGrantsSync = true
+	defer func() { flagForceGrantsSync = false }()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		w.Write([]byte(`404 page not found`))
@@ -327,9 +327,9 @@ write_access: owners
 	t.Setenv("EXOHUB_API_URL", server.URL)
 	// Provide a token so currentUsername() returns a known non-owner value.
 	os.MkdirAll(filepath.Join(dir, "exo", "credentials"), 0700)
-	header := "eyJhbGciOiJSUzI1NiJ9" // base64url({"alg":"RS256"})
+	header := "eyJhbGciOiJSUzI1NiJ9"                          // base64url({"alg":"RS256"})
 	payload := "eyJwcmVmZXJyZWRfdXNlcm5hbWUiOiJub25vd25lciJ9" // base64url({"preferred_username":"nonowner"})
-	sig := "ZmFrZXNpZw" // base64url(fakesig)
+	sig := "ZmFrZXNpZw"                                       // base64url(fakesig)
 	fakeJWT := header + "." + payload + "." + sig
 	os.WriteFile(filepath.Join(dir, "exo", "credentials", "token.json"),
 		[]byte(`{"access_token":"`+fakeJWT+`","token_type":"Bearer"}`), 0600)
@@ -341,6 +341,320 @@ write_access: owners
 	}
 	if apiCalled {
 		t.Error("grants API must not be called when non-owner reads a public dataset")
+	}
+}
+
+// nonOwnerTokenSetup writes a fake JWT (preferred_username: "nonowner") to a
+// token file under dir/exo/credentials and points XDG_CONFIG_HOME at dir, so
+// currentUsername() resolves to "nonowner" for the duration of the test.
+func nonOwnerTokenSetup(t *testing.T, dir string) {
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256"}`))
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"preferred_username":"nonowner"}`))
+	sig := base64.RawURLEncoding.EncodeToString([]byte("fakesig"))
+	fakeJWT := header + "." + payload + "." + sig
+	os.MkdirAll(filepath.Join(dir, "exo", "credentials"), 0700)
+	os.WriteFile(filepath.Join(dir, "exo", "credentials", "token.json"),
+		[]byte(`{"access_token":"`+fakeJWT+`","token_type":"Bearer"}`), 0600)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+}
+
+func TestSyncGrantsForRemoteNonOwnerAuthenticatedReadAccess(t *testing.T) {
+	// Non-owners on a dataset with read_access: authenticated must NOT trigger
+	// a grants sync — the server vends read credentials on demand.
+	apiCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		apiCalled = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	exohubDir := filepath.Join(dir, ".exohub")
+	os.MkdirAll(exohubDir, 0755)
+	os.WriteFile(filepath.Join(exohubDir, "permissions"), []byte(`
+owners:
+  - someoneelse
+read_access: authenticated
+write_access: owners
+`), 0644)
+
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+	os.Chdir(dir)
+
+	t.Setenv("EXOHUB_API_URL", server.URL)
+	nonOwnerTokenSetup(t, dir)
+
+	err := syncGrantsForRemote("s3://bucket/prefix/")
+	if err != nil {
+		t.Fatalf("expected nil for non-owner with read_access:authenticated, got: %v", err)
+	}
+	if apiCalled {
+		t.Error("grants API must not be called when non-owner reads an authenticated dataset")
+	}
+}
+
+func TestSyncGrantsForRemoteNonOwnerViewerListed(t *testing.T) {
+	// Non-owner listed as a viewer under read_access: viewers must NOT trigger
+	// a grants sync.
+	apiCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		apiCalled = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	exohubDir := filepath.Join(dir, ".exohub")
+	os.MkdirAll(exohubDir, 0755)
+	os.WriteFile(filepath.Join(exohubDir, "permissions"), []byte(`
+owners:
+  - someoneelse
+viewers:
+  - nonowner
+read_access: viewers
+write_access: owners
+`), 0644)
+
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+	os.Chdir(dir)
+
+	t.Setenv("EXOHUB_API_URL", server.URL)
+	nonOwnerTokenSetup(t, dir)
+
+	err := syncGrantsForRemote("s3://bucket/prefix/")
+	if err != nil {
+		t.Fatalf("expected nil for listed viewer, got: %v", err)
+	}
+	if apiCalled {
+		t.Error("grants API must not be called when non-owner is a listed viewer")
+	}
+}
+
+func TestSyncGrantsForRemoteNonOwnerViewerNotListed(t *testing.T) {
+	// Non-owner NOT listed as a viewer under read_access: viewers: no grants
+	// sync attempt, no abort, but a note is printed telling them who to ask.
+	apiCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		apiCalled = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	exohubDir := filepath.Join(dir, ".exohub")
+	os.MkdirAll(exohubDir, 0755)
+	os.WriteFile(filepath.Join(exohubDir, "permissions"), []byte(`
+owners:
+  - someoneelse
+viewers:
+  - someoneelseagain
+read_access: viewers
+write_access: owners
+`), 0644)
+
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+	os.Chdir(dir)
+
+	t.Setenv("EXOHUB_API_URL", server.URL)
+	nonOwnerTokenSetup(t, dir)
+
+	var err error
+	out := captureStdout(t, func() {
+		err = syncGrantsForRemote("s3://bucket/prefix/")
+	})
+	if err != nil {
+		t.Fatalf("expected nil (non-fatal) for unlisted non-owner, got: %v", err)
+	}
+	if apiCalled {
+		t.Error("grants API must not be called when non-owner has no read access")
+	}
+	if !strings.Contains(out, "not listed as a reader") {
+		t.Errorf("expected a note about not being listed as a reader, got:\n%s", out)
+	}
+	if !strings.Contains(out, "someoneelse") {
+		t.Errorf("expected the note to mention the owners to ask, got:\n%s", out)
+	}
+}
+
+func TestSyncGrantsForRemoteNonOwnerYesDoesNotForceSyncForReader(t *testing.T) {
+	// --yes is init's general non-interactive flag, not an ownership override
+	// (read-only automated callers such as EDS downloads pass it routinely).
+	// A non-owner reader must still skip the owner-only sync even with --yes.
+	flagYes = true
+	defer func() { flagYes = false }()
+
+	apiCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		apiCalled = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	exohubDir := filepath.Join(dir, ".exohub")
+	os.MkdirAll(exohubDir, 0755)
+	os.WriteFile(filepath.Join(exohubDir, "permissions"), []byte(`
+owners:
+  - someoneelse
+read_access: authenticated
+write_access: owners
+`), 0644)
+
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+	os.Chdir(dir)
+
+	t.Setenv("EXOHUB_API_URL", server.URL)
+	nonOwnerTokenSetup(t, dir)
+
+	err := syncGrantsForRemote("s3://bucket/prefix/")
+	if err != nil {
+		t.Fatalf("expected nil for non-owner reader with --yes, got: %v", err)
+	}
+	if apiCalled {
+		t.Error("grants API must not be called for a non-owner reader, even with --yes")
+	}
+}
+
+func TestSyncGrantsForRemoteNonOwnerYesDoesNotForceSyncForListedViewer(t *testing.T) {
+	// Same as above, for a listed viewer under read_access: viewers.
+	flagYes = true
+	defer func() { flagYes = false }()
+
+	apiCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		apiCalled = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	exohubDir := filepath.Join(dir, ".exohub")
+	os.MkdirAll(exohubDir, 0755)
+	os.WriteFile(filepath.Join(exohubDir, "permissions"), []byte(`
+owners:
+  - someoneelse
+viewers:
+  - nonowner
+read_access: viewers
+write_access: owners
+`), 0644)
+
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+	os.Chdir(dir)
+
+	t.Setenv("EXOHUB_API_URL", server.URL)
+	nonOwnerTokenSetup(t, dir)
+
+	err := syncGrantsForRemote("s3://bucket/prefix/")
+	if err != nil {
+		t.Fatalf("expected nil for listed viewer with --yes, got: %v", err)
+	}
+	if apiCalled {
+		t.Error("grants API must not be called for a listed viewer, even with --yes")
+	}
+}
+
+func TestSyncGrantsForRemoteNonOwnerYesDoesNotForceSyncForUnlistedViewer(t *testing.T) {
+	// A non-owner with no read access per the permissions file still only gets
+	// the informational note, never a sync attempt, even with --yes.
+	flagYes = true
+	defer func() { flagYes = false }()
+
+	apiCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		apiCalled = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	exohubDir := filepath.Join(dir, ".exohub")
+	os.MkdirAll(exohubDir, 0755)
+	os.WriteFile(filepath.Join(exohubDir, "permissions"), []byte(`
+owners:
+  - someoneelse
+viewers:
+  - someoneelseagain
+read_access: viewers
+write_access: owners
+`), 0644)
+
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+	os.Chdir(dir)
+
+	t.Setenv("EXOHUB_API_URL", server.URL)
+	nonOwnerTokenSetup(t, dir)
+
+	var err error
+	out := captureStdout(t, func() {
+		err = syncGrantsForRemote("s3://bucket/prefix/")
+	})
+	if err != nil {
+		t.Fatalf("expected nil for unlisted non-owner with --yes, got: %v", err)
+	}
+	if apiCalled {
+		t.Error("grants API must not be called for an unlisted non-owner, even with --yes")
+	}
+	if !strings.Contains(out, "not listed as a reader") {
+		t.Errorf("expected a note about not being listed as a reader, got:\n%s", out)
+	}
+}
+
+func TestSyncGrantsForRemoteForceGrantsSyncOverridesNonOwner(t *testing.T) {
+	// --force-grants-sync is the dedicated, explicit admin/service-account
+	// override: it attempts verify+sync for a non-owner even with no read
+	// access per the permissions file.
+	flagForceGrantsSync = true
+	defer func() { flagForceGrantsSync = false }()
+
+	verifyCalled, syncCalled := false, false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/grants/verify":
+			verifyCalled = true
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"in_sync":false,"drift":{"missing_grants":[{}],"extra_grants":[],"permission_mismatches":[]}}`))
+		case r.URL.Path == "/grants/sync":
+			syncCalled = true
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status":"synced"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	exohubDir := filepath.Join(dir, ".exohub")
+	os.MkdirAll(exohubDir, 0755)
+	os.WriteFile(filepath.Join(exohubDir, "permissions"), []byte(`
+owners:
+  - someoneelse
+viewers:
+  - someoneelseagain
+read_access: viewers
+write_access: owners
+`), 0644)
+
+	origDir, _ := os.Getwd()
+	defer os.Chdir(origDir)
+	os.Chdir(dir)
+
+	t.Setenv("EXOHUB_API_URL", server.URL)
+	nonOwnerTokenSetup(t, dir)
+
+	err := syncGrantsForRemote("s3://bucket/prefix/")
+	if err != nil {
+		t.Fatalf("expected nil, got: %v", err)
+	}
+	if !verifyCalled || !syncCalled {
+		t.Errorf("expected --force-grants-sync to attempt verify+sync even as non-owner, verifyCalled=%v syncCalled=%v", verifyCalled, syncCalled)
 	}
 }
 

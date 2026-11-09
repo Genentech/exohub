@@ -35,6 +35,59 @@ func TestAutoAddResultReasons(t *testing.T) {
 	}
 }
 
+func TestExohubAddArgsForwardsFlags(t *testing.T) {
+	got := exohubAddArgs("/usr/local/bin/exo", []string{"exohub:myproject:data/file.csv@main"}, "out/", "git@example.com:group/myproject.git", true)
+	want := []string{"/usr/local/bin/exo", "add", "exohub:myproject:data/file.csv@main", "--to", "out/", "--repo", "git@example.com:group/myproject.git", "--verify"}
+	if len(got) != len(want) {
+		t.Fatalf("args = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("args = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestExohubAddArgsOmitsUnsetFlags(t *testing.T) {
+	got := exohubAddArgs("/usr/local/bin/exo", []string{"exohub:myproject@main"}, "", "", false)
+	want := []string{"/usr/local/bin/exo", "add", "exohub:myproject@main"}
+	if len(got) != len(want) {
+		t.Fatalf("args = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("args = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestMCPAddRejectsExohubRefMixedWithLocalPath(t *testing.T) {
+	request := gomcp.CallToolRequest{}
+	request.Params.Arguments = map[string]any{
+		"repo_dir": t.TempDir(),
+		"paths":    []any{"exohub:myproject:data/file.csv@main", "local.csv"},
+	}
+	result, err := handleAdd(context.Background(), request)
+	if err != nil || !result.IsError {
+		t.Fatalf("result = %+v, err = %v, want an error result", result, err)
+	}
+}
+
+func TestMCPAddRequiresGitRepoBeforeExohubRefs(t *testing.T) {
+	// repo_dir validation must happen before an exohub: reference ever
+	// reaches handleExohubAdd (and so before os.Executable()/exec), same as
+	// every other add mode.
+	request := gomcp.CallToolRequest{}
+	request.Params.Arguments = map[string]any{
+		"repo_dir": t.TempDir(),
+		"paths":    []any{"exohub:myproject:data/file.csv@main"},
+	}
+	result, err := handleAdd(context.Background(), request)
+	if err != nil || !result.IsError {
+		t.Fatalf("result = %+v, err = %v, want an error result (not a git repository)", result, err)
+	}
+}
+
 func TestMCPAutoAddInvalidConfigBeforeExecution(t *testing.T) {
 	if _, err := exec.LookPath("git-annex"); err != nil {
 		t.Skip("git-annex required")

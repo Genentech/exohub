@@ -103,6 +103,16 @@ type (
 
 	// pagerBackMsg signals the parent to navigate back to stash.
 	pagerBackMsg struct{}
+
+	// usedBySearchMsg signals the parent to run a "used by" (downstream
+	// lineage) search for originID and show the results under title,
+	// reporting emptyNote when there are no consumers.
+	usedBySearchMsg struct {
+		query     string
+		title     string
+		emptyNote string
+		originID  string
+	}
 )
 
 type pagerState int
@@ -460,6 +470,23 @@ func (m pagerModel) update(msg tea.Msg) (pagerModel, tea.Cmd) {
 				}
 			}
 
+		case "u":
+			if !isArtifactDocument(&m.currentDocument) {
+				cmds = append(cmds, m.showStatusMessage(pagerStatusMessage{"Not an artifact — no \"used by\" search", false}))
+			} else if query, path, ok := usedByQuery(&m.currentDocument); ok {
+				origin := m.currentDocument.ArfifactDBID
+				cmds = append(cmds, func() tea.Msg {
+					return usedBySearchMsg{
+						query:     query,
+						title:     fmt.Sprintf("Used by %s", path),
+						emptyNote: fmt.Sprintf("No files derived from %s in the catalog (that you can see).", path),
+						originID:  origin,
+					}
+				})
+			} else {
+				cmds = append(cmds, m.showStatusMessage(pagerStatusMessage{"Can't search for consumers: missing content id", true}))
+			}
+
 		}
 
 	case tea.MouseMsg:
@@ -681,30 +708,36 @@ func (m pagerModel) statusBarView(b *strings.Builder) {
 	reloadBtn := renderToolbarBtn("r", "Reload")
 
 	// Highlights button — only shown when highlights exist
-	highlightsBtn := ""
 	hasHighlights := len(m.currentDocument.Highlights) > 0
-	if hasHighlights {
-		highlightsBtn = renderToolbarBtn("h", "Highlights")
+
+	// Used by button — only shown on exohub-artifact/exohub-markdown documents
+	hasUsedBy := isArtifactDocument(&m.currentDocument)
+
+	btns := []string{infoBtn}
+	if hasUsedBy {
+		btns = append(btns, renderToolbarBtn("u", "Used by"))
 	}
+	if hasHighlights {
+		btns = append(btns, renderToolbarBtn("h", "Highlights"))
+	}
+	btns = append(btns, reloadBtn)
 
 	// Button separator
 	btnGap := statusBarNoteStyle(" ")
 
-	// Empty space
 	btnGapW := ansi.PrintableRuneWidth(btnGap)
-	gapCount := 4 // gaps between: mode|info|reload|scroll|help
-	if hasHighlights {
-		gapCount++ // extra gap for highlights button
+	btnsWidth := 0
+	for _, btn := range btns {
+		btnsWidth += ansi.PrintableRuneWidth(btn)
 	}
+	gapCount := len(btns) + 2 // one gap after each button, plus mode|scroll
 	padding := max(0,
 		m.common.width-
 			ansi.PrintableRuneWidth(logo)-
 			ansi.PrintableRuneWidth(note)-
 			ansi.PrintableRuneWidth(scrollPercent)-
 			ansi.PrintableRuneWidth(modeIndicator)-
-			ansi.PrintableRuneWidth(infoBtn)-
-			ansi.PrintableRuneWidth(highlightsBtn)-
-			ansi.PrintableRuneWidth(reloadBtn)-
+			btnsWidth-
 			ansi.PrintableRuneWidth(helpNote)-
 			btnGapW*gapCount,
 	)
@@ -715,30 +748,11 @@ func (m pagerModel) statusBarView(b *strings.Builder) {
 		emptySpace = statusBarNoteStyle(emptySpace)
 	}
 
-	if hasHighlights {
-		fmt.Fprintf(b, "%s%s%s%s%s%s%s%s%s%s%s%s%s%s",
-			logo,
-			note,
-			emptySpace,
-			infoBtn, btnGap,
-			highlightsBtn, btnGap,
-			reloadBtn, btnGap,
-			modeIndicator, btnGap,
-			scrollPercent, btnGap,
-			helpNote,
-		)
-	} else {
-		fmt.Fprintf(b, "%s%s%s%s%s%s%s%s%s%s%s%s",
-			logo,
-			note,
-			emptySpace,
-			infoBtn, btnGap,
-			reloadBtn, btnGap,
-			modeIndicator, btnGap,
-			scrollPercent, btnGap,
-			helpNote,
-		)
+	fmt.Fprint(b, logo, note, emptySpace)
+	for _, btn := range btns {
+		fmt.Fprint(b, btn, btnGap)
 	}
+	fmt.Fprint(b, modeIndicator, btnGap, scrollPercent, btnGap, helpNote)
 }
 
 // buildAtlasURL derives the Atlas web app URL from EXOHUB_API_URL.
@@ -755,21 +769,32 @@ func (m pagerModel) helpView() (s string) {
 		"G/end   go to bottom",
 		"y       copy link",
 		"i       information",
+	}
+	if isArtifactDocument(&m.currentDocument) {
+		col1 = append(col1, "u       used by")
+	}
+	col1 = append(col1,
 		"h       highlights",
 		"r       reload",
 		"esc     back to results",
 		"q       quit",
+	)
+
+	col2 := []string{
+		"k/↑      up",
+		"j/↓      down",
+		"b/pgup   page up",
+		"f/pgdn   page down",
 	}
 
 	s += "\n"
-	s += "k/↑      up                  " + col1[0] + "\n"
-	s += "j/↓      down                " + col1[1] + "\n"
-	s += "b/pgup   page up             " + col1[2] + "\n"
-	s += "f/pgdn   page down           " + col1[3] + "\n"
-	s += "                             " + col1[4] + "\n"
-	s += "                             " + col1[5] + "\n"
-	s += "                             " + col1[6] + "\n"
-	s += "                             " + col1[7] + "\n"
+	for i, line := range col1 {
+		left := "                             "
+		if i < len(col2) {
+			left = fmt.Sprintf("%-29s", col2[i])
+		}
+		s += left + line + "\n"
+	}
 
 	// Add tab key help if template is available
 	if m.currentDocument.TemplateAvailable {

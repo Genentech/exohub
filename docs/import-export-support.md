@@ -62,6 +62,9 @@ git push origin main
 
 - `encryption=none|shared|hybrid|pubkey` - Encryption mode (default: none)
 - Environment variable `S5CMD_BIN` - Path to s5cmd binary (default: searches PATH)
+- `.exohub/remotes` may also declare a `credentials:` map (`credentials.<provider>.<key>`)
+  on a remote. This holds provider-specific credential settings that only some `exo`
+  builds interpret; unknown providers are ignored.
 
 ### AWS Credentials
 
