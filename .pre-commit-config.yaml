@@ -21,3 +21,9 @@ repos:
   rev: v8.27.2
   hooks:
   - id: gitleaks
+
+- repo: https://github.com/codespell-project/codespell
+  # Configuration for codespell is in .pre-commit-config.yaml
+  rev: v2.4.3
+  hooks:
+  - id: codespell
