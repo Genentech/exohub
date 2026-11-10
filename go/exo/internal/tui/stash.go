@@ -2289,7 +2289,7 @@ func loadMarkdown(md *markdown) tea.Cmd {
 		var rawContent string
 		rawContent, err = jsonToMarkdown(document, rawTemplateFile)
 		if err != nil {
-			log.Error("Error converting JSON to raw outpout", "err", err)
+			log.Error("Error converting JSON to raw output", "err", err)
 			humanErr := fmt.Errorf("Error converting JSON to raw output, check logs\n%s", err)
 			return errMsg{humanErr}
 		}

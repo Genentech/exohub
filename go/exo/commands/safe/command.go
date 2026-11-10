@@ -189,7 +189,7 @@ func runStoreInteractive() error {
 
 			hostTitle, hostOptions = safeHostOptions(entryType, styleDim)
 
-			selected := hostOptions[0].Value // pre-select first
+			selected := hostOptions[0].Value // preselect first
 			selectForm := huh.NewForm(
 				huh.NewGroup(
 					huh.NewSelect[string]().
@@ -390,7 +390,7 @@ func stepSSHKeySelect(filePath *string) error {
 	const manualEntry = ":manual:"
 	options = append(options, huh.NewOption(styleDim.Render("Enter path manually..."), manualEntry))
 
-	selected := keys[0] // pre-select first key
+	selected := keys[0] // preselect first key
 	form := huh.NewForm(
 		huh.NewGroup(
 			huh.NewSelect[string]().

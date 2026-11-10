@@ -299,7 +299,7 @@ $ aws s3 ls s3://exohub-sandbox-uat/tutorials/lelongs/mnist/_export/data/process
 Notice the difference in the content between the remote type `annex` vs `export`:
 
 - `annex`: contains all versions of the data files, hashed, similar to a git object. This provides
-  the full history of all files in the dataset over time, and consitute a traceable backup.
+  the full history of all files in the dataset over time, and constitute a traceable backup.
 - `export`: replicates files to the remote, like a snapshot in time. We loose the history and hash
   of the files, but the remote type allows to replicate files on s3 that can later be accessed
   directly from there (here, parquet files could be queried directly)
