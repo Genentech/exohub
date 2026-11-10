@@ -381,9 +381,36 @@ func TestCatalogSchemas_ValidateMarkdownArtifactWithLineage(t *testing.T) {
 		IsReadme: true,
 		Lineage: &provenance.ArtifactLineage{
 			Covered: true,
+			Collections: []provenance.LineageCollectionEntry{
+				{ID: "urn:exohub:git:tree:abc", Kind: "folder", Path: "docs/"},
+				{ID: "urn:exohub:collection:sha256:abc", Kind: "named", Name: "docs-set"},
+			},
+		},
+	})
+}
+
+// TestCatalogSchemas_ValidateArtifactWithLegacyCollection asserts a
+// document carrying only the deprecated singular lineage.collection field
+// (as an already-bundled document, or one written by an exo released
+// before this change, would) still validates against the amended schema
+// (design D8 amendment: lineage.collection is deprecated, not removed).
+func TestCatalogSchemas_ValidateArtifactWithLegacyCollection(t *testing.T) {
+	schemas := loadCatalogSchemas(t)
+	validateAgainst(t, schemas["exohub-artifact"], Artifact{
+		Schema:   "exohub-artifact/v1.json",
+		RepoURL:  "https://example.com/repo.git",
+		Ref:      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Path:     "results/report.tdb/f2.bin",
+		Key:      "deadbeef",
+		Backend:  "git",
+		Size:     3,
+		Metadata: map[string][]string{},
+		Commits:  []Commit{},
+		Lineage: &provenance.ArtifactLineage{
+			Covered: true,
 			Collection: &provenance.LineageRef{
 				ID:   "urn:exohub:git:tree:abc",
-				Path: "docs/",
+				Path: "results/report.tdb/",
 			},
 		},
 	})
@@ -417,14 +444,32 @@ func TestCatalogSchemas_ValidateProvenanceDocument(t *testing.T) {
 			Generated: []string{"urn:exohub:git:blob:out"},
 			Records:   []string{"urn:exohub:record:1"},
 		}},
-		Entities: []provenance.ProvenanceEntity{{
-			ID:      "urn:exohub:git:blob:out",
-			Type:    "Entity",
-			Path:    "out.csv",
-			Covered: true,
-			Records: []string{"urn:exohub:record:1"},
-		}},
+		Entities: []provenance.ProvenanceEntity{
+			{
+				ID:      "urn:exohub:git:blob:out",
+				Type:    "Entity",
+				Path:    "out.csv",
+				Covered: true,
+				Records: []string{"urn:exohub:record:1"},
+			},
+			{
+				ID:          "urn:exohub:collection:sha256:abc",
+				Type:        "Collection",
+				Covered:     true,
+				Records:     []string{"urn:exohub:record:1"},
+				MemberCount: intPtr(2),
+			},
+		},
 	})
+}
+
+func intPtr(n int) *int { return &n }
+
+func lineageCollections(l *provenance.ArtifactLineage) []provenance.LineageCollectionEntry {
+	if l == nil {
+		return nil
+	}
+	return l.Collections
 }
 
 // setupSchemaTestRepo builds a git-annex-initialized repository exercising
@@ -500,13 +545,15 @@ func TestBundleOutput_ValidatesAgainstSchemas(t *testing.T) {
 	}
 
 	// v1: a plain-git input, an annexed derived file, a folder collection
-	// of two plain-git members, and a root-level README.
+	// of two plain-git members, a named collection over two other plain-git
+	// files, and a root-level README.
 	writeFile("counts.csv", "counts\n")
 	writeFile("pipeline.nf", "process {}\n")
 	writeFile("README.md", "# Project\n\nSee results/.\n")
 	annexWriteFile(t, run, dir, "results/out.csv", "out\n")
 	writeFile("results/report.tdb/f1.bin", "one\n")
 	writeFile("results/report.tdb/f2.bin", "two\n")
+	writeFile(".exohub/collections/nf-pipeline.json", `{"paths": ["counts.csv", "pipeline.nf"]}`)
 	run("git", "add", ".")
 	run("git", "commit", "-q", "-m", "v1")
 
@@ -515,6 +562,15 @@ func TestBundleOutput_ValidatesAgainstSchemas(t *testing.T) {
 	treeID := provenance.GitTreeEntityID(strings.TrimSpace(run("git", "rev-parse", "HEAD:results/report.tdb")))
 	readmeID := provenance.GitBlobEntityID(strings.TrimSpace(run("git", "rev-parse", "HEAD:README.md")))
 	planID := provenance.GitBlobEntityID(strings.TrimSpace(run("git", "rev-parse", "HEAD:pipeline.nf")))
+
+	collID, collMembers, _, _, err := provenance.ResolveCollection(provenance.NewRefReader(dir, "HEAD"), "nf-pipeline", false)
+	if err != nil {
+		t.Fatalf("ResolveCollection() error = %v", err)
+	}
+	collMemberIDs := make([]string, len(collMembers))
+	for i, m := range collMembers {
+		collMemberIDs[i] = m.ID
+	}
 
 	act1 := provenance.NewActivityID()
 	rec1ID := provenance.NewRecordID()
@@ -560,9 +616,25 @@ func TestBundleOutput_ValidatesAgainstSchemas(t *testing.T) {
   "@graph": [{"@id": %q, "@type": "Entity", "wasAttributedTo": "urn:exohub:agent:person:alice"}]
 }`, rec3ID, readmeID)
 
+	act4 := provenance.NewActivityID()
+	rec4ID := provenance.NewRecordID()
+	rec4 := fmt.Sprintf(`{
+  "@context": "https://genentech.github.io/exohub/ns/provenance/v1.jsonld",
+  "@id": %q,
+  "exo:assertion": "recorded",
+  "exo:assertedBy": "urn:exohub:agent:person:alice",
+  "generatedAtTime": "2026-10-16T10:15:00Z",
+  "@graph": [
+    {"@id": %q, "@type": "Collection", "wasGeneratedBy": %q, "hadMember": [%q, %q]},
+    {"@id": %q, "@type": "Activity", "wasAssociatedWith": "urn:exohub:agent:person:alice"},
+    {"@id": "urn:exohub:agent:person:alice", "@type": "Person"}
+  ]
+}`, rec4ID, collID, act4, collMemberIDs[0], collMemberIDs[1], act4)
+
 	writeFile(".exohub/provenance/r1.jsonld", rec1)
 	writeFile(".exohub/provenance/r2.jsonld", rec2)
 	writeFile(".exohub/provenance/r3.jsonld", rec3)
+	writeFile(".exohub/provenance/r4.jsonld", rec4)
 	run("git", "add", ".")
 	run("git", "commit", "-q", "-m", "provenance records")
 
@@ -573,7 +645,7 @@ func TestBundleOutput_ValidatesAgainstSchemas(t *testing.T) {
 	defer os.Chdir(origDir)
 
 	outputDir := filepath.Join(".exohub", "bundles", "out")
-	if err := runBundle("", "", "default", outputDir, "", false, false, true, false, false, false, false, "test", nil); err != nil {
+	if err := runBundle("", "", "default", outputDir, "", false, false, true, false, false, false, false, false, "test", nil); err != nil {
 		t.Fatalf("runBundle() error = %v", err)
 	}
 
@@ -700,8 +772,57 @@ func TestBundleOutput_ValidatesAgainstSchemas(t *testing.T) {
 	if f2.Lineage == nil || !f2.Lineage.Covered {
 		t.Fatalf("f2.bin lineage = %+v, want a covered lineage object inherited from the collection", f2.Lineage)
 	}
-	if f2.Lineage.Collection == nil || f2.Lineage.Collection.ID != treeID {
-		t.Errorf("f2.bin lineage.collection = %+v, want id %s", f2.Lineage.Collection, treeID)
+	if f2.Lineage.Collection != nil {
+		t.Errorf("f2.bin lineage.collection = %+v, want nil (deprecated, no longer written)", f2.Lineage.Collection)
+	}
+	if len(f2.Lineage.Collections) != 1 || f2.Lineage.Collections[0].ID != treeID || f2.Lineage.Collections[0].Kind != "folder" {
+		t.Errorf("f2.bin lineage.collections = %+v, want [{%s, folder, ...}]", f2.Lineage.Collections, treeID)
+	}
+
+	// counts.csv and pipeline.nf are both current members of the named
+	// collection nf-pipeline, in addition to counts.csv's own record
+	// (design D8 "Lineage of collection membership": a member gets a
+	// collections entry regardless of whether it also has provenance of its
+	// own).
+	countsData, err := os.ReadFile(filepath.Join(outputDir, "files", "counts.csv.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(files/counts.csv.json) error = %v", err)
+	}
+	var counts Artifact
+	if err := json.Unmarshal(countsData, &counts); err != nil {
+		t.Fatalf("Unmarshal(counts.csv.json) error = %v", err)
+	}
+	if counts.Lineage == nil || len(counts.Lineage.Collections) != 1 || counts.Lineage.Collections[0].ID != collID || counts.Lineage.Collections[0].Kind != "named" || counts.Lineage.Collections[0].Name != "nf-pipeline" {
+		t.Errorf("counts.csv lineage.collections = %+v, want [{%s, named, nf-pipeline}]", lineageCollections(counts.Lineage), collID)
+	}
+
+	pipelineData, err := os.ReadFile(filepath.Join(outputDir, "files", "pipeline.nf.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(files/pipeline.nf.json) error = %v", err)
+	}
+	var pipeline Artifact
+	if err := json.Unmarshal(pipelineData, &pipeline); err != nil {
+		t.Fatalf("Unmarshal(pipeline.nf.json) error = %v", err)
+	}
+	if pipeline.Lineage == nil || len(pipeline.Lineage.Collections) != 1 || pipeline.Lineage.Collections[0].ID != collID || pipeline.Lineage.Collections[0].Kind != "named" {
+		t.Errorf("pipeline.nf lineage.collections = %+v, want [{%s, named, nf-pipeline}]", lineageCollections(pipeline.Lineage), collID)
+	}
+
+	// provenance.json's entity for the named collection carries
+	// member_count, not the member list (design D8 "Collection entity
+	// member counts").
+	var collEntity *provenance.ProvenanceEntity
+	for i := range prov.Entities {
+		if prov.Entities[i].ID == collID {
+			collEntity = &prov.Entities[i]
+			break
+		}
+	}
+	if collEntity == nil {
+		t.Fatalf("no provenance.json entity for named collection %s", collID)
+	}
+	if collEntity.Type != "Collection" || collEntity.MemberCount == nil || *collEntity.MemberCount != 2 {
+		t.Errorf("named collection entity = %+v, want type Collection, member_count 2", collEntity)
 	}
 
 	readmeData, err := os.ReadFile(filepath.Join(outputDir, "files", "README.md.json"))

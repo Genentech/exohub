@@ -79,7 +79,8 @@ Common fixes:
 - API blocked → connect to VPN
 - AWS blocked → check firewall/proxy settings
 
-**4. Repository Config** *(skipped outside a repo)* — Checks `.exohub/remotes` parses cleanly and UUIDs match `git annex info`, that git-annex is initialized, and whether you are listed as owner/viewer in `.exohub/permissions`. Also probes for registry drift (local vs S3 `_grants.json`), and validates `annex.routing` rules in `.exohub/config` (invalid rules **FAIL**; rules fully shadowed by an earlier rule **WARN**). See [Repository-Level File Routing]({{< ref "advanced#repository-level-file-routing" >}}).
+**4. Repository Config** *(skipped outside a repo)* — Checks `.exohub/remotes` parses cleanly and UUIDs match `git annex info`, that git-annex is initialized, and whether you are listed as owner/viewer in `.exohub/permissions`. Also probes for registry drift (local vs S3 `_grants.json`), validates `annex.routing` rules in `.exohub/config` (invalid rules **FAIL**; rules fully shadowed by an earlier rule **WARN**), and warns (**WARN**) if any remote declares a `credentials.<provider>` entry this build does not interpret. See [Repository-Level File Routing]({{< ref "advanced#repository-level-file-routing" >}}).
+
 
 Common fixes:
 - UUID not found in git-annex (**FAIL**) → run `exo sync` on the machine where the dataset was originally set up, then re-clone or re-run `exo sync` here; for a brand-new dataset not yet synced anywhere, you may instead remove the `uuid:` line for the affected remote in `.exohub/remotes` and re-run `exo init`

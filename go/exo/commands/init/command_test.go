@@ -2,6 +2,7 @@ package init
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -888,6 +889,10 @@ func TestCheckLegacyContext(t *testing.T) {
 }
 
 func TestEnsureRemoteConfigS3URLUpdates(t *testing.T) {
+	oldYes := flagYes
+	flagYes = true
+	t.Cleanup(func() { flagYes = oldYes })
+
 	var calls []string
 	withCommand(t, func(name string, args ...string) *exec.Cmd {
 		calls = append(calls, name+" "+strings.Join(args, " "))
@@ -903,16 +908,21 @@ func TestEnsureRemoteConfigS3URLUpdates(t *testing.T) {
 		return exec.Command("sh", "-c", "exit 0")
 	})
 
-	ensureRemoteConfigS3URL("origin", "s3://new")
+	// saved ("s3://old") differs from the new value: a location move, which
+	// requires --yes (set above) and, once applied, invalidates presence on
+	// the remote via fsck.
+	ensureRemoteConfigS3URL(RemoteConfig{Name: "origin", S3URL: "s3://new"})
 
-	var setConfig bool
-	var enableRemote bool
+	var setConfig, enableRemote, fsck bool
 	for _, call := range calls {
 		if strings.Contains(call, "git config annex-remote.uuid-1234.config.s3url s3://new") {
 			setConfig = true
 		}
 		if strings.Contains(call, "git annex enableremote origin s3url=s3://new") {
 			enableRemote = true
+		}
+		if strings.Contains(call, "git annex fsck --from origin --fast") {
+			fsck = true
 		}
 	}
 	if !setConfig {
@@ -921,6 +931,181 @@ func TestEnsureRemoteConfigS3URLUpdates(t *testing.T) {
 	if !enableRemote {
 		t.Fatalf("expected enableremote call with s3url parameter, calls: %#v", calls)
 	}
+	if !fsck {
+		t.Fatalf("expected fsck to invalidate stale presence after a location move, calls: %#v", calls)
+	}
+}
+
+// TestEnsureRemoteConfigS3URLFirstTimeInit verifies that a remote's very
+// first s3url (no previously saved value) is persisted directly, without
+// triggering the location-move confirmation/fsck invalidation path: there's
+// no prior location whose presence could be stale.
+func TestEnsureRemoteConfigS3URLFirstTimeInit(t *testing.T) {
+	oldYes := flagYes
+	flagYes = false
+	t.Cleanup(func() { flagYes = oldYes })
+
+	var calls []string
+	withCommand(t, func(name string, args ...string) *exec.Cmd {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		if name == "git" && len(args) >= 3 && args[0] == "config" && args[1] == "--get" {
+			if args[2] == "remote.origin.annex-uuid" {
+				return exec.Command("printf", "uuid-1234")
+			}
+			// No saved s3url yet: first-time init.
+			return exec.Command("sh", "-c", "exit 1")
+		}
+		return exec.Command("sh", "-c", "exit 0")
+	})
+
+	ensureRemoteConfigS3URL(RemoteConfig{Name: "origin", S3URL: "s3://new"})
+
+	var setConfig, enableRemote, fsck bool
+	for _, call := range calls {
+		if strings.Contains(call, "git config annex-remote.uuid-1234.config.s3url s3://new") {
+			setConfig = true
+		}
+		if strings.Contains(call, "git annex enableremote origin s3url=s3://new") {
+			enableRemote = true
+		}
+		if strings.Contains(call, "git annex fsck") {
+			fsck = true
+		}
+	}
+	if !setConfig || !enableRemote {
+		t.Fatalf("expected first-time s3url to be persisted without confirmation, calls: %#v", calls)
+	}
+	if fsck {
+		t.Fatalf("first-time init must not invalidate presence, calls: %#v", calls)
+	}
+}
+
+// chmodRWritableDir makes every file under dir writable, so git-annex's
+// read-only object files (0444) can be removed/overwritten by a test.
+func chmodRWritableDir(dir string) {
+	_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		_ = os.Chmod(path, 0o755)
+		return nil
+	})
+}
+
+// TestEnsureRemoteConfigS3URLRealGitAnnex_InvalidatesStalePresence is the
+// exo-cli#166 end-to-end regression for ensureRemoteConfigS3URL itself
+// (review gap: no test exercised the real production function against real
+// git-annex; the stub-based tests above only assert which CLI calls are
+// made). It calls the actual, unmocked ensureRemoteConfigS3URL against a
+// real git-annex repo with a directory special remote (standing in for an
+// S3 remote whose prefix moved — confirmed against the real
+// git-annex-remote-s5cmd separately, see the MR's root-cause notes): content
+// is genuinely copied to the remote, then the remote's backing storage is
+// wiped (same technique as commands/sync's moved-remote tests) to simulate
+// a move that left the old content behind while the location log still says
+// it's present. If ensureRemoteConfigS3URL's call to
+// invalidateMovedRemotePresence (the git annex fsck --from <remote> --fast
+// step) were ever removed or broken, this test fails: whereis would still
+// claim presence, and `git annex copy`/`sync --content` would not re-upload.
+func TestEnsureRemoteConfigS3URLRealGitAnnex_InvalidatesStalePresence(t *testing.T) {
+	if _, err := exec.LookPath("git-annex"); err != nil {
+		t.Skip("git-annex not available")
+	}
+
+	repoDir := t.TempDir()
+	remoteDir := t.TempDir()
+	t.Cleanup(func() { chmodRWritableDir(repoDir); chmodRWritableDir(remoteDir) })
+
+	orig, _ := os.Getwd()
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	for _, args := range [][]string{
+		{"git", "init"},
+		{"git", "config", "user.email", "test@test.com"},
+		{"git", "config", "user.name", "Test"},
+		{"git", "annex", "init", "testrepo"},
+		{"git", "annex", "initremote", "r1", "type=directory", "directory=" + remoteDir, "encryption=none"},
+	} {
+		if err := runCommand(args); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+	}
+
+	if err := os.WriteFile(filepath.Join(repoDir, "a.bin"), []byte("version-1"), 0o644); err != nil {
+		t.Fatalf("write a.bin: %v", err)
+	}
+	for _, args := range [][]string{
+		{"git", "annex", "add", "a.bin"},
+		{"git", "commit", "-m", "add"},
+		{"git", "annex", "copy", "--to", "r1", "a.bin"},
+	} {
+		if err := runCommand(args); err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+	}
+
+	uuid := getRemoteUUID("r1")
+	if uuid == "" {
+		t.Fatal("could not resolve r1's UUID")
+	}
+	// Pre-seed a fake "old" s3url so ensureRemoteConfigS3URL detects a real
+	// change below — the directory remote itself ignores this key, it's only
+	// used to drive ensureRemoteConfigS3URL's own change detection.
+	if err := runCommand([]string{"git", "config", fmt.Sprintf("annex-remote.%s.config.s3url", uuid), "s3://fake-old"}); err != nil {
+		t.Fatalf("seed old s3url: %v", err)
+	}
+
+	// Simulate the move: the remote's storage loses the content without the
+	// location log being told (same shape as an S3 prefix move).
+	chmodRWritableDir(remoteDir)
+	if err := filepath.Walk(remoteDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return err
+		}
+		return os.Remove(path)
+	}); err != nil {
+		t.Fatalf("wiping remote storage: %v", err)
+	}
+
+	if out, err := runCommandOutput("git", "annex", "whereis", "a.bin"); err == nil && !strings.Contains(out, "r1") {
+		t.Fatalf("expected whereis to still (stale-)claim r1 before the fix runs, got:\n%s", out)
+	}
+
+	oldYes := flagYes
+	flagYes = true
+	t.Cleanup(func() { flagYes = oldYes })
+
+	// The real, unmocked production function under test.
+	ensureRemoteConfigS3URL(RemoteConfig{Name: "r1", S3URL: "s3://fake-new"})
+
+	if got := getRemoteConfig("r1", "s3url"); got != "s3://fake-new" {
+		t.Errorf("expected s3url config to be updated to s3://fake-new, got %q", got)
+	}
+
+	whereisOut, _ := runCommandOutput("git", "annex", "whereis", "a.bin")
+	if strings.Contains(whereisOut, "r1") {
+		t.Fatalf("expected ensureRemoteConfigS3URL to invalidate stale presence on r1 via real git-annex fsck, but whereis still claims it:\n%s", whereisOut)
+	}
+
+	// Full circle: plain `exo sync`'s own git-annex primitive (copy/sync
+	// --content) must now re-upload to the (new, currently empty) location.
+	if err := runCommand([]string{"git", "annex", "copy", "--to", "r1", "a.bin"}); err != nil {
+		t.Fatalf("re-copy after invalidation: %v", err)
+	}
+	entries, err := os.ReadDir(remoteDir)
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("expected content to be re-uploaded into remote storage, entries=%v err=%v", entries, err)
+	}
+}
+
+// runCommandOutput runs args and returns its combined stdout+stderr.
+func runCommandOutput(args ...string) (string, error) {
+	cmd := command(args[0], args[1:]...)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
 }
 
 func TestResolveRepoNamePrecedence(t *testing.T) {
@@ -1526,6 +1711,103 @@ func TestNeedsReconfigureImportNoChange(t *testing.T) {
 	}
 }
 
+func TestNeedsReconfigureArtifactDBAtlasURLChange(t *testing.T) {
+	withCommand(t, func(name string, args ...string) *exec.Cmd {
+		if name == "git" && len(args) >= 3 && args[0] == "config" && args[1] == "--get" {
+			switch {
+			case strings.HasSuffix(args[2], ".annex-uuid"):
+				return exec.Command("printf", "adb-uuid")
+			case strings.Contains(args[2], "annex-remote.adb-uuid.config.s3url"):
+				return exec.Command("printf", "s3://bucket/_catalog")
+			}
+		}
+		if name == "git" && len(args) >= 2 && args[0] == "show" && args[1] == "git-annex:remote.log" {
+			return exec.Command("sh", "-c", "printf 'adb-uuid name=my-catalog atlas_url=https://old-atlas.example.com exporttree=yes'")
+		}
+		if name == "git" && len(args) >= 2 && args[0] == "annex" && args[1] == "wanted" {
+			return exec.Command("printf", "include=.exohub/bundles/* or include=.artifactdb/*")
+		}
+		return exec.Command("sh", "-c", "exit 1")
+	})
+
+	remote := RemoteConfig{
+		Name:     "my-catalog",
+		Type:     "artifactdb",
+		UUID:     "adb-uuid",
+		S3URL:    "s3://bucket/_catalog",
+		Mode:     "export",
+		AtlasURL: "https://new-atlas.example.com",
+	}
+	if !needsReconfigure(remote) {
+		t.Error("needsReconfigure should return true when atlas_url changes")
+	}
+}
+
+func TestNeedsReconfigureArtifactDBInstanceURLChange(t *testing.T) {
+	withCommand(t, func(name string, args ...string) *exec.Cmd {
+		if name == "git" && len(args) >= 3 && args[0] == "config" && args[1] == "--get" {
+			switch {
+			case strings.HasSuffix(args[2], ".annex-uuid"):
+				return exec.Command("printf", "adb-uuid")
+			case strings.Contains(args[2], "annex-remote.adb-uuid.config.s3url"):
+				return exec.Command("printf", "s3://bucket/_catalog")
+			}
+		}
+		if name == "git" && len(args) >= 2 && args[0] == "show" && args[1] == "git-annex:remote.log" {
+			return exec.Command("sh", "-c", "printf 'adb-uuid name=my-catalog instance_url=https://old-instance.example.com exporttree=yes'")
+		}
+		if name == "git" && len(args) >= 2 && args[0] == "annex" && args[1] == "wanted" {
+			return exec.Command("printf", "include=.exohub/bundles/* or include=.artifactdb/*")
+		}
+		return exec.Command("sh", "-c", "exit 1")
+	})
+
+	remote := RemoteConfig{
+		Name:        "my-catalog",
+		Type:        "artifactdb",
+		UUID:        "adb-uuid",
+		S3URL:       "s3://bucket/_catalog",
+		Mode:        "export",
+		InstanceURL: "https://new-instance.example.com",
+	}
+	if !needsReconfigure(remote) {
+		t.Error("needsReconfigure should return true when instance_url changes")
+	}
+}
+
+func TestNeedsReconfigureArtifactDBNoChange(t *testing.T) {
+	withCommand(t, func(name string, args ...string) *exec.Cmd {
+		if name == "git" && len(args) >= 3 && args[0] == "config" && args[1] == "--get" {
+			switch {
+			case strings.HasSuffix(args[2], ".annex-uuid"):
+				return exec.Command("printf", "adb-uuid")
+			case strings.Contains(args[2], "annex-remote.adb-uuid.config.s3url"):
+				return exec.Command("printf", "s3://bucket/_catalog")
+			}
+		}
+		if name == "git" && len(args) >= 2 && args[0] == "show" && args[1] == "git-annex:remote.log" {
+			return exec.Command("sh", "-c", "printf 'adb-uuid name=my-catalog atlas_url=https://atlas.example.com instance_url=https://instance.example.com exporttree=yes'")
+		}
+		if name == "git" && len(args) >= 2 && args[0] == "annex" && args[1] == "wanted" {
+			return exec.Command("printf", "include=.exohub/bundles/* or include=.artifactdb/*")
+		}
+		return exec.Command("sh", "-c", "exit 1")
+	})
+
+	remote := RemoteConfig{
+		Name:        "my-catalog",
+		Type:        "artifactdb",
+		UUID:        "adb-uuid",
+		S3URL:       "s3://bucket/_catalog",
+		Mode:        "export",
+		AtlasURL:    "https://atlas.example.com",
+		InstanceURL: "https://instance.example.com",
+	}
+	if needsReconfigure(remote) {
+		t.Error("needsReconfigure should return false when atlas_url/instance_url are unchanged")
+	}
+}
+
 func TestFilterRemotesByName(t *testing.T) {
 	cfg := &RemotesConfig{
 		Remotes: []RemoteConfig{
@@ -1641,6 +1923,22 @@ func TestProfileFlagParsing(t *testing.T) {
 			t.Errorf("expected both unset, got profile=%q pick=%v", got, pick)
 		}
 	})
+}
+
+func TestRunInit_MigrateContentRequiresAllowMove(t *testing.T) {
+	oldMigrate := flagMigrateContent
+	oldAllowMove := flagAllowMove
+	flagMigrateContent = true
+	flagAllowMove = false
+	t.Cleanup(func() {
+		flagMigrateContent = oldMigrate
+		flagAllowMove = oldAllowMove
+	})
+
+	err := runInit(nil)
+	if err == nil || !strings.Contains(err.Error(), "--migrate-content requires --allow-move") {
+		t.Fatalf("expected --migrate-content without --allow-move to error, got: %v", err)
+	}
 }
 
 func TestRunInitCreatesRoutingTemplateOnlyOnSuccess(t *testing.T) {

@@ -2379,6 +2379,335 @@ func TestCheckWorkingTreeCleanNoCommitsYet(t *testing.T) {
 	}
 }
 
+func TestCheckWorkingTreeCleanDeletedFilePrintsFix(t *testing.T) {
+	dir, run := setupCleanTreeTestRepo(t)
+	os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("hello\n"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-m", "init")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	os.Remove(filepath.Join(dir, "tracked.txt"))
+
+	err := checkWorkingTreeClean(".exohub/bundles/main")
+	if err == nil {
+		t.Fatal("expected error for deleted tracked file, got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "deleted: tracked.txt") {
+		t.Errorf("error should list the deletion, got: %s", msg)
+	}
+	if !strings.Contains(msg, "git rm --ignore-unmatch -- tracked.txt") {
+		t.Errorf("error should suggest git rm --ignore-unmatch, got: %s", msg)
+	}
+	if !strings.Contains(msg, "git restore --source=HEAD --staged --worktree -- tracked.txt") {
+		t.Errorf("error should suggest git restore, got: %s", msg)
+	}
+	if !strings.Contains(msg, "exo get tracked.txt") {
+		t.Errorf("error should suggest exo get, got: %s", msg)
+	}
+}
+
+func TestCheckWorkingTreeCleanMixedDeletedAndModifiedPrintsBothFixes(t *testing.T) {
+	dir, run := setupCleanTreeTestRepo(t)
+	os.WriteFile(filepath.Join(dir, "deleted.txt"), []byte("hello\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "modified.txt"), []byte("hello\n"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-m", "init")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	os.Remove(filepath.Join(dir, "deleted.txt"))
+	os.WriteFile(filepath.Join(dir, "modified.txt"), []byte("changed\n"), 0o644)
+
+	err := checkWorkingTreeClean(".exohub/bundles/main")
+	if err == nil {
+		t.Fatal("expected error for mixed dirty tree, got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "deleted: deleted.txt") {
+		t.Errorf("error should list the deletion, got: %s", msg)
+	}
+	if !strings.Contains(msg, "modified: modified.txt") {
+		t.Errorf("error should list the modification, got: %s", msg)
+	}
+	if !strings.Contains(msg, "git rm --ignore-unmatch -- deleted.txt") {
+		t.Errorf("error should suggest git rm for the deleted group, got: %s", msg)
+	}
+	if !strings.Contains(msg, "git restore --source=HEAD --staged --worktree -- deleted.txt") {
+		t.Errorf("error should suggest git restore for the deleted group, got: %s", msg)
+	}
+	if !strings.Contains(msg, "exo add modified.txt") {
+		t.Errorf("error should suggest exo add for the modified group, got: %s", msg)
+	}
+	if !strings.Contains(msg, "git restore --source=HEAD --staged --worktree -- modified.txt") {
+		t.Errorf("error should suggest discarding the modified group, got: %s", msg)
+	}
+}
+
+func TestCheckWorkingTreeCleanFixedByGitRmAndCommit(t *testing.T) {
+	dir, run := setupCleanTreeTestRepo(t)
+	os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("hello\n"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-m", "init")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	os.Remove(filepath.Join(dir, "tracked.txt"))
+	if err := checkWorkingTreeClean(".exohub/bundles/main"); err == nil {
+		t.Fatal("expected error before following the suggested fix")
+	}
+
+	run("git", "rm", "--ignore-unmatch", "--", "tracked.txt")
+	run("git", "commit", "-m", "remove tracked.txt")
+
+	if err := checkWorkingTreeClean(".exohub/bundles/main"); err != nil {
+		t.Errorf("expected clean tree after git rm + commit, got: %v", err)
+	}
+}
+
+func TestCheckWorkingTreeCleanFixedByGitRestore(t *testing.T) {
+	dir, run := setupCleanTreeTestRepo(t)
+	os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("hello\n"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-m", "init")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	os.Remove(filepath.Join(dir, "tracked.txt"))
+	if err := checkWorkingTreeClean(".exohub/bundles/main"); err == nil {
+		t.Fatal("expected error before following the suggested fix")
+	}
+
+	run("git", "restore", "--source=HEAD", "--staged", "--worktree", "--", "tracked.txt")
+
+	if err := checkWorkingTreeClean(".exohub/bundles/main"); err != nil {
+		t.Errorf("expected clean tree after git restore, got: %v", err)
+	}
+}
+
+func TestCheckWorkingTreeCleanQuotesPathWithSpace(t *testing.T) {
+	dir, run := setupCleanTreeTestRepo(t)
+	os.WriteFile(filepath.Join(dir, "file with space.txt"), []byte("hello\n"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-m", "init")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	os.Remove(filepath.Join(dir, "file with space.txt"))
+
+	err := checkWorkingTreeClean(".exohub/bundles/main")
+	if err == nil {
+		t.Fatal("expected error for deleted tracked file, got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "deleted: file with space.txt") {
+		t.Errorf("error should list the full path, got: %s", msg)
+	}
+	if !strings.Contains(msg, "git rm --ignore-unmatch -- 'file with space.txt'") {
+		t.Errorf("error should shell-quote the path in the git rm command, got: %s", msg)
+	}
+	if !strings.Contains(msg, "git restore --source=HEAD --staged --worktree -- 'file with space.txt'") {
+		t.Errorf("error should shell-quote the path in the git restore command, got: %s", msg)
+	}
+}
+
+func TestCheckWorkingTreeCleanStagedDeletionFixesWork(t *testing.T) {
+	// Stage the deletion (git rm without committing) — it must still show up
+	// as "D", and the suggested fixes must still work against it: a plain
+	// `git rm`/`git restore` without --ignore-unmatch/--staged fails once the
+	// path is no longer a pending worktree change (it's only in the index).
+	setup := func(t *testing.T) (dir string, run func(args ...string)) {
+		t.Helper()
+		d, r := setupCleanTreeTestRepo(t)
+		os.WriteFile(filepath.Join(d, "a.txt"), []byte("hello\n"), 0o644)
+		r("git", "add", ".")
+		r("git", "commit", "-m", "init")
+
+		origDir, _ := os.Getwd()
+		os.Chdir(d)
+		t.Cleanup(func() { os.Chdir(origDir) })
+
+		r("git", "rm", "--", "a.txt")
+
+		err := checkWorkingTreeClean(".exohub/bundles/main")
+		if err == nil {
+			t.Fatal("expected error for staged deletion, got nil")
+		}
+		if !strings.Contains(err.Error(), "deleted: a.txt") {
+			t.Errorf("error should list the staged deletion, got: %s", err.Error())
+		}
+		return d, r
+	}
+
+	t.Run("restore", func(t *testing.T) {
+		_, run := setup(t)
+		run("git", "restore", "--source=HEAD", "--staged", "--worktree", "--", "a.txt")
+		if err := checkWorkingTreeClean(".exohub/bundles/main"); err != nil {
+			t.Errorf("expected clean tree after git restore on staged deletion, got: %v", err)
+		}
+	})
+
+	t.Run("rm", func(t *testing.T) {
+		_, run := setup(t)
+		run("git", "rm", "--ignore-unmatch", "--", "a.txt")
+		run("git", "commit", "-m", "remove a.txt")
+		if err := checkWorkingTreeClean(".exohub/bundles/main"); err != nil {
+			t.Errorf("expected clean tree after git rm --ignore-unmatch + commit on staged deletion, got: %v", err)
+		}
+	})
+}
+
+func TestCheckWorkingTreeCleanAddedFileUnstageKeepsFile(t *testing.T) {
+	dir, run := setupCleanTreeTestRepo(t)
+	os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("hello\n"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-m", "init")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	os.WriteFile(filepath.Join(dir, "new.txt"), []byte("brand new\n"), 0o644)
+	run("git", "add", "new.txt")
+
+	err := checkWorkingTreeClean(".exohub/bundles/main")
+	if err == nil {
+		t.Fatal("expected error for added file, got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "added: new.txt") {
+		t.Errorf("error should list the addition, got: %s", msg)
+	}
+	if !strings.Contains(msg, "git restore --staged -- new.txt") {
+		t.Errorf("error should suggest unstaging without --worktree, got: %s", msg)
+	}
+	if strings.Contains(msg, "git restore --staged --worktree -- new.txt") {
+		t.Errorf("error must never suggest --worktree for an added file (it deletes the file), got: %s", msg)
+	}
+
+	// Follow the printed unstage command and verify the file is NOT deleted.
+	run("git", "restore", "--staged", "--", "new.txt")
+	if _, statErr := os.Stat(filepath.Join(dir, "new.txt")); statErr != nil {
+		t.Errorf("expected new.txt to still exist on disk after unstaging, got: %v", statErr)
+	}
+	if err := checkWorkingTreeClean(".exohub/bundles/main"); err != nil {
+		t.Errorf("expected clean tree after unstaging the added file (now untracked), got: %v", err)
+	}
+}
+
+func TestCheckWorkingTreeCleanRenameUndoResultsInCleanStatus(t *testing.T) {
+	dir, run := setupCleanTreeTestRepo(t)
+	os.WriteFile(filepath.Join(dir, "m.txt"), []byte("some reasonably long content so git detects a rename\n"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-m", "init")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	run("git", "mv", "m.txt", "m2.txt")
+
+	err := checkWorkingTreeClean(".exohub/bundles/main")
+	if err == nil {
+		t.Fatal("expected error for renamed file, got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "renamed: m.txt -> m2.txt") {
+		t.Errorf("error should list the rename with both paths, got: %s", msg)
+	}
+	if !strings.Contains(msg, "git restore --source=HEAD --staged --worktree -- m.txt m2.txt") {
+		t.Errorf("error should suggest restoring both old and new paths, got: %s", msg)
+	}
+
+	run("git", "restore", "--source=HEAD", "--staged", "--worktree", "--", "m.txt", "m2.txt")
+
+	statusCmd := exec.Command("git", "status", "--porcelain")
+	statusOut, statusErr := statusCmd.Output()
+	if statusErr != nil {
+		t.Fatalf("git status failed: %v", statusErr)
+	}
+	if strings.TrimSpace(string(statusOut)) != "" {
+		t.Errorf("expected clean git status after undoing the rename, got: %q", string(statusOut))
+	}
+	if err := checkWorkingTreeClean(".exohub/bundles/main"); err != nil {
+		t.Errorf("expected clean tree after undoing the rename, got: %v", err)
+	}
+}
+
+func TestCheckWorkingTreeCleanNonASCIIPathQuotedCorrectly(t *testing.T) {
+	dir, run := setupCleanTreeTestRepo(t)
+	os.WriteFile(filepath.Join(dir, "\u00e9.txt"), []byte("hello\n"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-m", "init")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	os.Remove(filepath.Join(dir, "\u00e9.txt"))
+
+	err := checkWorkingTreeClean(".exohub/bundles/main")
+	if err == nil {
+		t.Fatal("expected error for deleted tracked file, got nil")
+	}
+	msg := err.Error()
+	// -z output carries raw UTF-8 bytes, not git's default C-quoted escapes
+	// (e.g. "\303\251.txt"), so the path must appear verbatim and unquoted
+	// (no shell metacharacters), and the command must be directly runnable.
+	if !strings.Contains(msg, "deleted: \u00e9.txt") {
+		t.Errorf("error should list the literal UTF-8 path, got: %q", msg)
+	}
+	if !strings.Contains(msg, "git rm --ignore-unmatch -- \u00e9.txt") {
+		t.Errorf("error should contain a directly runnable git rm command, got: %q", msg)
+	}
+	if strings.Contains(msg, `\303\251`) {
+		t.Errorf("path should not be C-quoted octal-escaped, got: %q", msg)
+	}
+
+	run("git", "rm", "--ignore-unmatch", "--", "\u00e9.txt")
+	run("git", "commit", "-m", "remove accented file")
+	if err := checkWorkingTreeClean(".exohub/bundles/main"); err != nil {
+		t.Errorf("expected clean tree after removing the accented file, got: %v", err)
+	}
+}
+
+func TestCheckWorkingTreeCleanTruncatesLongPathList(t *testing.T) {
+	dir, run := setupCleanTreeTestRepo(t)
+	for i := 0; i < 12; i++ {
+		os.WriteFile(filepath.Join(dir, fmt.Sprintf("del%02d.txt", i)), []byte("hello\n"), 0o644)
+	}
+	run("git", "add", ".")
+	run("git", "commit", "-m", "init")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	for i := 0; i < 12; i++ {
+		os.Remove(filepath.Join(dir, fmt.Sprintf("del%02d.txt", i)))
+	}
+
+	err := checkWorkingTreeClean(".exohub/bundles/main")
+	if err == nil {
+		t.Fatal("expected error for deleted tracked files, got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "... and 2 more") {
+		t.Errorf("error should note the truncated count, got: %s", msg)
+	}
+}
+
 func TestExcludePathspecInsideRepo(t *testing.T) {
 	dir, run := setupCleanTreeTestRepo(t)
 	os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("hello\n"), 0o644)
@@ -2595,7 +2924,7 @@ func TestRunBundle_NoRecordsNoProvenanceFile(t *testing.T) {
 	defer os.Chdir(origDir)
 
 	outputDir := filepath.Join(".exohub", "bundles", "out")
-	if err := runBundle("", "", "default", outputDir, "", false, false, true, false, false, false, false, "test", nil); err != nil {
+	if err := runBundle("", "", "default", outputDir, "", false, false, true, false, false, false, false, false, "test", nil); err != nil {
 		t.Fatalf("runBundle() error = %v", err)
 	}
 
@@ -2621,7 +2950,7 @@ func TestRunBundle_RequireViolationFailsBeforeWriting(t *testing.T) {
 	defer os.Chdir(origDir)
 
 	outputDir := filepath.Join(".exohub", "bundles", "out")
-	err := runBundle("", "", "default", outputDir, "", false, false, true, false, false, false, false, "test", nil)
+	err := runBundle("", "", "default", outputDir, "", false, false, true, false, false, false, false, false, "test", nil)
 	if err == nil {
 		t.Fatal("runBundle() error = nil, want a provenance.require violation error")
 	}
@@ -2630,7 +2959,7 @@ func TestRunBundle_RequireViolationFailsBeforeWriting(t *testing.T) {
 	}
 
 	// --no-provenance does not bypass provenance.require (design D8).
-	err = runBundle("", "", "default", outputDir, "", false, false, true, false, false, false, true, "test", nil)
+	err = runBundle("", "", "default", outputDir, "", false, false, true, false, false, false, true, false, "test", nil)
 	if err == nil {
 		t.Fatal("runBundle() with --no-provenance error = nil, want a provenance.require violation error")
 	}
@@ -2663,7 +2992,7 @@ func TestRunBundle_CompilesProvenanceDocument(t *testing.T) {
 	defer os.Chdir(origDir)
 
 	outputDir := filepath.Join(".exohub", "bundles", "out")
-	if err := runBundle("", "", "default", outputDir, "", false, false, true, false, false, false, false, "test", nil); err != nil {
+	if err := runBundle("", "", "default", outputDir, "", false, false, true, false, false, false, false, false, "test", nil); err != nil {
 		t.Fatalf("runBundle() error = %v", err)
 	}
 
@@ -2741,7 +3070,7 @@ func TestRunBundle_CompilesProvenanceSoftwareAndPersonAgents(t *testing.T) {
 	defer os.Chdir(origDir)
 
 	outputDir := filepath.Join(".exohub", "bundles", "out")
-	if err := runBundle("", "", "default", outputDir, "", false, false, true, false, false, false, false, "test", nil); err != nil {
+	if err := runBundle("", "", "default", outputDir, "", false, false, true, false, false, false, false, false, "test", nil); err != nil {
 		t.Fatalf("runBundle() error = %v", err)
 	}
 
@@ -2775,7 +3104,7 @@ func TestRunBundle_DryRunWritesNothing(t *testing.T) {
 	defer os.Chdir(origDir)
 
 	outputDir := filepath.Join(".exohub", "bundles", "out")
-	if err := runBundle("", "", "default", outputDir, "", false, false, true, true, false, false, false, "test", nil); err != nil {
+	if err := runBundle("", "", "default", outputDir, "", false, false, true, true, false, false, false, false, "test", nil); err != nil {
 		t.Fatalf("runBundle() dry-run error = %v", err)
 	}
 	if _, err := os.Stat(outputDir); !os.IsNotExist(err) {
@@ -2800,7 +3129,7 @@ func TestRunBundle_RefIgnoresUncommittedWorktreeRecords(t *testing.T) {
 	defer os.Chdir(origDir)
 
 	outputDir := filepath.Join(".exohub", "bundles", "out")
-	if err := runBundle("", "", "default", outputDir, "v1.0.0", false, false, true, false, false, false, false, "test", nil); err != nil {
+	if err := runBundle("", "", "default", outputDir, "v1.0.0", false, false, true, false, false, false, false, false, "test", nil); err != nil {
 		t.Fatalf("runBundle() error = %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(outputDir, "provenance.jsonld")); !os.IsNotExist(err) {
@@ -2835,7 +3164,7 @@ func TestRunBundle_WritesProvenanceJSONWithLineage(t *testing.T) {
 	defer os.Chdir(origDir)
 
 	outputDir := filepath.Join(".exohub", "bundles", "out")
-	if err := runBundle("", "", "default", outputDir, "", false, false, true, false, false, false, false, "test", nil); err != nil {
+	if err := runBundle("", "", "default", outputDir, "", false, false, true, false, false, false, false, false, "test", nil); err != nil {
 		t.Fatalf("runBundle() error = %v", err)
 	}
 
@@ -2926,7 +3255,7 @@ func TestRunBundle_IncrementalReemitsOnLineageChange(t *testing.T) {
 	defer os.Chdir(origDir)
 
 	outputDir := filepath.Join(".exohub", "bundles", "out")
-	if err := runBundle("", v1, "default", outputDir, "", false, true, true, false, false, false, false, "test", nil); err != nil {
+	if err := runBundle("", v1, "default", outputDir, "", false, true, true, false, false, false, false, false, "test", nil); err != nil {
 		t.Fatalf("runBundle() error = %v", err)
 	}
 

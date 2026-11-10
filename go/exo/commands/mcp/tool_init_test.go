@@ -124,6 +124,87 @@ func TestHandleInitWithProfileAndAnswers(t *testing.T) {
 	}
 }
 
+func TestHandleInitWithRemoteFlag(t *testing.T) {
+	dir := fakeGitRepo(t)
+	calls := withFakeCommand(t, "exit 0")
+
+	_, err := handleInit(context.Background(), mustRequest(map[string]any{
+		"repo_dir": dir,
+		"profile":  "psyche-poc",
+		"remote":   "exohub-atlas",
+	}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	call := lastExoCall(t, calls)
+	argsJSON, _ := json.Marshal(call)
+	contains := func(a, b string) bool {
+		for i := 0; i+1 <= len(call); i++ {
+			if call[i] == a && i+1 < len(call) && call[i+1] == b {
+				return true
+			}
+		}
+		return false
+	}
+	if !contains("--profile", "psyche-poc") {
+		t.Errorf("missing --profile psyche-poc in %s", argsJSON)
+	}
+	if !contains("--remote", "exohub-atlas") {
+		t.Errorf("missing --remote exohub-atlas in %s", argsJSON)
+	}
+}
+
+func TestHandleInitDryRunJSONDriftFoundIsNotToolError(t *testing.T) {
+	dir := fakeGitRepo(t)
+	calls := withFakeCommand(t, `echo '[{"remote":"exohub-atlas","field":"atlas_url","profile":"https://atlas.example.com","status":"added"}]'; exit 3`)
+
+	result, err := handleInit(context.Background(), mustRequest(map[string]any{
+		"repo_dir": dir,
+		"profile":  "psyche-poc",
+		"dry_run":  true,
+		"json":     true,
+	}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("drift found (exit 3) should not be a tool error, got %+v", result)
+	}
+
+	call := lastExoCall(t, calls)
+	argsJSON, _ := json.Marshal(call)
+	contains := func(a string) bool {
+		for _, arg := range call {
+			if arg == a {
+				return true
+			}
+		}
+		return false
+	}
+	if !contains("--dry-run") || !contains("--json") {
+		t.Errorf("missing --dry-run/--json in %s", argsJSON)
+	}
+}
+
+func TestHandleInitDryRunJSONNoDrift(t *testing.T) {
+	dir := fakeGitRepo(t)
+	withFakeCommand(t, `echo '[]'; exit 0`)
+
+	result, err := handleInit(context.Background(), mustRequest(map[string]any{
+		"repo_dir": dir,
+		"profile":  "psyche-poc",
+		"dry_run":  true,
+		"json":     true,
+	}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("unexpected error result: %+v", result)
+	}
+}
+
 func TestHandleInitAnswersMustBeObject(t *testing.T) {
 	dir := fakeGitRepo(t)
 	withFakeCommand(t, "exit 0")

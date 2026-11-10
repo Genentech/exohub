@@ -21,6 +21,8 @@
     "wasAttributedTo": { "@id": "prov:wasAttributedTo", "@type": "@id" },
     "actedOnBehalfOf": { "@id": "prov:actedOnBehalfOf", "@type": "@id" },
     "hadPlan": { "@id": "prov:hadPlan", "@type": "@id" },
+    "hadMember": { "@id": "prov:hadMember", "@type": "@id" },
+    "hadPrimarySource": { "@id": "prov:hadPrimarySource", "@type": "@id" },
 
     "startedAtTime": { "@id": "prov:startedAtTime", "@type": "xsd:dateTime" },
     "endedAtTime": { "@id": "prov:endedAtTime", "@type": "xsd:dateTime" },
@@ -29,6 +31,8 @@
     "label": "rdfs:label",
 
     "exo:path": "exo:path",
+    "exo:repository": "exo:repository",
+    "exo:commit": "exo:commit",
     "exo:assertion": "exo:assertion",
     "exo:assertedBy": { "@id": "exo:assertedBy", "@type": "@id" },
     "exo:evidence": "exo:evidence",

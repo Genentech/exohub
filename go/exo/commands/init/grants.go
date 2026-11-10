@@ -16,10 +16,10 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"gopkg.in/yaml.v3"
 
+	"github.com/Genentech/exohub/go/exo/commands/login"
 	"github.com/Genentech/exohub/go/exo/commandutil"
 	"github.com/Genentech/exohub/go/exo/internal/defaults"
 	"github.com/Genentech/exohub/go/exo/palette"
-	"github.com/Genentech/exohub/go/exo/commands/login"
 )
 
 // permissionsConfig represents .exohub/permissions file
@@ -82,25 +82,34 @@ func syncGrantsForRemote(s3url string) error {
 		}
 	}
 	if !isOwner {
-		if perms.ReadAccess == "public" {
-			// Public datasets: on-demand credentials are provisioned by the credential
-			// helper via POST /api/grants/credentials on first access. Nothing to do here.
+		// --force-grants-sync is the explicit, dedicated admin/service-account
+		// override: proceed to attempt the sync regardless of read access. It
+		// is intentionally a separate flag from --yes, because --yes is init's
+		// general non-interactive flag and is routinely passed by read-only
+		// callers (e.g. automated downloads acting as the requesting user) that
+		// must never attempt the owner-only POST /api/grants.
+		if flagForceGrantsSync {
+			// fall through to verify/sync below
+		} else if canReadDataset(perms, username) {
+			// Non-owner readers (read_access: public/authenticated, or a listed
+			// viewer when read_access: viewers) already get credentials on demand
+			// from the server (POST /api/grants/credentials). Provisioning grants
+			// (POST /api/grants) is owner-only, so a reader should never attempt
+			// it — skip silently and let init continue configuring remotes. This
+			// applies regardless of --yes, since --yes is not an ownership override.
 			if commandutil.IsDebug() {
-				fmt.Fprintf(os.Stderr, "DEBUG: skipping grants sync for %s (read_access: public, not an owner)\n", s3url)
+				fmt.Fprintf(os.Stderr, "DEBUG: skipping grants sync for %s (read_access: %s, not an owner)\n", s3url, perms.ReadAccess)
 			}
 			return nil
-		}
-		orangeStyle := lipgloss.NewStyle().Foreground(palette.Current().Label.Adaptive()).Bold(true)
-		fmt.Printf("⚠️ You (%s) are not listed as an owner in .exohub/permissions.\n", orangeStyle.Render(username))
-		fmt.Println("   Provisioning grants without being an owner will lock you out.")
-		fmt.Println()
-		if flagYes {
-			// --yes forces proceed (for admins/service accounts)
 		} else {
-			proceed, err := askYesNoTUI("Proceed anyway?", false)
-			if err != nil || !proceed {
-				return fmt.Errorf("Aborted: add yourself to .exohub/permissions owners or use --yes to force")
-			}
+			// Not an owner and not a reader per .exohub/permissions: don't
+			// provision grants (that call is owner-only and would 403), and
+			// don't abort init — just let the user know who to ask. Again,
+			// this applies regardless of --yes.
+			orangeStyle := lipgloss.NewStyle().Foreground(palette.Current().Label.Adaptive()).Bold(true)
+			fmt.Printf("ℹ️  You (%s) are not listed as a reader in .exohub/permissions.\n", orangeStyle.Render(username))
+			fmt.Printf("   Ask an existing owner (%s) for access if you need it.\n", strings.Join(perms.Owners, ", "))
+			return nil
 		}
 	}
 
@@ -118,6 +127,28 @@ func syncGrantsForRemote(s3url string) error {
 	}
 
 	return doGrantsSync(apiBase, s3url, perms)
+}
+
+// canReadDataset reports whether username has read access to a dataset per
+// the permissions file, without being an owner: read_access of "public" or
+// "authenticated" grants read to anyone, and read_access of "viewers" grants
+// read only to users listed in the viewers field. This mirrors the server's
+// READ decision in POST /api/grants/credentials, so a reader never needs to
+// call the owner-only POST /api/grants.
+func canReadDataset(perms *permissionsConfig, username string) bool {
+	switch perms.ReadAccess {
+	case "public", "authenticated":
+		return true
+	case "viewers":
+		for _, viewer := range perms.Viewers {
+			if viewer == username {
+				return true
+			}
+		}
+		return false
+	default:
+		return false
+	}
 }
 
 // grantsAPIBase returns the base URL for the grants API.

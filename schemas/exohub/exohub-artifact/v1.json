@@ -457,6 +457,7 @@
           "required": [
             "id"
           ],
+          "description": "Deprecated: no longer written by exo bundle at or above the version that ships named collections (lineage.collections replaces it); still accepted for compatibility with already-bundled documents and an older exo. Removed at the next full reindex.",
           "properties": {
             "id": {
               "type": "string",
@@ -468,6 +469,59 @@
               "type": "string",
               "_elasticsearch": {
                 "type": "keyword"
+              }
+            }
+          }
+        },
+        "collections": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "kind"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "_elasticsearch": {
+                  "type": "keyword"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "folder",
+                  "named"
+                ],
+                "_elasticsearch": {
+                  "type": "keyword"
+                }
+              },
+              "path": {
+                "type": "string",
+                "_elasticsearch": {
+                  "type": "keyword"
+                }
+              },
+              "name": {
+                "type": "string",
+                "_elasticsearch": {
+                  "type": "keyword"
+                }
+              },
+              "project": {
+                "type": "string",
+                "_elasticsearch": {
+                  "type": "keyword"
+                }
+              },
+              "version": {
+                "type": "string",
+                "_elasticsearch": {
+                  "type": "keyword"
+                }
               }
             }
           }

@@ -29,6 +29,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/Genentech/exohub/go/exo/commandutil"
+	"github.com/Genentech/exohub/go/exo/commandutil/logging"
 	"github.com/Genentech/exohub/go/exo/internal/provenance"
 )
 
@@ -296,6 +297,7 @@ func NewCommand(version string) *cobra.Command {
 		flagResume            bool
 		flagMarkdownRecursive bool
 		flagNoProvenance      bool
+		flagVerify            bool
 	)
 
 	cmd := &cobra.Command{
@@ -303,7 +305,7 @@ func NewCommand(version string) *cobra.Command {
 		Short: "Generate JSON metadata bundle for catalog ingest",
 		Long:  longText,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runBundle(flagScope, flagFromRef, flagPreset, flagOutput, flagRef, flagIncludeHidden, flagIncremental, flagYes, flagDryRun, flagResume, flagMarkdownRecursive, flagNoProvenance, version, args)
+			return runBundle(flagScope, flagFromRef, flagPreset, flagOutput, flagRef, flagIncludeHidden, flagIncremental, flagYes, flagDryRun, flagResume, flagMarkdownRecursive, flagNoProvenance, flagVerify, version, args)
 		},
 	}
 
@@ -319,11 +321,12 @@ func NewCommand(version string) *cobra.Command {
 	cmd.Flags().BoolVar(&flagResume, "resume", false, "Resume a previous bundle run, skipping existing artifacts")
 	cmd.Flags().BoolVar(&flagMarkdownRecursive, "markdown-recursive", false, "Parse markdown files in all directories (default: root-level only)")
 	cmd.Flags().BoolVar(&flagNoProvenance, "no-provenance", false, "Skip compiling provenance.jsonld (provenance.require is still enforced)")
+	cmd.Flags().BoolVar(&flagVerify, "verify", false, "Re-resolve every named collection's external members over the network and fail on a lock mismatch, instead of trusting the committed lock (design D5 amendment of add-exohub-asset-import)")
 
 	return cmd
 }
 
-func runBundle(scope, fromRef, presetName, outputDir, targetRef string, includeHidden, incremental, forceYes, dryRun, flagResume, markdownRecursive, noProvenance bool, version string, pathFilters []string) error {
+func runBundle(scope, fromRef, presetName, outputDir, targetRef string, includeHidden, incremental, forceYes, dryRun, flagResume, markdownRecursive, noProvenance, verifyCollectionLocks bool, version string, pathFilters []string) error {
 	// Verify we're in a git repo
 	if _, err := os.Stat(".git"); os.IsNotExist(err) {
 		return fmt.Errorf("not a git repository")
@@ -432,7 +435,7 @@ func runBundle(scope, fromRef, presetName, outputDir, targetRef string, includeH
 			return fmt.Errorf("failed to check provenance.require: %w", err)
 		}
 		if !noProvenance {
-			provResult, provReport, err = provenance.CompileBundle(provReader, selectedPaths)
+			provResult, provReport, err = provenance.CompileBundleWithVerify(provReader, selectedPaths, verifyCollectionLocks)
 			if err != nil {
 				return fmt.Errorf("failed to compile provenance: %w", err)
 			}
@@ -939,37 +942,185 @@ func checkWorkingTreeClean(outputDir string) error {
 		return nil
 	}
 
-	nameArgs := append([]string{"diff", "--name-status", "HEAD", "--", "."}, excludeArgs...)
+	// -z: NUL-separated status/path records, with raw (non-C-quoted) path
+	// bytes. Without it, git C-quotes unusual paths (e.g. "\303\251.txt" for
+	// é.txt) and shell-quoting that string would produce a path that
+	// doesn't exist.
+	nameArgs := append([]string{"diff", "--name-status", "-z", "HEAD", "--", "."}, excludeArgs...)
 	cmd = commandutil.Command("git", nameArgs...)
 	out, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("failed to check working tree state: %w", err)
 	}
 
-	var paths []string
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if line == "" {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			continue
-		}
-		status, path := fields[0], fields[len(fields)-1]
-		label := "modified"
-		switch status[0] {
-		case 'A':
-			label = "added"
-		case 'D':
-			label = "deleted"
-		case 'R', 'C':
-			label = "renamed"
-		}
-		paths = append(paths, fmt.Sprintf("  %s: %s", label, path))
+	tokens := strings.Split(string(out), "\x00")
+	if n := len(tokens); n > 0 && tokens[n-1] == "" {
+		tokens = tokens[:n-1]
 	}
 
-	return fmt.Errorf("exo bundle: working tree has uncommitted changes to tracked files\n\n%s\n\nThe bundle records a ref (HEAD) but would publish state that differs from it.\nCommit your changes, then re-run. (Untracked files are ignored.)",
-		strings.Join(paths, "\n"))
+	var lines []string
+	var deletedPaths, addedPaths, modifiedPaths []string
+	var renamed []renamePair
+parseTokens:
+	for i := 0; i < len(tokens); {
+		status := tokens[i]
+		i++
+		if status == "" {
+			continue
+		}
+		switch status[0] {
+		case 'R', 'C':
+			if i+1 >= len(tokens) {
+				break parseTokens
+			}
+			oldPath, newPath := tokens[i], tokens[i+1]
+			i += 2
+			renamed = append(renamed, renamePair{Old: oldPath, New: newPath})
+			lines = append(lines, fmt.Sprintf("  renamed: %s -> %s", oldPath, newPath))
+		default:
+			if i >= len(tokens) {
+				break parseTokens
+			}
+			path := tokens[i]
+			i++
+			label := "modified"
+			switch status[0] {
+			case 'A':
+				label = "added"
+				addedPaths = append(addedPaths, path)
+			case 'D':
+				label = "deleted"
+				deletedPaths = append(deletedPaths, path)
+			default:
+				modifiedPaths = append(modifiedPaths, path)
+			}
+			lines = append(lines, fmt.Sprintf("  %s: %s", label, path))
+		}
+	}
+
+	msg := fmt.Sprintf("exo bundle: working tree has uncommitted changes to tracked files\n\n%s\n",
+		strings.Join(lines, "\n"))
+	if fixes := buildDirtyTreeFixes(deletedPaths, addedPaths, modifiedPaths, renamed); fixes != "" {
+		msg += "\n" + fixes
+	}
+	msg += "\nThe bundle records a ref (HEAD) but would publish state that differs from it.\nCommit your changes, then re-run. (Untracked files are ignored.)"
+
+	return fmt.Errorf("%s", msg)
+}
+
+// maxFixPathsShown caps how many paths (or renamed pairs) are listed in a
+// single suggested fix command; beyond this, the command targets the shown
+// paths and the message notes how many more were omitted.
+const maxFixPathsShown = 10
+
+// renamePair is a rename/copy diff record: the path git diff reports is
+// leaving (old) and the path it is arriving at (new).
+type renamePair struct {
+	Old string
+	New string
+}
+
+// formatPathGroup shell-quotes and space-joins up to limit paths for use in
+// a copy-pasteable command, returning the joined paths and, when the group
+// has more than limit entries, a trailing "... and N more" note.
+func formatPathGroup(paths []string, limit int) (shown string, note string) {
+	show := paths
+	if len(paths) > limit {
+		show = paths[:limit]
+	}
+	quoted := make([]string, len(show))
+	for i, p := range show {
+		quoted[i] = logging.ShellQuote(p)
+	}
+	shown = strings.Join(quoted, " ")
+	if len(paths) > limit {
+		note = fmt.Sprintf(" ... and %d more", len(paths)-limit)
+	}
+	return shown, note
+}
+
+// formatRenameGroup shell-quotes and space-joins the old and new paths of up
+// to limit rename pairs (old and new both listed, since undoing a rename
+// needs both pathspecs). It returns the joined paths, a truncation note, and
+// the single pair when there is exactly one (so callers can also offer a
+// plain `git mv` alternative).
+func formatRenameGroup(pairs []renamePair, limit int) (shown string, note string, single *renamePair) {
+	show := pairs
+	if len(pairs) > limit {
+		show = pairs[:limit]
+	}
+	quoted := make([]string, 0, len(show)*2)
+	for _, p := range show {
+		quoted = append(quoted, logging.ShellQuote(p.Old), logging.ShellQuote(p.New))
+	}
+	shown = strings.Join(quoted, " ")
+	if len(pairs) > limit {
+		note = fmt.Sprintf(" ... and %d more", len(pairs)-limit)
+	}
+	if len(pairs) == 1 {
+		single = &pairs[0]
+	}
+	return shown, note, single
+}
+
+// buildDirtyTreeFixes renders copy-pasteable fix commands for each non-empty
+// group of dirty tracked paths reported by checkWorkingTreeClean. Every
+// command is verified to work whether the change is staged, unstaged, or a
+// mix of both (git reports both as the same status), and to never destroy
+// data a copy-pasted "fix" shouldn't: unstaging an added file never deletes
+// it, and discarding only ever targets files that already exist in HEAD.
+func buildDirtyTreeFixes(deleted, added, modified []string, renamed []renamePair) string {
+	var blocks []string
+
+	if len(deleted) > 0 {
+		shown, note := formatPathGroup(deleted, maxFixPathsShown)
+		blocks = append(blocks, fmt.Sprintf(
+			"deleted:\n"+
+				"  to delete them for real: git rm --ignore-unmatch -- %s%s\n"+
+				"                           git commit -m \"Remove deleted file(s)\"\n"+
+				"  to bring them back:      git restore --source=HEAD --staged --worktree -- %s%s\n"+
+				"                           exo get %s%s   (if the content isn't present locally)",
+			shown, note, shown, note, shown, note))
+	}
+
+	if len(added) > 0 {
+		shown, note := formatPathGroup(added, maxFixPathsShown)
+		blocks = append(blocks, fmt.Sprintf(
+			"added:\n"+
+				"  to commit them:              exo add %s%s\n"+
+				"                               git commit\n"+
+				"  to unstage (keep the file):  git restore --staged -- %s%s",
+			shown, note, shown, note))
+	}
+
+	if len(modified) > 0 {
+		shown, note := formatPathGroup(modified, maxFixPathsShown)
+		blocks = append(blocks, fmt.Sprintf(
+			"modified:\n"+
+				"  to commit them:         exo add %s%s\n"+
+				"                          git commit\n"+
+				"  to discard your edits:  git restore --source=HEAD --staged --worktree -- %s%s",
+			shown, note, shown, note))
+	}
+
+	if len(renamed) > 0 {
+		shown, note, single := formatRenameGroup(renamed, maxFixPathsShown)
+		block := fmt.Sprintf(
+			"renamed:\n"+
+				"  to keep them:  git commit\n"+
+				"  to undo them:  git restore --source=HEAD --staged --worktree -- %s%s",
+			shown, note)
+		if single != nil {
+			block += fmt.Sprintf("\n                  (or: git mv -- %s %s)",
+				logging.ShellQuote(single.New), logging.ShellQuote(single.Old))
+		}
+		blocks = append(blocks, block)
+	}
+
+	if len(blocks) == 0 {
+		return ""
+	}
+	return "Fix:\n" + strings.Join(blocks, "\n\n") + "\n"
 }
 
 // excludePathspec returns a `:(exclude)<path>` pathspec for outputDir,

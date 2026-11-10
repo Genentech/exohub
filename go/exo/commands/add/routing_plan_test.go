@@ -91,6 +91,45 @@ func TestRoutingPlanSubdirectoryAndTracked(t *testing.T) {
 	}
 }
 
+// TestRoutingPlanSkipsDeletedTrackedFile is a regression test for issue #143:
+// `git ls-files -co` reports a tracked file even after it was removed from
+// disk with a plain `rm` (deletion not yet staged), and the subsequent
+// os.Lstat then fails. The default plan (used by plain `exo add` and MCP
+// add) must not abort the whole batch over that one file — it must mark the
+// deleted file as DeletedFromDisk (so callers skip staging it, but can still
+// tell the user about it per the maître's review on MR !278) while still
+// planning the other files found alongside it.
+func TestRoutingPlanSkipsDeletedTrackedFile(t *testing.T) {
+	root := routingRepo(t)
+	routingWrite(t, root, "data/old.csv", "original\n")
+	routingWrite(t, root, "data/keep.csv", "keep\n")
+	routingGit(t, root, "add", "data")
+	if err := os.Remove(filepath.Join(root, "data", "old.csv")); err != nil {
+		t.Fatal(err)
+	}
+	routingWrite(t, root, "data/new.csv", "new\n")
+
+	plan, err := PlanAutoAdd(root, []string{"data"}, "")
+	if err != nil {
+		t.Fatalf("PlanAutoAdd must not abort because a tracked file was deleted: %v", err)
+	}
+	byPath := make(map[string]PlannedFile)
+	for _, file := range plan {
+		byPath[file.Path] = file
+	}
+	old, ok := byPath[filepath.Join("data", "old.csv")]
+	if !ok || !old.DeletedFromDisk {
+		t.Fatalf("deleted tracked file must be reported with DeletedFromDisk set: %+v", plan)
+	}
+	if _, ok := byPath[filepath.Join("data", "keep.csv")]; !ok {
+		t.Fatalf("keep.csv missing from plan: %+v", plan)
+	}
+	newFile, ok := byPath[filepath.Join("data", "new.csv")]
+	if !ok || newFile.DeletedFromDisk {
+		t.Fatalf("new.csv next to the deleted file must still be planned normally: %+v", plan)
+	}
+}
+
 func TestRoutingPlanTrackedNoRerouteHintWhenUnchanged(t *testing.T) {
 	root := routingRepo(t)
 	routing := "annex:\n  routing:\n    - path: '*.md'\n      to: git\n"
@@ -171,13 +210,13 @@ func TestRoutingPlanFallbackOnly(t *testing.T) {
 
 func TestSplitArgsThreshold(t *testing.T) {
 	for _, args := range [][]string{{"--large-text-threshold", "1KiB", "file.txt"}, {"--large-text-threshold=1KiB", "file.txt"}} {
-		locals, _, flags, value, _, _, _, _, err := splitArgs(args)
+		locals, _, _, flags, value, _, _, _, _, _, _, _, err := splitArgs(args)
 		if err != nil || value != "1KiB" || len(flags) != 0 || len(locals) != 1 || locals[0] != "file.txt" {
 			t.Fatalf("%v: %v %v %q %v", args, locals, flags, value, err)
 		}
 	}
 	for _, args := range [][]string{{"--large-text-threshold"}, {"--large-text-threshold="}, {"--large-text-threshold", "--git"}, {"--large-text-threshold=lots"}} {
-		if _, _, _, _, _, _, _, _, err := splitArgs(args); err == nil {
+		if _, _, _, _, _, _, _, _, _, _, _, _, err := splitArgs(args); err == nil {
 			t.Fatalf("accepted %v", args)
 		}
 	}

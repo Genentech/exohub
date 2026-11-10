@@ -169,7 +169,7 @@ func TestGetBaseCredsProviderFallback(t *testing.T) {
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "FAKESECRET")
 
 	noop := func(string, ...any) {}
-	creds, err := getBaseCreds(t.Context(), "s3://test-bucket/", 3600, noop)
+	creds, err := getBaseCreds(t.Context(), "s3://test-bucket/", "", 3600, noop)
 	if err != nil {
 		// If AssumeRoleWithWebIdentity isn't routed to our mock (SDK version),
 		// this is still a valid integration test; skip rather than fail.
@@ -202,7 +202,7 @@ func TestGetBaseCredsNoRoleARN(t *testing.T) {
 		[]byte(`{"access_token":"tok","id_token":"idtok"}`), 0600)
 
 	noop := func(string, ...any) {}
-	_, err := getBaseCreds(t.Context(), "s3://test-bucket/", 3600, noop)
+	_, err := getBaseCreds(t.Context(), "s3://test-bucket/", "", 3600, noop)
 	if err == nil {
 		t.Fatal("expected error when EXO_AWS_ROLE_ARN is not set")
 	}

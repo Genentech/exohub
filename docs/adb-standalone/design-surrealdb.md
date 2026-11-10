@@ -112,5 +112,5 @@ DEFINE INDEX IF NOT EXISTS rel_object  ON relationship FIELDS object;
 ## 5. Config (recreated, compatible subset)
 KEEP: `prefixes`, `gprn`, `schema`/`internal_schema`, `permissions`, `tenants`, `storage.s3`.
 REPLACE: `es` → `surreal`, nuros env → `semantic:{model_path,dimensions}` (absent ⇒ FTS-only).
-DROP: celery, lock, sequences, audit, metrics, s3_inventory, content_inventory, hermes, sqs, dynamodb, localstack, inspectors, plugins, cache, almighty, cors.
+DROP: celery, lock, sequences, audit, metrics, s3_inventory, content_inventory, hermes, sqs, dynamodb, localstack, inspectors, plugins, cache, auth service, cors.
 Target ≈ 30–50 lines vs ArtifactDB's 578.

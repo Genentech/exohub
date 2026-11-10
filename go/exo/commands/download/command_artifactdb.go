@@ -58,6 +58,12 @@ func NewCommand() *cobra.Command {
 		noWait       bool
 		maxWait      time.Duration
 		pollInterval time.Duration
+
+		noContent bool
+		worktrees bool
+		checkout  bool
+		edsForce  bool
+		edsParams string
 	)
 
 	cmd := &cobra.Command{
@@ -79,6 +85,9 @@ The catalog URL is resolved in this order:
 Remote download via --eds:
   exo download --eds my-eds myproject@v1
   exo download --eds https://eds.example.com myproject
+  exo download --eds my-eds myproject@v1 --no-content
+  exo download --eds my-eds myproject@v1 --eds-params '{"content": false}'
+  exo download --eds my-eds myproject@v1 --eds-params @opts.json
 
 With --eds, nothing is downloaded to this machine. The named Data Service
 (EDS) fetches the dataset into its own storage; this command only submits
@@ -87,7 +96,17 @@ the request and follows its progress. --eds accepts either an index id
 It is mutually exclusive with -o/--output-dir and -f/--force, and only
 accepts a dataset (project or project@version), not an artifact id.
 Ctrl-C does not cancel the remote download; the download keeps running on
-the EDS and the status URL is printed so it can be followed separately.`,
+the EDS and the status URL is printed so it can be followed separately.
+
+--no-content, --worktrees, --checkout, --eds-force, and --eds-params are
+only meaningful with --eds, and are user-scope-only options the EDS itself
+enforces (using them with another scope is rejected by the EDS, not by
+exo). Only flags you actually set are sent, so an exo built against a
+newer EDS still works against an older one as long as you don't ask for a
+field it predates. --eds-params carries a JSON object of additional,
+forward-compatible options merged into the request; it can be inline JSON
+or @path/to/file.json. Setting the same option both as a typed flag (or
+--scope) and inside --eds-params is an error, not silently resolved.`,
 		Args: cobra.ExactArgs(1),
 		PreRun: func(cmd *cobra.Command, args []string) {
 			initDlStyles()
@@ -103,8 +122,23 @@ the EDS and the status URL is printed so it can be followed separately.`,
 					pollInterval:     pollInterval,
 					outputDirChanged: cmd.Flags().Changed("output-dir"),
 					force:            force,
+
+					noContent:        noContent,
+					noContentChanged: cmd.Flags().Changed("no-content"),
+					worktrees:        worktrees,
+					worktreesChanged: cmd.Flags().Changed("worktrees"),
+					checkout:         checkout,
+					checkoutChanged:  cmd.Flags().Changed("checkout"),
+					edsForce:         edsForce,
+					edsForceChanged:  cmd.Flags().Changed("eds-force"),
+					edsParams:        edsParams,
+					edsParamsChanged: cmd.Flags().Changed("eds-params"),
 				}
 				return runEDSDownload(opts)
+			}
+
+			if err := rejectEDSOnlyFlagsWithoutEDS(cmd); err != nil {
+				return err
 			}
 
 			catalogURL, err := resolveCatalogURL(urlFlag)
@@ -188,6 +222,12 @@ the EDS and the status URL is printed so it can be followed separately.`,
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "With --eds, submit the download and exit without following progress")
 	cmd.Flags().DurationVar(&maxWait, "max-wait", 6*time.Hour, "With --eds, maximum time to follow the remote download before giving up (it keeps running on the EDS regardless)")
 	cmd.Flags().DurationVar(&pollInterval, "poll-interval", eds.DefaultPollInterval, "With --eds, how often to poll the operation status (must be positive; the EDS only refreshes progress every 30-120s, so polling faster doesn't help)")
+
+	cmd.Flags().BoolVar(&noContent, "no-content", false, "With --eds, clone or update and initialise the project but fetch no annexed content (user scope only); fetch it later with 'exo get' or a download without --no-content")
+	cmd.Flags().BoolVar(&worktrees, "worktrees", false, "With --eds, lay out the EDS copy as one read-only worktree per version (--worktrees=false: one plain repository); user scope only, unset keeps the existing layout on disk")
+	cmd.Flags().BoolVar(&checkout, "checkout", false, "With --eds, let an existing plain repository on the EDS switch to the requested version (user scope only)")
+	cmd.Flags().BoolVar(&edsForce, "eds-force", false, "With --eds, let an update or checkout discard unpublished work on the EDS copy: changed/untracked files, commits not on origin, nested repositories (user scope only; distinct from local -f/--force, which --eds already rejects)")
+	cmd.Flags().StringVar(&edsParams, "eds-params", "", "With --eds, a JSON object (inline or @path/to/file.json) of additional download options merged into the request, for options newer than this exo's typed flags; conflicts with a typed flag or --scope are an error")
 
 	return cmd
 }

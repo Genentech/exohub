@@ -188,6 +188,36 @@ func TestLoadBearerTokenFromFile(t *testing.T) {
 	}
 }
 
+func TestLoadBearerTokenFromEnvRawJWT(t *testing.T) {
+	raw := "eyJhbGciOiJIUzI1NiJ9.payload.signature"
+	t.Setenv("EXO_TOKEN", raw)
+
+	token, err := loadBearerToken()
+	if err != nil {
+		t.Fatalf("loadBearerToken error: %v", err)
+	}
+	if token != raw {
+		t.Errorf("token = %q, want %q", token, raw)
+	}
+}
+
+func TestLoadBearerTokenFromFileRawJWT(t *testing.T) {
+	tmpDir := t.TempDir()
+	tokenFile := filepath.Join(tmpDir, "token")
+	raw := "eyJhbGciOiJIUzI1NiJ9.payload.signature"
+	os.WriteFile(tokenFile, []byte(raw), 0600)
+	t.Setenv("EXO_TOKEN_FILE", tokenFile)
+	t.Setenv("EXO_TOKEN", "")
+
+	token, err := loadBearerToken()
+	if err != nil {
+		t.Fatalf("loadBearerToken error: %v", err)
+	}
+	if token != raw {
+		t.Errorf("token = %q, want %q", token, raw)
+	}
+}
+
 func TestOutputCredentialsJSON(t *testing.T) {
 	creds := &credentialOutput{
 		Version:        1,

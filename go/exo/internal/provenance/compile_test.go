@@ -232,6 +232,45 @@ func TestCompileBundle_FolderCollectionInScope(t *testing.T) {
 	}
 }
 
+func TestCompileBundle_NamedCollectionInScope(t *testing.T) {
+	// Matches design D6 "Named collections in bundle compilation scope":
+	// selecting a current member of a named collection pulls the
+	// collection's node into scope, on the same terms as a matching folder
+	// collection (TestCompileBundle_FolderCollectionInScope).
+	root, run := stateTestRepo(t, false)
+	writeRepoFile(t, root, "cohort_a/sample1.bam", "s1\n")
+	writeRepoFile(t, root, "cohort_a/sample2.bam", "s2\n")
+	writeCollectionManifest(t, root, "cohort-a-bams", `{"paths": ["cohort_a/sample1.bam", "cohort_a/sample2.bam"]}`)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	collID, _, _, _, err := ResolveCollection(NewRefReader(root, "HEAD"), "cohort-a-bams", false)
+	if err != nil {
+		t.Fatalf("ResolveCollection() error = %v", err)
+	}
+
+	recID := NewRecordID()
+	graph := fmt.Sprintf(`{"@id": %q, "@type": "Collection", "label": "cohort a"}`, collID)
+	rec := minimalRecordJSON(recID, "recorded", "urn:exohub:agent:person:alice", graph)
+	writeRepoFile(t, root, RecordDir+"/r.jsonld", rec)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "record")
+
+	result, report, err := CompileBundle(NewRefReader(root, "HEAD"), []string{"cohort_a/sample1.bam"})
+	if err != nil {
+		t.Fatalf("CompileBundle() error = %v", err)
+	}
+	if report.HasErrors() {
+		t.Fatalf("HasErrors(): %+v", report.Findings)
+	}
+	if len(result.Document.Graph) != 1 {
+		t.Fatalf("Graph = %+v, want 1 node (the named collection)", result.Document.Graph)
+	}
+	if got := result.Document.Graph[0].ID(); got != collID {
+		t.Errorf("node id = %s, want %s", got, collID)
+	}
+}
+
 func TestCompileBundle_DeterministicOrdering(t *testing.T) {
 	root, run := stateTestRepo(t, false)
 	writeRepoFile(t, root, "b.txt", "b\n")
@@ -442,5 +481,84 @@ func TestRequireViolations_CoveredFileNoViolation(t *testing.T) {
 	}
 	if len(violations) != 0 {
 		t.Errorf("violations = %v, want none", violations)
+	}
+}
+
+// TestCompileBundleWithVerify_MatchSucceeds covers exo bundle --verify's
+// happy path (design D5 amendment of add-exohub-asset-import): a named
+// collection with external "members" compiles the same way whether or not
+// --verify is set, as long as the lock still matches what re-resolving
+// now gives.
+func TestCompileBundleWithVerify_MatchSucceeds(t *testing.T) {
+	_, extRun := newExternalProjectRepo(t, "other-project")
+	extBlobID := GitBlobEntityID(mustBlobID(t, extRun, "fastq/sample1.fastq.gz"))
+
+	root, run := stateTestRepo(t, false)
+	writeRepoFile(t, root, "local/sample1.fastq.gz", "fastq-1")
+	writeCollectionManifest(t, root, "imported", `{"members": ["exohub:other-project:fastq/sample1.fastq.gz@main"]}`)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	_, _, _, lockUpdates, err := ResolveCollection(NewWorktreeReader(root), "imported", true)
+	if err != nil {
+		t.Fatalf("ResolveCollection(refreshLock) error = %v", err)
+	}
+	writeCollectionLockFixture(t, root, "imported", lockUpdates["imported"])
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "lock")
+
+	recID := NewRecordID()
+	graph := fmt.Sprintf(`{"@id": %q, "@type": "Entity"}`, extBlobID)
+	rec := minimalRecordJSON(recID, "recorded", "urn:exohub:agent:person:alice", graph)
+	writeRepoFile(t, root, RecordDir+"/r.jsonld", rec)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "record")
+
+	_, report, err := CompileBundleWithVerify(NewRefReader(root, "HEAD"), []string{"local/sample1.fastq.gz"}, true)
+	if err != nil {
+		t.Fatalf("CompileBundleWithVerify(verify) error = %v", err)
+	}
+	if report.HasErrors() {
+		t.Fatalf("HasErrors(): %+v", report.Findings)
+	}
+}
+
+// TestCompileBundleWithVerify_MismatchFails covers exo bundle --verify
+// catching a stale lock (design D5 amendment review point 2): once the
+// external project's pinned branch moves, --verify fails instead of
+// silently producing a bundle from the stale lock.
+func TestCompileBundleWithVerify_MismatchFails(t *testing.T) {
+	extRoot, extRun := newExternalProjectRepo(t, "other-project")
+
+	root, run := stateTestRepo(t, false)
+	writeCollectionManifest(t, root, "imported", `{"members": ["exohub:other-project:fastq/sample1.fastq.gz@main"]}`)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	_, _, _, lockUpdates, err := ResolveCollection(NewWorktreeReader(root), "imported", true)
+	if err != nil {
+		t.Fatalf("ResolveCollection(refreshLock) error = %v", err)
+	}
+	writeCollectionLockFixture(t, root, "imported", lockUpdates["imported"])
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "lock")
+
+	writeRepoFile(t, extRoot, "fastq/sample1.fastq.gz", "fastq-1-changed")
+	extRun("git", "add", ".")
+	extRun("git", "commit", "-q", "-m", "update sample1")
+	extRun("git", "update-ref", "refs/remotes/origin/main", "refs/heads/main")
+
+	if _, _, err := CompileBundleWithVerify(NewRefReader(root, "HEAD"), nil, true); err == nil {
+		t.Fatal("expected a lock mismatch error")
+	} else if !strings.Contains(err.Error(), "now resolves to") {
+		t.Errorf("error = %v, want it to describe the mismatch", err)
+	}
+
+	// Without --verify, the same stale lock is trusted (design D5
+	// amendment: offline commands never re-resolve).
+	if _, report, err := CompileBundle(NewRefReader(root, "HEAD"), nil); err != nil {
+		t.Fatalf("CompileBundle() error = %v", err) //nolint:govet
+	} else if report.HasErrors() {
+		t.Fatalf("HasErrors(): %+v", report.Findings)
 	}
 }

@@ -2,6 +2,7 @@ package init
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -702,6 +703,123 @@ func TestLoadRemotesConfigInvalidYAML(t *testing.T) {
 	_, err = LoadRemotesConfig()
 	if err == nil {
 		t.Errorf("LoadRemotesConfig() expected error for invalid YAML, got nil")
+	}
+}
+
+func runGitInit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GIT_CONFIG_NOSYSTEM=1", "HOME="+dir,
+		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
+		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com",
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("command %v failed: %v\n%s", args, err, out)
+	}
+}
+
+func TestLoadRemotesConfigFromRef(t *testing.T) {
+	repoDir := t.TempDir()
+	oldWd, _ := os.Getwd()
+	defer os.Chdir(oldWd)
+	os.Chdir(repoDir)
+
+	runGitInit(t, repoDir, "git", "init", "-q")
+
+	oldCfg := &RemotesConfig{Remotes: []RemoteConfig{{Name: "atlas", Type: "artifactdb", S3URL: "s3://bucket/sandbox/old"}}}
+	if err := SaveRemotesConfig(oldCfg); err != nil {
+		t.Fatalf("SaveRemotesConfig: %v", err)
+	}
+	runGitInit(t, repoDir, "git", "add", ".exohub/remotes")
+	runGitInit(t, repoDir, "git", "commit", "-q", "-m", "old routing")
+	runGitInit(t, repoDir, "git", "tag", "1")
+
+	newCfg := &RemotesConfig{Remotes: []RemoteConfig{{Name: "atlas", Type: "artifactdb", S3URL: "s3://bucket/styx/psyche-poc", AtlasURL: "https://atlas.example/sandbox1"}}}
+	if err := SaveRemotesConfig(newCfg); err != nil {
+		t.Fatalf("SaveRemotesConfig: %v", err)
+	}
+	runGitInit(t, repoDir, "git", "add", ".exohub/remotes")
+	runGitInit(t, repoDir, "git", "commit", "-q", "-m", "migrate routing")
+
+	cfg, err := LoadRemotesConfigFromRef("1")
+	if err != nil {
+		t.Fatalf("LoadRemotesConfigFromRef: %v", err)
+	}
+	if len(cfg.Remotes) != 1 || cfg.Remotes[0].S3URL != "s3://bucket/sandbox/old" || cfg.Remotes[0].AtlasURL != "" {
+		t.Fatalf("expected tag 1's own (pre-migration) routing, got: %+v", cfg.Remotes)
+	}
+
+	cfg, err = LoadRemotesConfigFromRef("HEAD")
+	if err != nil {
+		t.Fatalf("LoadRemotesConfigFromRef: %v", err)
+	}
+	if len(cfg.Remotes) != 1 || cfg.Remotes[0].AtlasURL != "https://atlas.example/sandbox1" {
+		t.Fatalf("expected HEAD's current (migrated) routing, got: %+v", cfg.Remotes)
+	}
+}
+
+func TestLoadRemotesConfigFromRefMissingFile(t *testing.T) {
+	repoDir := t.TempDir()
+	oldWd, _ := os.Getwd()
+	defer os.Chdir(oldWd)
+	os.Chdir(repoDir)
+
+	runGitInit(t, repoDir, "git", "init", "-q")
+	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitInit(t, repoDir, "git", "add", "README.md")
+	runGitInit(t, repoDir, "git", "commit", "-q", "-m", "no remotes file")
+
+	cfg, err := LoadRemotesConfigFromRef("HEAD")
+	if err != nil {
+		t.Fatalf("LoadRemotesConfigFromRef: %v", err)
+	}
+	if cfg == nil || len(cfg.Remotes) != 0 {
+		t.Fatalf("expected empty config for a ref predating .exohub/remotes, got: %+v", cfg)
+	}
+}
+
+func TestResolveDefaultRoutingRef(t *testing.T) {
+	repoDir := t.TempDir()
+	oldWd, _ := os.Getwd()
+	defer os.Chdir(oldWd)
+	os.Chdir(repoDir)
+
+	runGitInit(t, repoDir, "git", "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitInit(t, repoDir, "git", "add", "README.md")
+	runGitInit(t, repoDir, "git", "commit", "-q", "-m", "init")
+
+	if got := ResolveDefaultRoutingRef(); got != "main" {
+		t.Errorf("ResolveDefaultRoutingRef() = %q, want %q", got, "main")
+	}
+}
+
+func TestRoutingFieldsDiffer(t *testing.T) {
+	base := &RemoteConfig{Name: "atlas", Type: "artifactdb", S3URL: "s3://bucket/old"}
+	same := &RemoteConfig{Name: "atlas", Type: "artifactdb", S3URL: "s3://bucket/old", Include: []string{"irrelevant"}}
+	diffPrefix := &RemoteConfig{Name: "atlas", Type: "artifactdb", S3URL: "s3://bucket/new"}
+	diffAtlas := &RemoteConfig{Name: "atlas", Type: "artifactdb", S3URL: "s3://bucket/old", AtlasURL: "https://atlas.example/sandbox1"}
+
+	if RoutingFieldsDiffer(base, same) {
+		t.Error("expected no diff for content-only field changes (include)")
+	}
+	if !RoutingFieldsDiffer(base, diffPrefix) {
+		t.Error("expected diff for s3url (prefix) change")
+	}
+	if !RoutingFieldsDiffer(base, diffAtlas) {
+		t.Error("expected diff for atlas_url addition")
+	}
+	if RoutingFieldsDiffer(nil, nil) {
+		t.Error("expected no diff for two nils")
+	}
+	if !RoutingFieldsDiffer(base, nil) {
+		t.Error("expected diff when only one side is nil")
 	}
 }
 

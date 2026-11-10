@@ -1,12 +1,16 @@
 package provenance
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"sort"
 	"strings"
 
 	"github.com/google/uuid"
 )
 
-// URN prefixes for content-addressed and agent identifiers (design D5).
+// URN prefixes for content-addressed and agent identifiers (design D5,
+// D1 of add-explicit-collections for CollectionURNPrefix).
 const (
 	AnnexURNPrefix         = "urn:exohub:annex:"
 	GitBlobURNPrefix       = "urn:exohub:git:blob:"
@@ -16,6 +20,7 @@ const (
 	ActivityURNPrefix      = "urn:exohub:activity:"
 	PersonAgentURNPrefix   = "urn:exohub:agent:person:"
 	SoftwareAgentURNPrefix = "urn:exohub:agent:software:"
+	CollectionURNPrefix    = "urn:exohub:collection:sha256:"
 )
 
 // AnnexEntityID returns the identifier for content stored in git-annex
@@ -52,6 +57,19 @@ func PersonAgentID(unixID string) string {
 // workflow engine or AI agent name; design D5).
 func SoftwareAgentID(name string) string {
 	return SoftwareAgentURNPrefix + name
+}
+
+// CollectionID returns the identifier for a named collection whose current
+// members have the given content ids (design D1 of add-explicit-collections):
+// the lowercase hex SHA-256 digest of every member's own content id,
+// sorted lexicographically and joined with "\n". Sorting and a fixed
+// digest algorithm make the id deterministic regardless of declaration
+// order or which exo process computes it; memberIDs is not mutated.
+func CollectionID(memberIDs []string) string {
+	sorted := append([]string(nil), memberIDs...)
+	sort.Strings(sorted)
+	digest := sha256.Sum256([]byte(strings.Join(sorted, "\n")))
+	return CollectionURNPrefix + hex.EncodeToString(digest[:])
 }
 
 // NewRecordID returns a fresh record identifier using a UUIDv7 (design D5).

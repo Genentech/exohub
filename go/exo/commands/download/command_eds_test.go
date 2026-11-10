@@ -17,7 +17,7 @@ func TestPrintSuccess_WithDestinationAndScope(t *testing.T) {
 			Success:     true,
 			Destination: "/data/eds/users/alice/workspace/winery/v0.0.4",
 			Scope:       "user",
-		})
+		}, false)
 	})
 	if !strings.Contains(out, "/data/eds/users/alice/workspace/winery/v0.0.4") {
 		t.Errorf("output missing destination, got: %q", out)
@@ -29,7 +29,7 @@ func TestPrintSuccess_WithDestinationAndScope(t *testing.T) {
 
 func TestPrintSuccess_EmptyDestination(t *testing.T) {
 	out := captureStdout(t, func() {
-		printSuccess(eds.Outcome{Success: true})
+		printSuccess(eds.Outcome{Success: true}, false)
 	})
 	// Must not print a label with nothing after it.
 	if strings.Contains(out, "Downloaded to \n") || strings.HasSuffix(strings.TrimSpace(out), "to") {
@@ -37,6 +37,18 @@ func TestPrintSuccess_EmptyDestination(t *testing.T) {
 	}
 	if !strings.Contains(out, "no destination path") {
 		t.Errorf("expected an explicit no-destination message, got: %q", out)
+	}
+}
+
+func TestPrintSuccess_ContentOffMentionsExoGet(t *testing.T) {
+	out := captureStdout(t, func() {
+		printSuccess(eds.Outcome{Success: true, Destination: "/data/eds/x"}, true)
+	})
+	if !strings.Contains(out, "exo get") {
+		t.Errorf("expected a mention of 'exo get' when content was off, got: %q", out)
+	}
+	if !strings.Contains(out, "--no-content") {
+		t.Errorf("expected a mention of --no-content, got: %q", out)
 	}
 }
 
@@ -106,7 +118,7 @@ func TestRunEDSDownload_FinalLineFromCompletedResult(t *testing.T) {
 
 	out := captureStdout(t, func() {
 		fmt.Println(formatEDSFinalLine(result))
-		printSuccess(eds.Classify(&eds.Operation{Status: eds.StatusCompleted, Result: result}))
+		printSuccess(eds.Classify(&eds.Operation{Status: eds.StatusCompleted, Result: result}), false)
 	})
 
 	if !strings.Contains(out, "100%") {

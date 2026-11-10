@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -15,11 +16,35 @@ import (
 	"github.com/Genentech/exohub/go/exo/internal/defaults"
 )
 
+// bareSemverRE matches a bare semver (no leading "v") such as "0.134.0" or
+// "0.134.0-rc1", optionally with a build metadata suffix.
+var bareSemverRE = regexp.MustCompile(`^\d+\.\d+\.\d+([-+].*)?$`)
+
+// normalizeVersion prefixes a bare semver with "v" so it matches the
+// v-prefixed release tags used by the artifact store. Already v-prefixed
+// values, "latest", and empty strings are returned unchanged.
+func normalizeVersion(version string) string {
+	if version == "" || version == "latest" {
+		return version
+	}
+	if bareSemverRE.MatchString(version) {
+		return "v" + version
+	}
+	return version
+}
+
 func NewCommand() *cobra.Command {
 	var version string
 	cmd := &cobra.Command{
 		Use:   "upgrade [version]",
 		Short: "Upgrade exo CLI",
+		Long: "Upgrade exo CLI.\n\n" +
+			"The version may be given as a bare semver (0.134.0) or a v-prefixed\n" +
+			"release tag (v0.134.0); bare semvers are normalized to the tag form.\n\n" +
+			"Note: right after a new release, 'exo upgrade' with no version may\n" +
+			"briefly still install the previous version, until the artifact store's\n" +
+			"'latest' pointer catches up. If that happens, pass the version\n" +
+			"explicitly, e.g. 'exo upgrade v0.134.0'.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 1 {
 				return fmt.Errorf("unexpected argument: %s", args[1])
@@ -29,6 +54,10 @@ func NewCommand() *cobra.Command {
 					return fmt.Errorf("version specified via both flag and argument")
 				}
 				version = args[0]
+			}
+			if normalized := normalizeVersion(version); normalized != version {
+				debugf("normalized version %q -> %q", version, normalized)
+				version = normalized
 			}
 
 			upgradeURL := defaults.UpgradeURL()

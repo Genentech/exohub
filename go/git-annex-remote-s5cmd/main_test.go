@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -218,7 +219,7 @@ func TestFetchBaseCredentialsSetsExpiration(t *testing.T) {
 	credHelperBin = makeFakeCredHelper(t, expStr)
 
 	baseCredsExpiration = time.Time{}
-	err := fetchBaseCredentials("s3://test-bucket/")
+	err := fetchBaseCredentials("s3://test-bucket/", "")
 	if err != nil {
 		t.Fatalf("fetchBaseCredentials error: %v", err)
 	}
@@ -227,6 +228,46 @@ func TestFetchBaseCredentialsSetsExpiration(t *testing.T) {
 	}
 	if !baseCredsExpiration.Equal(exp) {
 		t.Errorf("baseCredsExpiration = %v, want %v", baseCredsExpiration, exp)
+	}
+}
+
+func TestFetchBaseCredentialsForwardsGroup(t *testing.T) {
+	resetState()
+	exp := time.Now().Add(45 * time.Minute).UTC().Truncate(time.Second)
+	expStr := exp.Format(time.RFC3339)
+
+	dir := t.TempDir()
+	argsFile := dir + "/args"
+	path := dir + "/fake-cred-helper"
+	script := "#!/bin/sh\necho \"$@\" > " + argsFile + "\necho '{\"AccessKeyId\":\"FAKEKEY\",\"SecretAccessKey\":\"FAKESECRET\",\"SessionToken\":\"FAKETOKEN\",\"Expiration\":\"" + expStr + "\"}'\n"
+	os.WriteFile(path, []byte(script), 0755)
+
+	origBin := credHelperBin
+	defer func() { credHelperBin = origBin }()
+	credHelperBin = path
+
+	if err := fetchBaseCredentials("s3://test-bucket/", "GRP-Genomics-Raw-Readers"); err != nil {
+		t.Fatalf("fetchBaseCredentials error: %v", err)
+	}
+
+	got, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("could not read captured args: %v", err)
+	}
+	if !strings.Contains(string(got), "--group GRP-Genomics-Raw-Readers") {
+		t.Errorf("expected helper invocation to include --group GRP-Genomics-Raw-Readers, got: %q", got)
+	}
+
+	// An empty group must not add a --group flag at all.
+	if err := fetchBaseCredentials("s3://test-bucket/", ""); err != nil {
+		t.Fatalf("fetchBaseCredentials error: %v", err)
+	}
+	got, err = os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("could not read captured args: %v", err)
+	}
+	if strings.Contains(string(got), "--group") {
+		t.Errorf("expected no --group flag with an empty group, got: %q", got)
 	}
 }
 

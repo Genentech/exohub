@@ -21,13 +21,27 @@ const (
 	// provenance.collections folder, which is covered only through the
 	// folder (design "Declared collection folders").
 	LineageSourceDeclaredCollection LineageSource = "declared-collection"
+	// LineageSourceNamedCollection means the path has no provenance of its
+	// own and no covered enclosing folder collection either, and the
+	// subject is a covered named collection (add-explicit-collections design
+	// D6) the path is a member of, directly or through a nested named
+	// collection.
+	LineageSourceNamedCollection LineageSource = "named-collection"
 )
 
 // Subject is exo provenance show's resolved starting point.
 type Subject struct {
 	ID         string
 	Source     LineageSource
-	FolderPath string // set when Source != LineageSourceOwn
+	FolderPath string // set when Source is a folder-based fallback
+	// CollectionName is the named collection's bare name (no "collection:"
+	// prefix), set when Source == LineageSourceNamedCollection.
+	CollectionName string
+	// OtherCollections lists, sorted, every other covered named collection
+	// the path is also a member of, excluding CollectionName (design D6:
+	// "states the others by name rather than silently dropping them"). Set
+	// only when Source == LineageSourceNamedCollection.
+	OtherCollections []string
 }
 
 // FolderHistoryHint is the nearest older tree id of a folder path that is
@@ -140,7 +154,88 @@ func ResolveSubject(reader *Reader, path string, merged *MergedGraph) (Subject, 
 			hint = folderHistoryHint(reader, dir, merged)
 		}
 	}
+
+	hits, err := coveredNamedCollectionsForPath(reader, path, merged)
+	if err != nil {
+		return Subject{}, nil, err
+	}
+	if len(hits) > 0 {
+		other := make([]string, 0, len(hits)-1)
+		for _, h := range hits[1:] {
+			other = append(other, h.name)
+		}
+		return Subject{
+			ID:               hits[0].id,
+			Source:           LineageSourceNamedCollection,
+			CollectionName:   hits[0].name,
+			OtherCollections: other,
+		}, hint, nil
+	}
+
 	return Subject{ID: ownID, Source: LineageSourceOwn}, hint, nil
+}
+
+// namedCollectionHit is one named collection a path is covered through
+// (design D6): id is the collection's own current id (D1), covered by a
+// non-superseded record.
+type namedCollectionHit struct {
+	name string
+	id   string
+}
+
+// coveredNamedCollectionsForPath returns, sorted by name (design D6: "the
+// first, by name, for determinism"), every named collection declared at
+// reader's checked state whose current id is covered by a non-superseded
+// record and that covers path, directly or through an enclosing folder
+// member (design D6, D7). A collection that does not cover path, or whose
+// id is not covered, is omitted entirely, exactly like an ordinary
+// uncovered file.
+func coveredNamedCollectionsForPath(reader *Reader, path string, merged *MergedGraph) ([]namedCollectionHit, error) {
+	names, err := ListCollectionNames(reader)
+	if err != nil {
+		return nil, err
+	}
+	if len(names) == 0 {
+		return nil, nil
+	}
+
+	ownID, err := reader.ResolveContentID(path)
+	if err != nil {
+		return nil, err
+	}
+	ancestorIDs := map[string]bool{}
+	for _, dir := range pathAncestors(path) {
+		id, err := reader.ResolveContentID(dir + "/")
+		if err != nil {
+			continue
+		}
+		ancestorIDs[id] = true
+	}
+
+	var hits []namedCollectionHit
+	for _, name := range names {
+		id, coveredIDs, _, err := ResolveCollectionCoverage(reader, name)
+		if err != nil {
+			return nil, fmt.Errorf("collection:%s: %w", name, err)
+		}
+		if !nodeIsCovered(merged.Nodes[id]) {
+			continue
+		}
+		member := coveredIDs[ownID]
+		if !member {
+			for aid := range ancestorIDs {
+				if coveredIDs[aid] {
+					member = true
+					break
+				}
+			}
+		}
+		if member {
+			hits = append(hits, namedCollectionHit{name: name, id: id})
+		}
+	}
+	sort.Slice(hits, func(i, j int) bool { return hits[i].name < hits[j].name })
+	return hits, nil
 }
 
 // hasCollectionAtPath reports whether merged has a Collection node whose
@@ -209,7 +304,7 @@ func folderHistoryHint(reader *Reader, dir string, merged *MergedGraph) *FolderH
 // each step's activities, plans and agents (including actedOnBehalfOf).
 var upstreamProperties = []string{
 	"wasDerivedFrom", "wasRevisionOf", "wasGeneratedBy", "used",
-	"hadPlan", "wasAssociatedWith", "actedOnBehalfOf", "wasAttributedTo",
+	"hadPlan", "wasAssociatedWith", "actedOnBehalfOf", "wasAttributedTo", "hadPrimarySource",
 }
 
 // LineageEdge is one upstream statement Walk followed, carrying the record

@@ -367,7 +367,7 @@ func createExportRemoteInteractive(name string) (RemoteConfig, error) {
 		fmt.Printf("Set remote.%s.annex-tracking-branch to '%s'\n", name, trackingBranch)
 	}
 
-	ensureRemoteConfigS3URL(name, s3url)
+	ensureRemoteConfigS3URL(RemoteConfig{Name: name, S3URL: s3url, Type: "export", Grants: remoteGrants})
 
 	// Get UUID for tracking
 	uuid := getRemoteUUID(name)
@@ -617,7 +617,7 @@ func createArtifactDBRemoteInteractive(name string) (RemoteConfig, error) {
 
 	_ = runCommand([]string{"git", "annex", "enableremote", name, "s3url=" + s3url, "exporttree=yes"})
 
-	ensureRemoteConfigS3URL(name, s3url)
+	ensureRemoteConfigS3URL(RemoteConfig{Name: name, S3URL: s3url, Type: "artifactdb", Grants: remoteGrants})
 
 	// Set preferred content
 	wanted := "include=.exohub/bundles/* or include=.artifactdb/*"
@@ -672,4 +672,66 @@ func createDriveRemoteInteractive(name string) (RemoteConfig, error) {
 
 func runInteractiveRemoteSetup() error {
 	return runInteractiveTUI()
+}
+
+// CreateReadOnlyAnnexRemote ensures a read-only git-annex s5cmd remote on
+// s3url (with the given chunk size) exists, named name, for `exo add
+// exohub:...`'s Z1 materialisation (design D3,
+// openspec/changes/add-exohub-asset-import/spike-zero-copy.md "Effort to
+// productise"): grants=true and readonly: true, so exo sync/exo export
+// never treat it as a copy/export target (exo-cli#147's isReadonlyRemote).
+// If an .exohub/remotes entry for the same s3url and chunk already exists,
+// it is reused instead of creating a second remote for the same source
+// storage. It returns the remote's config and whether it was newly created.
+func CreateReadOnlyAnnexRemote(name, s3url, chunk string) (RemoteConfig, bool, error) {
+	remotesConfig, err := LoadRemotesConfig()
+	if err != nil {
+		return RemoteConfig{}, false, err
+	}
+	for _, r := range remotesConfig.Remotes {
+		if r.Type == "annex" && r.S3URL == s3url && r.Chunk == chunk {
+			if !r.Readonly {
+				// r was set up for something else (e.g. the project's own
+				// writable backup/push remote on the same storage); never
+				// silently treat a writable remote as a Z1 read-only import
+				// source (exo-cli#152 review).
+				return RemoteConfig{}, false, fmt.Errorf("remote %q already exists for %s but is not readonly: refusing to reuse a writable remote as a read-only import source", r.Name, s3url)
+			}
+			return r, false, nil
+		}
+	}
+
+	if !commandExists("s5cmd") {
+		return RemoteConfig{}, false, fmt.Errorf("s5cmd binary not found: install it first (https://github.com/peak/s5cmd)")
+	}
+	if remoteExists(name) {
+		return RemoteConfig{}, false, fmt.Errorf("remote %q already exists with different settings", name)
+	}
+	if err := ensureAnnexInitialized(); err != nil {
+		return RemoteConfig{}, false, err
+	}
+
+	initArgs := []string{
+		"git", "annex", "initremote", name,
+		"type=external", "externaltype=s5cmd", "encryption=none",
+		"s3url=" + s3url, "chunk=" + chunk, "grants=true",
+	}
+	if err := runCommand(initArgs); err != nil {
+		return RemoteConfig{}, false, err
+	}
+
+	rc := RemoteConfig{
+		Name:     name,
+		Type:     "annex",
+		UUID:     getRemoteUUID(name),
+		S3URL:    s3url,
+		Chunk:    chunk,
+		Grants:   true,
+		Readonly: true,
+	}
+	remotesConfig.AddRemote(rc)
+	if err := SaveRemotesConfig(remotesConfig); err != nil {
+		return RemoteConfig{}, false, err
+	}
+	return rc, true, nil
 }

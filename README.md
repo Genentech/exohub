@@ -91,6 +91,7 @@ the enterprise ArtifactDB API, so datasets round-trip cleanly. See
 - **`adb-standalone` design notes:** [`docs/adb-standalone/`](docs/adb-standalone/)
 - **Git/annex routing rules:** [`docs/annex-routing.md`](docs/annex-routing.md)
 - **Provenance (data lineage):** [`docs/provenance.md`](docs/provenance.md)
+- **Catalog remotes (publishing bundles to an Atlas):** [`docs/catalog-remotes.md`](docs/catalog-remotes.md)
 
 ## Contributing & Security
 

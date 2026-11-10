@@ -18,7 +18,11 @@ import (
 //  2. Fall back to AssumeRoleWithWebIdentity using the stored OIDC id token and
 //     EXO_AWS_ROLE_ARN / EXO_AWS_REGION. No internal SSO symbols in this build.
 //     The id_token is refreshed via refresh_token first if expired or near-expiry.
-func getBaseCreds(ctx context.Context, _ string, duration int, debugf func(string, ...any)) (*credentialOutput, error) {
+//
+// The group parameter (credentials.<provider>.group / --group) is ignored in
+// this build: it is specific to providers only the internal build knows how
+// to request a session tag for.
+func getBaseCreds(ctx context.Context, _ string, _ string, duration int, debugf func(string, ...any)) (*credentialOutput, error) {
 	if debugf == nil {
 		debugf = func(string, ...any) {}
 	}

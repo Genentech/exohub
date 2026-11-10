@@ -19,6 +19,12 @@ They are add-only: a committed record is never edited or deleted. A
 correction is a new record that supersedes the ones it replaces
 (--supersedes).
 
+A folder can be one artifact (a folder collection, identified by its git
+tree id). A named collection covers an arbitrary, named set of files that
+is not one folder, declared in .exohub/collections/<name>.json and used as
+--generated collection:<name>; see docs/provenance.md for the manifest
+format and the minimum exo version it requires.
+
 Workflow for AI agents and scripts:
   - Record provenance when producing or importing artifacts, with
     'exo provenance add' (preferred), or by writing a new record file and

@@ -364,11 +364,22 @@ type RemoteConfig struct {
 	Host           string     `yaml:"host,omitempty"`          // Custom S3 host for import remotes (e.g., localhost:9000 for MinIO)
 	Port           string     `yaml:"port,omitempty"`          // Custom S3 port for import remotes
 	Protocol       string     `yaml:"protocol,omitempty"`      // S3 protocol for import remotes: http or https (default: https)
-	InstanceURL    string     `yaml:"instance_url,omitempty"`  // ArtifactDB instance URL (artifactdb remotes only)
+	InstanceURL    string     `yaml:"instance_url,omitempty"`  // Custom ArtifactDB instance URL fed by .artifactdb/ (artifactdb remotes only)
+	AtlasURL       string     `yaml:"atlas_url,omitempty"`     // Alternate ExoHub Atlas fed by .exohub-bundle/, instead of the deployment's default Atlas (artifactdb remotes only)
 	PublishOn      string     `yaml:"publish_on,omitempty"`    // When to publish: "tag" (only on tags) or "always" (default)
 	ProjectID      string     `yaml:"project_id,omitempty"`    // Custom project ID override (defaults to repo name)
 	Mode           string     `yaml:"mode,omitempty"`          // Required for catalog remotes: "export" or "import"
 	DrivePath      string     `yaml:"drive_path,omitempty"`    // Drive folder path (drive remotes only)
+	Readonly       bool       `yaml:"readonly,omitempty"`      // Never write to this remote (get-only); set for remotes importing another project's storage (exo-cli#147)
+
+	// Credentials is an opaque provider->setting map (e.g. `credentials:
+	// {<provider>: {group: ...}}`) for remote-scoped credential settings that
+	// only some builds interpret. Shared code never inspects provider or key
+	// names; unknown providers are ignored by exo and flagged by exo doctor
+	// (see checks_repo.go). A build that interprets a provider registers its
+	// validation and wiring via validateRemoteCredentials/remoteCredentialGroup
+	// below (see config_internal.go for the internal build).
+	Credentials map[string]map[string]string `yaml:"credentials,omitempty"`
 }
 
 // stringList is a YAML type that accepts both single strings and string lists
@@ -395,6 +406,19 @@ func (s *stringList) UnmarshalYAML(node *yaml.Node) error {
 	}
 	return nil
 }
+
+// validateRemoteCredentials optionally validates r.Credentials against a
+// provider's schema. Nil in the OSS build, where exo doctor instead just
+// flags unrecognized providers generically (see checks_repo.go). A build
+// that interprets a credentials provider registers its validation here
+// (see config_internal.go for the internal build).
+var validateRemoteCredentials func(r *RemoteConfig) error
+
+// remoteCredentialGroup optionally resolves a remote's provider-specific
+// group override, folded into the git-annex special remote config as
+// group=<g> (see reconfigureAnnexRemote/reconfigureExportRemote in
+// command.go). Nil in the OSS build, where no provider is known.
+var remoteCredentialGroup func(r RemoteConfig) string
 
 // Validate checks if the remote configuration is valid
 func (r *RemoteConfig) Validate() error {
@@ -526,6 +550,12 @@ func (r *RemoteConfig) Validate() error {
 		}
 	}
 
+	if validateRemoteCredentials != nil {
+		if err := validateRemoteCredentials(r); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -558,6 +588,94 @@ func LoadRemotesConfig() (*RemotesConfig, error) {
 	}
 
 	return &config, nil
+}
+
+// LoadRemotesConfigFromRef reads .exohub/remotes as it was committed at ref
+// (via `git show <ref>:.exohub/remotes`), instead of whatever is checked out
+// on disk right now. Used by the exo-cli#176 stale-routing guard to compare
+// a detached-HEAD ref's own routing against the repo's current/default
+// routing. A ref with no .exohub/remotes (predates its introduction) yields
+// an empty config, same as LoadRemotesConfig's missing-file case.
+func LoadRemotesConfigFromRef(ref string) (*RemotesConfig, error) {
+	out, err := exec.Command("git", "show", ref+":.exohub/remotes").Output()
+	if err != nil {
+		return &RemotesConfig{Remotes: []RemoteConfig{}}, nil
+	}
+
+	var config RemotesConfig
+	if err := yaml.Unmarshal(out, &config); err != nil {
+		return nil, fmt.Errorf("failed to parse %s:.exohub/remotes: %w", ref, err)
+	}
+	return &config, nil
+}
+
+// ResolveDefaultRoutingRef returns the ref whose .exohub/remotes is treated
+// as "current" routing by the exo-cli#176 stale-routing guard: the remote's
+// default branch when known (via origin/HEAD), falling back to a local
+// main/master branch, and finally HEAD itself when neither can be
+// determined (e.g. a single-branch, remote-less repo).
+func ResolveDefaultRoutingRef() string {
+	if out, err := exec.Command("git", "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD").Output(); err == nil {
+		if ref := strings.TrimSpace(string(out)); ref != "" {
+			return ref
+		}
+	}
+	for _, b := range []string{"main", "master"} {
+		if exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/"+b).Run() == nil {
+			return b
+		}
+	}
+	return "HEAD"
+}
+
+// RoutingFieldsDiffer reports whether two RemoteConfig values differ in any
+// field that determines where content/metadata gets published: type,
+// s3url, bucket/prefix/datacenter, instance_url, atlas_url, mode, grants,
+// project_id. Content-only fields (include/exclude, import_dir, chunk, ...)
+// are deliberately ignored. A nil on only one side counts as a difference
+// (the remote exists on one side's routing but not the other's).
+func RoutingFieldsDiffer(a, b *RemoteConfig) bool {
+	if (a == nil) != (b == nil) {
+		return true
+	}
+	if a == nil {
+		return false
+	}
+	return a.Type != b.Type ||
+		a.S3URL != b.S3URL ||
+		a.Bucket != b.Bucket ||
+		a.Prefix != b.Prefix ||
+		a.Datacenter != b.Datacenter ||
+		a.InstanceURL != b.InstanceURL ||
+		a.AtlasURL != b.AtlasURL ||
+		a.Mode != b.Mode ||
+		a.Grants != b.Grants ||
+		a.ProjectID != b.ProjectID
+}
+
+// FindRemoteConfig finds the remote in config that corresponds to target,
+// matched by git-annex UUID when both have one (so a remote renamed across a
+// routing migration is still recognized as the same remote), falling back to
+// an exact name match. Returns nil when no match is found in either way.
+func FindRemoteConfig(target RemoteConfig, config *RemotesConfig) *RemoteConfig {
+	if config == nil {
+		return nil
+	}
+	if target.UUID != "" {
+		for _, c := range config.Remotes {
+			if c.UUID != "" && c.UUID == target.UUID {
+				cc := c
+				return &cc
+			}
+		}
+	}
+	for _, c := range config.Remotes {
+		if c.Name == target.Name {
+			cc := c
+			return &cc
+		}
+	}
+	return nil
 }
 
 // SaveRemotesConfig writes .exohub/remotes to the current directory

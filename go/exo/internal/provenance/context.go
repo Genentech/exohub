@@ -82,6 +82,8 @@ var properties = map[string]string{
 	"wasAttributedTo":   ProvNamespace + "wasAttributedTo",
 	"actedOnBehalfOf":   ProvNamespace + "actedOnBehalfOf",
 	"hadPlan":           ProvNamespace + "hadPlan",
+	"hadMember":         ProvNamespace + "hadMember",
+	"hadPrimarySource":  ProvNamespace + "hadPrimarySource",
 	"startedAtTime":     ProvNamespace + "startedAtTime",
 	"endedAtTime":       ProvNamespace + "endedAtTime",
 	"generatedAtTime":   ProvNamespace + "generatedAtTime",
@@ -92,6 +94,8 @@ var properties = map[string]string{
 // context (design D1, D15 "exo:records is added to the v1 term set").
 var exoTerms = map[string]bool{
 	"path":       true,
+	"repository": true,
+	"commit":     true,
 	"assertion":  true,
 	"assertedBy": true,
 	"evidence":   true,

@@ -48,6 +48,30 @@ func TestValidate_NoRecords(t *testing.T) {
 	}
 }
 
+// TestValidate_InvalidCollectionManifestReportedWithNoRecords covers
+// design D5 of add-exohub-asset-import, "Offline validate checks format
+// and pinning only": a malformed collection manifest is reported even
+// with no provenance records at all, not hidden behind the plain "No
+// provenance records found" message.
+func TestValidate_InvalidCollectionManifestReportedWithNoRecords(t *testing.T) {
+	root, run := addTestRepo(t, false)
+	chdir(t, root)
+	writeFile(t, root, ".exohub/collections/cohort-a.json", `{"members": ["exohub:other-project:file.txt"]}`)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	out, err := runValidateCmd(t)
+	if err == nil {
+		t.Fatalf("validate error = nil, want non-nil; output: %s", out)
+	}
+	if strings.Contains(out, "No provenance records found") {
+		t.Errorf("output = %q, want the invalid-collection-manifest finding, not the no-records message", out)
+	}
+	if !strings.Contains(out, "cohort-a") {
+		t.Errorf("output = %q, want it to name the invalid manifest", out)
+	}
+}
+
 func TestValidate_ReportsErrorAndExitsNonZero(t *testing.T) {
 	root, run := addTestRepo(t, false)
 	chdir(t, root)

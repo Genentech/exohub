@@ -1108,3 +1108,295 @@ func TestProfileConfigRoutingExample(t *testing.T) {
 		})
 	}
 }
+
+// ---- runProfileInit: .Folder resolution (exo-cli#167) ----
+
+// TestRunProfileInitFolderFromGitOrigin reproduces the issue: a clone of
+// example-org/datasets/DS000000001 checked out into a
+// differently-named scratch directory must still resolve .Folder to the
+// repo's identity (DS000000001), not the directory name.
+func TestRunProfileInitFolderFromGitOrigin(t *testing.T) {
+	chdirTemp(t)
+
+	withCommand(t, func(name string, args ...string) *exec.Cmd {
+		if name == "git" && len(args) >= 2 && args[0] == "remote" && args[1] == "get-url" {
+			return exec.Command("printf", "git@git.example.com:example-org/datasets/DS000000001.git")
+		}
+		return exec.Command("sh", "-c", "exit 1")
+	})
+
+	payload := `{
+		"name": "my-profile",
+		"vars": {},
+		"prompts": [],
+		"templates": {
+			"permissions": "folder: {{.Folder}}\n"
+		},
+		"actions": []
+	}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(payload))
+	}))
+	defer srv.Close()
+	t.Setenv("EXOHUB_API_URL", srv.URL+"/api")
+
+	oldYes := flagYes
+	flagYes = true
+	t.Cleanup(func() { flagYes = oldYes })
+
+	if err := runProfileInit("my-profile", nil, nil); err != nil {
+		t.Fatalf("runProfileInit: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(".exohub", "permissions"))
+	if err != nil {
+		t.Fatalf("read .exohub/permissions: %v", err)
+	}
+	if strings.TrimSpace(string(data)) != "folder: DS000000001" {
+		t.Errorf(".exohub/permissions = %q, want folder: DS000000001", data)
+	}
+
+	lock, err := LoadProfileLock()
+	if err != nil || lock == nil {
+		t.Fatalf("LoadProfileLock: %v (lock=%v)", err, lock)
+	}
+	if lock.Folder != "DS000000001" {
+		t.Errorf("profile.lock Folder = %q, want DS000000001", lock.Folder)
+	}
+}
+
+// TestRunProfileInitFolderFallsBackToDirectoryWithoutOrigin verifies that
+// without a git origin remote, .Folder falls back to the directory name
+// (today's historical behavior) and that fallback is still recorded in
+// .exohub/profile.lock for future refreshes.
+func TestRunProfileInitFolderFallsBackToDirectoryWithoutOrigin(t *testing.T) {
+	chdirTemp(t)
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	wantFolder := filepath.Base(cwd)
+
+	withCommand(t, func(name string, args ...string) *exec.Cmd {
+		return exec.Command("sh", "-c", "exit 1")
+	})
+
+	payload := `{
+		"name": "my-profile",
+		"vars": {},
+		"prompts": [],
+		"templates": {
+			"permissions": "folder: {{.Folder}}\n"
+		},
+		"actions": []
+	}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(payload))
+	}))
+	defer srv.Close()
+	t.Setenv("EXOHUB_API_URL", srv.URL+"/api")
+
+	oldYes := flagYes
+	flagYes = true
+	t.Cleanup(func() { flagYes = oldYes })
+
+	if err := runProfileInit("my-profile", nil, nil); err != nil {
+		t.Fatalf("runProfileInit: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(".exohub", "permissions"))
+	if err != nil {
+		t.Fatalf("read .exohub/permissions: %v", err)
+	}
+	if strings.TrimSpace(string(data)) != "folder: "+wantFolder {
+		t.Errorf(".exohub/permissions = %q, want folder: %s", data, wantFolder)
+	}
+}
+
+// TestRunProfileInitFolderFlagOverride verifies --folder bypasses repo
+// identity resolution entirely.
+func TestRunProfileInitFolderFlagOverride(t *testing.T) {
+	chdirTemp(t)
+
+	withCommand(t, func(name string, args ...string) *exec.Cmd {
+		if name == "git" && len(args) >= 2 && args[0] == "remote" && args[1] == "get-url" {
+			return exec.Command("printf", "git@git.example.com:example-org/datasets/DS000000001.git")
+		}
+		return exec.Command("sh", "-c", "exit 1")
+	})
+
+	payload := `{
+		"name": "my-profile",
+		"vars": {},
+		"prompts": [],
+		"templates": {
+			"permissions": "folder: {{.Folder}}\n"
+		},
+		"actions": []
+	}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(payload))
+	}))
+	defer srv.Close()
+	t.Setenv("EXOHUB_API_URL", srv.URL+"/api")
+
+	oldYes := flagYes
+	flagYes = true
+	t.Cleanup(func() { flagYes = oldYes })
+
+	oldFolder := flagFolder
+	flagFolder = "overridden-name"
+	t.Cleanup(func() { flagFolder = oldFolder })
+
+	if err := runProfileInit("my-profile", nil, nil); err != nil {
+		t.Fatalf("runProfileInit: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(".exohub", "permissions"))
+	if err != nil {
+		t.Fatalf("read .exohub/permissions: %v", err)
+	}
+	if strings.TrimSpace(string(data)) != "folder: overridden-name" {
+		t.Errorf(".exohub/permissions = %q, want folder: overridden-name", data)
+	}
+}
+
+// ---- runProfileInit: refuse a silent s3url move (exo-cli#167, exo-cli#166) ----
+
+// TestRunProfileInitRefusesS3URLMoveWithoutAllowMove reproduces the
+// maître's blocker scenario: a repo initialized before .exohub/profile.lock
+// existed (no lock), whose existing remote's s3url no longer textually
+// matches the profile's current "remotes" template (e.g. the profile's own
+// prefix changed, as in exo-cli#166's repro), and whose git origin name
+// doesn't match the dataset folder already baked into that s3url. Folder
+// resolution falls through to the (wrong) origin name, which must never be
+// silently applied as a new s3url \u2014 only --allow-move can confirm it.
+func TestRunProfileInitRefusesS3URLMoveWithoutAllowMove(t *testing.T) {
+	chdirTemp(t)
+
+	withCommand(t, func(name string, args ...string) *exec.Cmd {
+		if name == "git" && len(args) >= 2 && args[0] == "remote" && args[1] == "get-url" {
+			return exec.Command("printf", "git@git.example.com:example-org/wrong-origin-name.git")
+		}
+		return exec.Command("sh", "-c", "exit 1")
+	})
+
+	// Existing remote uses the profile's *old* prefix ("sandbox/"): the
+	// profile's template below has since moved to "styx/", so the
+	// sentinel reverse-match can't recover "DS000000001" from it (the
+	// literal prefix text no longer lines up) and falls through to origin.
+	cfg := &RemotesConfig{Remotes: []RemoteConfig{
+		{Name: "exohub-annex", Type: "annex", S3URL: "s3://exohub-sandbox-uat/sandbox/my-profile/DS000000001/_annex", Chunk: "1GiB"},
+	}}
+	if err := SaveRemotesConfig(cfg); err != nil {
+		t.Fatalf("SaveRemotesConfig: %v", err)
+	}
+	before, err := os.ReadFile(filepath.Join(".exohub", "remotes"))
+	if err != nil {
+		t.Fatalf("read before: %v", err)
+	}
+
+	payload := `{
+		"name": "my-profile",
+		"vars": {},
+		"prompts": [],
+		"templates": {
+			"remotes": "remotes:\n  - name: exohub-annex\n    type: annex\n    s3url: s3://exohub-sandbox-uat/styx/my-profile/{{.Folder}}/_annex\n    chunk: 1GiB\n"
+		},
+		"actions": []
+	}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(payload))
+	}))
+	defer srv.Close()
+	t.Setenv("EXOHUB_API_URL", srv.URL+"/api")
+
+	oldYes := flagYes
+	flagYes = true
+	t.Cleanup(func() { flagYes = oldYes })
+
+	err = runProfileInit("my-profile", nil, nil)
+	if err == nil {
+		t.Fatal("expected refusal: --yes alone must not approve an s3url move")
+	}
+	if !strings.Contains(err.Error(), "--allow-move") ||
+		!strings.Contains(err.Error(), "sandbox/my-profile/DS000000001/_annex") ||
+		!strings.Contains(err.Error(), "styx/my-profile/wrong-origin-name/_annex") {
+		t.Errorf("error = %q, want mention of --allow-move and old -> new s3url", err)
+	}
+
+	after, err := os.ReadFile(filepath.Join(".exohub", "remotes"))
+	if err != nil {
+		t.Fatalf("read after: %v", err)
+	}
+	if string(before) != string(after) {
+		t.Errorf(".exohub/remotes changed despite refusal:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
+
+// TestRunProfileInitAllowMoveAppliesS3URLMove verifies that, with --force
+// (to re-apply an already-initialized profile) and --allow-move (to confirm
+// the move is intentional), the same scenario proceeds.
+func TestRunProfileInitAllowMoveAppliesS3URLMove(t *testing.T) {
+	chdirTemp(t)
+
+	withCommand(t, func(name string, args ...string) *exec.Cmd {
+		return exec.Command("sh", "-c", "exit 1")
+	})
+
+	cfg := &RemotesConfig{Remotes: []RemoteConfig{
+		{Name: "exohub-annex", Type: "annex", S3URL: "s3://exohub-sandbox-uat/sandbox/my-profile/DS000000001/_annex", Chunk: "1GiB"},
+	}}
+	if err := SaveRemotesConfig(cfg); err != nil {
+		t.Fatalf("SaveRemotesConfig: %v", err)
+	}
+
+	payload := `{
+		"name": "my-profile",
+		"vars": {},
+		"prompts": [],
+		"templates": {
+			"remotes": "remotes:\n  - name: exohub-annex\n    type: annex\n    s3url: s3://exohub-sandbox-uat/styx/my-profile/{{.Folder}}/_annex\n    chunk: 1GiB\n"
+		},
+		"actions": []
+	}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(payload))
+	}))
+	defer srv.Close()
+	t.Setenv("EXOHUB_API_URL", srv.URL+"/api")
+
+	oldYes := flagYes
+	flagYes = true
+	t.Cleanup(func() { flagYes = oldYes })
+
+	oldForce := flagForce
+	flagForce = true
+	t.Cleanup(func() { flagForce = oldForce })
+
+	oldAllowMove := flagAllowMove
+	flagAllowMove = true
+	t.Cleanup(func() { flagAllowMove = oldAllowMove })
+
+	oldFolder := flagFolder
+	flagFolder = "DS000000001" // keep the folder stable; only the prefix ("sandbox" -> "styx") moves
+	t.Cleanup(func() { flagFolder = oldFolder })
+
+	if err := runProfileInit("my-profile", nil, nil); err != nil {
+		t.Fatalf("runProfileInit with --allow-move: %v", err)
+	}
+
+	after, err := LoadRemotesConfig()
+	if err != nil {
+		t.Fatalf("LoadRemotesConfig: %v", err)
+	}
+	annex, ok := findRemoteConfig(after, "exohub-annex")
+	if !ok || annex.S3URL != "s3://exohub-sandbox-uat/styx/my-profile/DS000000001/_annex" {
+		t.Errorf("exohub-annex = %+v, want s3url styx/my-profile/DS000000001", annex)
+	}
+}

@@ -7,7 +7,7 @@ cascade:
   outputs: ["html", "markdown"]
 ---
 
-This guide walks you through using ExoHub to manage your datasets. This guide covers **exo CLI v0.124.0**. Whether you're downloading data for analysis, collaborating with your team, or setting up automated pipelines, this guide covers everything you need to know.
+This guide walks you through using ExoHub to manage your datasets. This guide covers **exo CLI v0.137.1**. Whether you're downloading data for analysis, collaborating with your team, or setting up automated pipelines, this guide covers everything you need to know.
 
 ## What You'll Learn
 

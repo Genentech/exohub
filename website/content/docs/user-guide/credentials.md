@@ -100,7 +100,7 @@ With `--json`:
 ```
 
 The command reads the bearer token using this precedence:
-`EXO_TOKEN_FILE` → `EXO_CONFIG_DIR/credentials/token.json` → system default.
+`EXO_TOKEN` → `EXO_TOKEN_FILE` → `$EXO_CONFIG_DIR/exo/credentials/token.json` → system default.
 
 It exits non-zero if the token is missing or expired, or if ExoSafe is empty. In a CI/CD context, pair it with `EXO_CONFIG_DIR` and `EXO_TOKEN_FILE` to keep all state isolated:
 
@@ -110,6 +110,8 @@ export EXO_TOKEN_FILE=/run/secrets/exo-token
 exo safe pull
 exo sync
 ```
+
+Alternatively, set `EXO_TOKEN` to the token itself (a JSON OAuth2 token or a raw JWT/API key) instead of mounting a token file. See [Environment Variables]({{< ref "environment-variables" >}}).
 
 ## Command Reference
 

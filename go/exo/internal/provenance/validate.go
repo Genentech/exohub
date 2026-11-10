@@ -91,6 +91,10 @@ func Validate(reader *Reader) (*Report, error) {
 	checkCrossRecord(report, parsed)
 	checkIdentifiers(reader, report, parsed)
 
+	if err := checkCollectionManifests(reader, report); err != nil {
+		return nil, err
+	}
+
 	if err := checkImmutability(reader, report); err != nil {
 		return nil, err
 	}
@@ -185,6 +189,36 @@ func parseRecordFiles(reader *Reader, report *Report) ([]parsedRecord, error) {
 		parsed = append(parsed, parsedRecord{path: f.Path, rec: rec})
 	}
 	return parsed, nil
+}
+
+// checkCollectionManifests validates every named collection manifest's
+// format and member pinning, fully offline (design D5 of
+// add-exohub-asset-import: "Offline validate checks format and pinning
+// only"): LoadCollectionManifest parses the JSON and checks each
+// "members" entry is a well-formed, pinned exohub: reference without ever
+// resolving it over the network. This runs unconditionally, unlike
+// checkCoverage, so a malformed manifest is always reported even in a
+// repository with no provenance records or provenance.require rules.
+func checkCollectionManifests(reader *Reader, report *Report) error {
+	names, err := ListCollectionNames(reader)
+	if err != nil {
+		if looksLikeNoCommits(err) {
+			return nil
+		}
+		return err
+	}
+	for _, name := range names {
+		if _, err := LoadCollectionManifest(reader, name); err != nil {
+			report.add(Finding{
+				Severity: SeverityError,
+				Class:    ClassProfile,
+				Code:     "invalid-collection-manifest",
+				Path:     CollectionManifestPath(name),
+				Message:  err.Error(),
+			})
+		}
+	}
+	return nil
 }
 
 // checkCoverage implements D14/D15: it evaluates coverage and
@@ -350,6 +384,11 @@ func checkSingleValuedConflicts(report *Report, parsed []parsedRecord, supersede
 // (SHA-1) or 64 (SHA-256).
 var gitOIDPattern = regexp.MustCompile(`^[0-9a-f]{40}$|^[0-9a-f]{64}$`)
 
+// sha256HexPattern matches a lowercase hex SHA-256 digest: exactly 64
+// characters (design D1 of add-explicit-collections,
+// urn:exohub:collection:sha256:<hex>).
+var sha256HexPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
 // validAgentName reports whether name is a non-empty agent name containing
 // no whitespace or "/" (design D5 agent:person:<name> /
 // agent:software:<name>).
@@ -393,6 +432,10 @@ func classifyIdentifier(id string) (ok bool, message string) {
 	case strings.HasPrefix(id, GitCommitURNPrefix):
 		if oid := strings.TrimPrefix(id, GitCommitURNPrefix); !gitOIDPattern.MatchString(oid) {
 			return false, fmt.Sprintf("%s is not a 40 or 64 character lowercase hex git object id", id)
+		}
+	case strings.HasPrefix(id, CollectionURNPrefix):
+		if digest := strings.TrimPrefix(id, CollectionURNPrefix); !sha256HexPattern.MatchString(digest) {
+			return false, fmt.Sprintf("%s is not a 64 character lowercase hex SHA-256 digest", id)
 		}
 	case strings.HasPrefix(id, RecordURNPrefix):
 		if !IsUUIDv7(id) {
@@ -441,6 +484,8 @@ var iriValuedNodeProperties = map[string]bool{
 	"wasAttributedTo":   true,
 	"actedOnBehalfOf":   true,
 	"hadPlan":           true,
+	"hadMember":         true,
+	"hadPrimarySource":  true,
 }
 
 type identifierRef struct {

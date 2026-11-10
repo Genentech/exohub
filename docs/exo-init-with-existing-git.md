@@ -47,3 +47,12 @@ exo init --create-repo
 ✅ Safe to run multiple times (idempotent)
 ✅ Won't overwrite existing remote repos
 ✅ Repo name saved to context for future use
+
+## Updating Remotes From a Changed Profile
+
+If the repo was initialized with `--profile` and the profile has since
+changed (e.g. gained a new field on one of its remotes), see
+[remote-profile-refresh.md](remote-profile-refresh.md) for
+`exo init --profile <name> --remote <remote-name>` (targeted refresh, diff
+first) and `exo init --profile <name> --dry-run --json` (drift report for
+automation).

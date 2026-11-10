@@ -13,7 +13,7 @@ import (
 
 func createArtifactDBRemoteTUI(ctx *tuiContext) error {
 	name := "exohub-atlas"
-	var s3url, instanceURL string
+	var s3url, instanceURL, atlasURL string
 
 	// Derive s3url from first existing annex remote, replacing _annex suffix with _catalog
 	suggestedS3URL := ""
@@ -62,6 +62,11 @@ func createArtifactDBRemoteTUI(ctx *tuiContext) error {
 				Placeholder("https://artifactdb.example.com").
 				Description("URL of the ArtifactDB instance").
 				Value(&instanceURL),
+			huh.NewInput().
+				Title("ExoHub Atlas URL (optional, to publish to a non-default Atlas)").
+				Placeholder("https://atlas.example.com/v1/sandbox1").
+				Description("Alternate ExoHub Atlas to receive this remote's bundles").
+				Value(&atlasURL),
 		),
 	).WithTheme(commandutil.ExoTheme()).WithKeyMap(commandutil.ExoKeyMap())
 
@@ -107,6 +112,9 @@ func createArtifactDBRemoteTUI(ctx *tuiContext) error {
 	if instanceURL != "" {
 		initArgs = append(initArgs, "instance_url="+instanceURL)
 	}
+	if atlasURL != "" {
+		initArgs = append(initArgs, "atlas_url="+atlasURL)
+	}
 	if err := runCommand(initArgs); err != nil {
 		return err
 	}
@@ -114,7 +122,7 @@ func createArtifactDBRemoteTUI(ctx *tuiContext) error {
 	// Enable remote again to ensure settings are applied
 	_ = runCommand([]string{"git", "annex", "enableremote", name, "s3url=" + s3url, "exporttree=yes"})
 
-	ensureRemoteConfigS3URL(name, s3url)
+	ensureRemoteConfigS3URL(RemoteConfig{Name: name, S3URL: s3url, Type: "artifactdb", Grants: useGrants, InstanceURL: instanceURL, AtlasURL: atlasURL})
 
 	// Set preferred content: only export .exohub/bundles/ and .artifactdb/
 	wanted := "include=.exohub/bundles/* or include=.artifactdb/*"
@@ -136,6 +144,7 @@ func createArtifactDBRemoteTUI(ctx *tuiContext) error {
 		S3URL:       s3url,
 		Grants:      useGrants,
 		InstanceURL: instanceURL,
+		AtlasURL:    atlasURL,
 		Mode:        "export",
 	})
 

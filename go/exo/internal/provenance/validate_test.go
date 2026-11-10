@@ -74,6 +74,36 @@ func TestValidate_NoRecords(t *testing.T) {
 	}
 }
 
+// TestValidate_InvalidCollectionManifest covers design D5 of
+// add-exohub-asset-import, "Offline validate checks format and pinning
+// only": a malformed collection manifest (here, an unpinned "members"
+// entry) is reported as an error finding even with no provenance records
+// or provenance.require rules at all, fully offline — no catalog or
+// network reachable in this test.
+func TestValidate_InvalidCollectionManifest(t *testing.T) {
+	root, run := stateTestRepo(t, false)
+	writeCollectionManifest(t, root, "cohort-a", `{"members": ["exohub:other-project:file.txt"]}`)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	report, err := Validate(NewWorktreeReader(root))
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if !report.HasErrors() {
+		t.Fatalf("HasErrors() = false, want true: %+v", report.Findings)
+	}
+	found := false
+	for _, f := range report.Findings {
+		if f.Code == "invalid-collection-manifest" && f.Path == CollectionManifestPath("cohort-a") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Findings = %+v, want an invalid-collection-manifest finding for %s", report.Findings, CollectionManifestPath("cohort-a"))
+	}
+}
+
 func TestValidate_InvalidJSON(t *testing.T) {
 	root, run := stateTestRepo(t, false)
 	writeRepoFile(t, root, RecordDir+"/bad.jsonld", "not json")
@@ -580,6 +610,43 @@ func TestValidate_UnknownURNExohubKindIsError(t *testing.T) {
 	}
 	if !hasFinding(report, "malformed-identifier", RecordDir+"/a.jsonld") {
 		t.Errorf("findings = %+v, want malformed-identifier for an unrecognized urn:exohub: kind", report.Findings)
+	}
+}
+
+// TestValidate_CollectionIdentifierKindIsRecognized covers design D1 of
+// add-explicit-collections: a well-formed urn:exohub:collection:sha256:
+// id must validate, and a malformed one (wrong digest length) must be
+// rejected, exactly like every other D5 identifier kind.
+func TestValidate_CollectionIdentifierKindIsRecognized(t *testing.T) {
+	id := CollectionID([]string{AnnexEntityID("SHA256E-s2048--ab12.bam")})
+	root, run := stateTestRepo(t, false)
+	graph := fmt.Sprintf(`{"@id": %q, "@type": "Collection", "label": "collection:cohort-a"}`, id)
+	writeRepoFile(t, root, RecordDir+"/a.jsonld", minimalRecordJSON(NewRecordID(), "recorded", "urn:exohub:agent:person:alice", graph))
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	report, err := Validate(NewWorktreeReader(root))
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if hasFinding(report, "malformed-identifier", RecordDir+"/a.jsonld") {
+		t.Errorf("findings = %+v, well-formed collection id must not be flagged", report.Findings)
+	}
+}
+
+func TestValidate_MalformedCollectionIdentifierIsError(t *testing.T) {
+	root, run := stateTestRepo(t, false)
+	graph := `{"@id": "urn:exohub:collection:sha256:not-hex", "@type": "Collection", "label": "collection:cohort-a"}`
+	writeRepoFile(t, root, RecordDir+"/a.jsonld", minimalRecordJSON(NewRecordID(), "recorded", "urn:exohub:agent:person:alice", graph))
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	report, err := Validate(NewWorktreeReader(root))
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if !hasFinding(report, "malformed-identifier", RecordDir+"/a.jsonld") {
+		t.Errorf("findings = %+v, want malformed-identifier for a non-hex collection digest", report.Findings)
 	}
 }
 

@@ -54,6 +54,7 @@ type credentialOutput struct {
 func main() {
 	s3URL := flag.String("s3url", "", "S3 URL (s3://bucket/prefix/) - detected from .exohub/remotes if not provided")
 	grantsFlag := flag.Bool("grants", true, "Use S3 Access Grants for credentials (default: true; set false for plain base-creds path)")
+	groupFlag := flag.String("group", "", "Remote-scoped group overriding the active credential-scoping group (grants:false only; ignored elsewhere; internal builds only)")
 	permission := flag.String("permission", "READWRITE", "Permission level: READ or READWRITE")
 	duration := flag.Int("duration", defaultDuration, "Credential duration in seconds (default: 3600 = 1 hour)")
 	accountID := flag.String("account-id", "", "AWS account ID (overrides EXOHUB_GRANTS_ACCOUNT_ID env)")
@@ -78,6 +79,7 @@ This tool calls AWS GetDataAccess directly using your current AWS credentials
 Options:
   --s3url URL         S3 URL (s3://bucket/prefix/) - detected from .exohub/remotes if not provided
   --permission P      Permission level: READ or READWRITE (default: READWRITE)
+  --group GROUP       Remote-scoped group overriding the active credential-scoping group (grants:false only)
   --duration SEC      Credential duration in seconds (default: 3600 = 1 hour)
   --account-id ID     AWS account ID (overrides EXOHUB_GRANTS_ACCOUNT_ID env)
   --region REGION     AWS region (overrides EXOHUB_GRANTS_REGION env)
@@ -172,8 +174,18 @@ Output format (default):
 		if !grantsExplicit {
 			*grantsFlag = detected.Grants
 		}
+		if *groupFlag == "" {
+			*groupFlag = detected.Group
+		}
 		debugf("Auto-detected s3url from .exohub/remotes: %s (grants=%v)", *s3URL, *grantsFlag)
 	}
+
+	if *grantsFlag && *groupFlag != "" {
+		fmt.Fprintf(os.Stderr, "Warning: --group has no effect with --grants=true (Access Grants-vended credentials don't carry a group session tag)\n")
+		*groupFlag = ""
+	}
+
+	groupOverride = *groupFlag
 
 	if *permission != "READ" && *permission != "READWRITE" {
 		fmt.Fprintf(os.Stderr, "Error: --permission must be READ or READWRITE, got %q\n", *permission)
@@ -232,7 +244,7 @@ Output format (default):
 		// No GetDataAccess, no POST /api/grants/credentials.
 		debugf("grants=false: using base credentials path")
 		var err error
-		creds, err = getBaseCreds(context.Background(), *s3URL, *duration, debugf)
+		creds, err = getBaseCreds(context.Background(), *s3URL, *groupFlag, *duration, debugf)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: Failed to get base credentials: %v\n", err)
 			os.Exit(1)
@@ -452,13 +464,7 @@ func isMissingCredentialsError(err error) bool {
 func loadBearerToken() (string, error) {
 	// Allow inline token via environment (used in tests and service accounts).
 	if inline := os.Getenv("EXO_TOKEN"); inline != "" {
-		var tok struct {
-			AccessToken string `json:"access_token"`
-		}
-		if err := json.Unmarshal([]byte(inline), &tok); err != nil {
-			return "", fmt.Errorf("failed to parse EXO_TOKEN: %w", err)
-		}
-		return tok.AccessToken, nil
+		return parseAccessToken([]byte(inline), "EXO_TOKEN")
 	}
 
 	// EXO_TOKEN_FILE takes next precedence.
@@ -480,12 +486,24 @@ func loadBearerToken() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to read token file: %w", err)
 	}
+	return parseAccessToken(data, tokenFile)
+}
 
+// parseAccessToken parses a JSON oauth2 token ({"access_token": "..."}),
+// or, if the data isn't JSON, treats it as a raw JWT/API key string.
+func parseAccessToken(data []byte, source string) (string, error) {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 {
+		return "", fmt.Errorf("%s is empty", source)
+	}
+	if trimmed[0] != '{' {
+		return string(trimmed), nil
+	}
 	var tok struct {
 		AccessToken string `json:"access_token"`
 	}
-	if err := json.Unmarshal(data, &tok); err != nil {
-		return "", fmt.Errorf("failed to parse token file: %w", err)
+	if err := json.Unmarshal(trimmed, &tok); err != nil {
+		return "", fmt.Errorf("failed to parse %s: %w", source, err)
 	}
 	return tok.AccessToken, nil
 }
@@ -541,13 +559,20 @@ func outputCredentials(creds *credentialOutput, exportMode bool) {
 // build, where it contributes nothing to the key.
 var cacheKeyGroup func() string
 
+// groupOverride is set from --group (or the remote's credentials.<provider>.group
+// auto-detected from .exohub/remotes) on the command line. It takes
+// precedence over cacheKeyGroup's persisted login-level group for both the
+// credential fetch and the cache key, so a remote-level group and a
+// login-level group never share a cache entry.
+var groupOverride string
+
 func cacheKey(s3URL, permission string, grants bool) string {
 	grantsStr := "1"
 	if !grants {
 		grantsStr = "0"
 	}
-	group := ""
-	if cacheKeyGroup != nil {
+	group := groupOverride
+	if group == "" && cacheKeyGroup != nil {
 		group = cacheKeyGroup()
 	}
 	h := sha256.Sum256([]byte(s3URL + "|" + permission + "|" + grantsStr + "|" + group))
@@ -674,14 +699,16 @@ type remotesFile struct {
 }
 
 type remoteEntry struct {
-	S3URL  string `yaml:"s3url"`
-	Grants *bool  `yaml:"grants"`
+	S3URL       string                       `yaml:"s3url"`
+	Grants      *bool                        `yaml:"grants"`
+	Credentials map[string]map[string]string `yaml:"credentials"`
 }
 
 // detectedRemote holds the result of auto-detecting remote config from .exohub/remotes.
 type detectedRemote struct {
 	S3URL  string
 	Grants bool // defaults to true when not specified
+	Group  string
 }
 
 // isExpiredTokenError checks if an error is due to expired AWS credentials.
@@ -728,9 +755,18 @@ func detectRemote() (detectedRemote, error) {
 			if r.Grants != nil {
 				grants = *r.Grants
 			}
-			return detectedRemote{S3URL: r.S3URL, Grants: grants}, nil
+			group := ""
+			if credentialGroupFromEntry != nil {
+				group = credentialGroupFromEntry(r.Credentials)
+			}
+			return detectedRemote{S3URL: r.S3URL, Grants: grants, Group: group}, nil
 		}
 	}
 
 	return detectedRemote{}, fmt.Errorf("no s3url found in .exohub/remotes")
 }
+
+// credentialGroupFromEntry optionally extracts a remote-scoped group from a
+// parsed credentials map (e.g. credentials.<provider>.group in internal builds).
+// Nil in the OSS build, where no provider is known.
+var credentialGroupFromEntry func(map[string]map[string]string) string

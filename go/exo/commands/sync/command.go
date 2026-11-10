@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"strings"
 	gosync "sync"
 	"syscall"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -75,7 +77,44 @@ Dry-run guarantee (--dry-run):
   - Annex remotes with preferred content: the "to copy" list is filtered by the
     preferred content expression using a matcher that correctly handles ** globs.
   - No "drop candidates" section is ever shown. The real annex/export sync never
-    drops local content, so reporting drops would be misleading.`
+    drops local content, so reporting drops would be misleading.
+
+Completeness check (--check):
+  A tag or commit can reference annexed content that was never copied to any
+  remote (e.g. a file replaced in a later commit, never synced at that old
+  version). --check reports this without running any sync:
+    exo sync --check                  check every local branch and tag
+    exo sync --check --ref v1          check only ref v1 (repeatable)
+    exo sync --check --json            stable {refs_checked,items,summary} report
+    exo sync --check --verify          also verify presence on remotes (checkpresentkey)
+                                        instead of trusting the location log; catches a
+                                        remote whose storage moved without a UUID change
+                                        (e.g. a re-pointed S3 prefix, see 'exo init --remote')
+  Exit codes: 0 clean, 3 fixable (present in this clone but on no configured
+  remote — check out that ref and run 'exo sync' to upload it), 4 lost
+  (missing here and on every remote). --json items get a "verified" flag set
+  when --verify is what caught them (as opposed to the location log alone).
+
+Full-history sweep (--all):
+  --all uploads the annexed content of every local branch and tag to every
+  writable, plain annex remote, per ref and routing-aware (a remote's own
+  preferred content expression governs what it receives, same as a normal
+  sync). It is the explicit, full-cost counterpart to --check: use it to
+  repair fixable content found by --check, or to seed a remote from an
+  existing repository's full history. Catalog, import, export, readonly and
+  write-restricted remotes are skipped (they use other sync mechanisms).
+  Supports --dry-run and --json.
+
+Previewing a ref's catalog target (--dry-run --json --ref):
+  exo sync --dry-run --json --ref <ref> [--ref <ref>...] previews, for a
+  catalog remote, the routing (s3url, atlas_url, instance_url) that
+  publishing <ref> would use right now — read fresh from the CURRENT
+  .exohub/remotes, never from <ref>'s own checked-out copy — alongside
+  <ref>'s own identity (ref, ref_commit). This is how a guard (e.g.
+  datasetdb's obol) verifies the target before 'exo publish --ref' actually
+  runs: a ref that predates a routing change (a bucket/prefix move, a new
+  atlas_url) still resolves to the current catalog, not a stale or missing
+  one. Requires at least one catalog remote (via --with or auto-discovery).`
 )
 
 type manifest struct {
@@ -135,6 +174,10 @@ func NewCommand() *cobra.Command {
 	var jobsFlag string
 	var noContent bool
 	var bundleDir string
+	var checkFlag bool
+	var checkRefs []string
+	var verifyFlag bool
+	var allFlag bool
 
 	rootCmd := &cobra.Command{
 		Use:   "sync",
@@ -145,15 +188,31 @@ func NewCommand() *cobra.Command {
 				_ = cmd.Help()
 				os.Exit(1)
 			}
-			if outputJSON && !dryRun {
-				fmt.Fprintln(os.Stderr, "--json requires --dry-run")
+			if checkFlag && allFlag {
+				fmt.Fprintln(os.Stderr, "--check and --all are mutually exclusive")
+				os.Exit(1)
+			}
+			// --json without --dry-run/--check/--all is also allowed for an
+			// explicit, all-catalog --with selection (a publish report); that
+			// combination is validated later in runSync, once .exohub/remotes
+			// is loaded and the remote types are known.
+			if outputJSON && !dryRun && !checkFlag && !allFlag && len(withRemotes) == 0 {
+				fmt.Fprintln(os.Stderr, "--json requires --dry-run, --check, --all, or an explicit --with <catalog-remote> for a publish report")
+				os.Exit(1)
+			}
+			if len(checkRefs) > 0 && !checkFlag && !dryRun {
+				fmt.Fprintln(os.Stderr, "--ref requires --check, or --dry-run (with --json)")
+				os.Exit(1)
+			}
+			if verifyFlag && !checkFlag {
+				fmt.Fprintln(os.Stderr, "--verify requires --check")
 				os.Exit(1)
 			}
 			if cmd.Flags().Changed("bundle-dir") && strings.TrimSpace(bundleDir) == "" {
 				fmt.Fprintln(os.Stderr, "--bundle-dir requires a non-empty directory")
 				os.Exit(1)
 			}
-			runSync(manifestPath, withRemotes, paths, includePatterns, excludePatterns, importDir, dryRun, outputJSON, logPrefix, jobsFlag, noContent, bundleDir)
+			runSync(manifestPath, withRemotes, paths, includePatterns, excludePatterns, importDir, dryRun, outputJSON, logPrefix, jobsFlag, noContent, checkFlag, checkRefs, verifyFlag, allFlag, bundleDir)
 		},
 	}
 
@@ -169,11 +228,15 @@ func NewCommand() *cobra.Command {
 	rootCmd.Flags().StringVar(&logPrefix, "log-prefix", "", "Prefix for log filenames (useful for Temporal workflows)")
 	rootCmd.Flags().StringVarP(&jobsFlag, "jobs", "J", "", "Number of parallel jobs (default: 1)")
 	rootCmd.Flags().BoolVar(&noContent, "no-content", false, "Import metadata only without storing content locally (import remotes only)")
+	rootCmd.Flags().BoolVar(&checkFlag, "check", false, "Check that annexed content referenced by branches/tags is present on configured remotes (no sync performed; see exit codes in the sync reference docs)")
+	rootCmd.Flags().StringArrayVar(&checkRefs, "ref", nil, "Limit --check to this ref (repeatable; default checks all local branches and tags), or with --dry-run --json preview a catalog publish of this ref's content+version under the current routing")
+	rootCmd.Flags().BoolVar(&verifyFlag, "verify", false, "With --check, also verify presence on remotes (checkpresentkey) instead of trusting the location log")
+	rootCmd.Flags().BoolVar(&allFlag, "all", false, "Upload annexed content referenced by every local branch and tag to every writable remote (full sweep; see exo sync --check for a report without uploading)")
 
 	return rootCmd
 }
 
-func runSync(manifestPath string, withRemotes []string, paths []string, includePatterns []string, excludePatterns []string, importDir string, dryRun bool, outputJSON bool, logPrefix string, jobsFlag string, noContent bool, selectedBundle ...string) {
+func runSync(manifestPath string, withRemotes []string, paths []string, includePatterns []string, excludePatterns []string, importDir string, dryRun bool, outputJSON bool, logPrefix string, jobsFlag string, noContent bool, check bool, checkRefs []string, verify bool, all bool, selectedBundle ...string) {
 	bundleDir := selectedBundleDir(selectedBundle)
 	if err := requireBins("git-annex"); err != nil {
 		os.Exit(127)
@@ -237,6 +300,14 @@ func runSync(manifestPath string, withRemotes []string, paths []string, includeP
 
 	expandedPaths := expandPaths(paths)
 
+	if check {
+		os.Exit(runCheckCommand(checkRefs, withRemotes, outputJSON, verify))
+	}
+
+	if all {
+		os.Exit(runAllCommand(withRemotes, dryRun, outputJSON, jobs))
+	}
+
 	// Load remote configs from .exohub/remotes if available
 	remotesConfig, err := initcmd.LoadRemotesConfig()
 	if err != nil {
@@ -259,10 +330,29 @@ func runSync(manifestPath string, withRemotes []string, paths []string, includeP
 	}
 
 	if dryRun {
-		if err := runDryRun(withRemotes, expandedPaths, outputJSON, jobs, logPrefix, remotesConfig, bundleDir); err != nil {
+		if err := runDryRun(withRemotes, expandedPaths, outputJSON, jobs, logPrefix, remotesConfig, checkRefs, bundleDir); err != nil {
 			fmt.Fprintln(os.Stderr, err.Error())
 			os.Exit(1)
 		}
+		return
+	}
+
+	// --json without --dry-run is only supported for an explicit, all-catalog
+	// --with selection: it reports the publish outcome (atlas_url_used,
+	// published, error) as a single JSON document instead of running the full
+	// human-output sync. Any other combination keeps requiring --dry-run.
+	if outputJSON {
+		if len(withRemotes) == 0 {
+			fmt.Fprintln(os.Stderr, "--json requires --dry-run, or an explicit --with <catalog-remote> for a publish report")
+			os.Exit(1)
+		}
+		for _, remote := range withRemotes {
+			if !isCatalogRemoteType(remote, remotesConfig) {
+				fmt.Fprintln(os.Stderr, "--json without --dry-run only supports catalog remotes")
+				os.Exit(1)
+			}
+		}
+		runPublishJSON(withRemotes, remotesConfig, bundleDir)
 		return
 	}
 
@@ -287,7 +377,7 @@ func runSync(manifestPath string, withRemotes []string, paths []string, includeP
 			if len(include) > 0 || len(exclude) > 0 {
 				hasAnyPatterns = true
 			}
-			if remoteHasGrantsConfig(remote) {
+			if remoteHasGrantsConfig(remote) || isReadonlyRemote(remote, remotesConfig) {
 				hasAnyGrants = true
 			}
 		}
@@ -339,18 +429,8 @@ func runSync(manifestPath string, withRemotes []string, paths []string, includeP
 				fmt.Printf("💎  Skipping catalog remote '%s' (publish_on: tag, HEAD is not a tag)\n", remote)
 				continue
 			}
-			if dryRun {
-				rc := getRemoteConfigByName(remote, remotesConfig)
-				apiURL := defaults.APIBase()
-				fmt.Printf("Would publish to catalog remote '%s' via %s\n", remote, catalogBinary)
-				fmt.Printf("  api-url:      %s\n", apiURL)
-				fmt.Printf("  s3url:        %s\n", rc.S3URL)
-				if rc.InstanceURL != "" {
-					fmt.Printf("  instance-url: %s\n", rc.InstanceURL)
-				}
-				fmt.Printf("  grants:       %v\n", rc.Grants)
-				continue
-			}
+			// dryRun is handled earlier via runDryRun (see the early return
+			// above), which never reaches this per-remote loop.
 			if err := syncCatalogRemote(remote, remotesConfig, catalogBinary, bundleDir); err != nil {
 				fmt.Fprintf(os.Stderr, "Publish failed for '%s': %v\n", remote, err)
 				os.Exit(1)
@@ -386,9 +466,11 @@ func runSync(manifestPath string, withRemotes []string, paths []string, includeP
 			os.Exit(1)
 		}
 
-		// For grants-enabled remotes, check write access.
-		// Viewers only have READ grants - skip export/store and pull content only.
-		if remoteHasGrantsConfig(remote) && !hasGrantsWriteAccess(remote) {
+		// Readonly remotes (declared `readonly: true`, e.g. a remote imported
+		// from another project's storage) and grants-enabled remotes the
+		// current user can't write to are always get-only: pull content,
+		// never export/copy --to.
+		if isReadonlyRemote(remote, remotesConfig) || (remoteHasGrantsConfig(remote) && !hasGrantsWriteAccess(remote)) {
 			fmt.Printf("Syncing content from remote '%s' (read-only access)\n", remote)
 			cmd := []string{"git", "annex", "sync", "--content", "--no-commit", remote, "--jobs", jobs}
 			if len(expandedPaths) > 0 {
@@ -518,7 +600,14 @@ func runSync(manifestPath string, withRemotes []string, paths []string, includeP
 	}
 }
 
-func runDryRun(withRemotes []string, paths []string, outputJSON bool, jobs string, logPrefix string, remotesConfig *initcmd.RemotesConfig, selectedBundle ...string) error {
+func runDryRun(withRemotes []string, paths []string, outputJSON bool, jobs string, logPrefix string, remotesConfig *initcmd.RemotesConfig, refs []string, selectedBundle ...string) error {
+	if len(refs) > 0 {
+		if !outputJSON {
+			return fmt.Errorf("--ref with --dry-run requires --json")
+		}
+		return runRefDryRunJSON(refs, withRemotes, remotesConfig, jobs, logPrefix)
+	}
+
 	bundleDir := selectedBundleDir(selectedBundle)
 	remotes := withRemotes
 	if len(remotes) == 0 {
@@ -540,9 +629,22 @@ func runDryRun(withRemotes []string, paths []string, outputJSON bool, jobs strin
 		var buf bytes.Buffer
 		writer := io.MultiWriter(os.Stdout, &buf)
 
+		// Catalog remotes don't carry regular annex content: show their bundle
+		// target as a separate "catalog_remotes" field instead of feeding them
+		// through the annex-find machinery below.
+		var contentRemotes, catalogRemotes []string
+		for _, remote := range remotes {
+			if isCatalogRemoteType(remote, remotesConfig) {
+				catalogRemotes = append(catalogRemotes, remote)
+			} else {
+				contentRemotes = append(contentRemotes, remote)
+			}
+		}
+		catalogRemotesJSON := buildCatalogTargetsJSON(catalogRemotes, remotesConfig)
+
 		// Check if any remotes are import remotes - use custom JSON generation
 		hasImportRemote := false
-		for _, remote := range remotes {
+		for _, remote := range contentRemotes {
 			if isImportRemote(remote) {
 				hasImportRemote = true
 				break
@@ -551,12 +653,12 @@ func runDryRun(withRemotes []string, paths []string, outputJSON bool, jobs strin
 
 		if hasImportRemote {
 			// Generate JSON with special handling for import remotes
-			if err := streamDryRunJSONWithImport(writer, remotes, paths, defaults.DryRunReportSchema(), jobs); err != nil {
+			if err := streamDryRunJSONWithImport(writer, contentRemotes, paths, defaults.DryRunReportSchema(), jobs, catalogRemotesJSON); err != nil {
 				return err
 			}
 		} else {
 			// Standard JSON generation for annex/export remotes
-			if err := commandutil.StreamDryRunJSON(writer, remotes, paths, true, defaults.DryRunReportSchema()); err != nil {
+			if err := commandutil.StreamDryRunJSON(writer, contentRemotes, paths, true, defaults.DryRunReportSchema(), catalogRemotesJSON); err != nil {
 				return err
 			}
 		}
@@ -596,8 +698,15 @@ func runDryRun(withRemotes []string, paths []string, outputJSON bool, jobs strin
 			fmt.Fprintf(writer, "Would publish to catalog remote '%s' via %s\n", remote, catalogBinary)
 			fmt.Fprintf(writer, "  api-url:      %s\n", apiURL)
 			fmt.Fprintf(writer, "  s3url:        %s\n", rc.S3URL)
+			if rc.AtlasURL != "" {
+				fmt.Fprintf(writer, "  bundle → %s (atlas_url)\n", rc.AtlasURL)
+			} else if defaultURL, ok := getDefaultAtlasURL(apiURL); ok {
+				fmt.Fprintf(writer, "  bundle → ⚠ default Atlas %s\n", defaultURL)
+			} else {
+				fmt.Fprintln(writer, "  bundle → ⚠ default Atlas (server-chosen)")
+			}
 			if rc.InstanceURL != "" {
-				fmt.Fprintf(writer, "  instance-url: %s\n", rc.InstanceURL)
+				fmt.Fprintf(writer, "  .artifactdb/ → %s\n", rc.InstanceURL)
 			}
 			fmt.Fprintf(writer, "  grants:       %v\n", rc.Grants)
 			if bundleDir != "" {
@@ -1487,7 +1596,7 @@ func getRemoteConfig(remoteName string) (*remoteConfig, error) {
 }
 
 // streamDryRunJSONWithImport generates JSON output for dry-run with import remotes
-func streamDryRunJSONWithImport(writer io.Writer, remotes []string, paths []string, schema string, jobs string) error {
+func streamDryRunJSONWithImport(writer io.Writer, remotes []string, paths []string, schema string, jobs string, catalogRemotesJSON string) error {
 	fmt.Fprintf(writer, "{\"$schema\":%s,\"remotes\":[", jsonString(schema))
 
 	for i, remote := range remotes {
@@ -1599,12 +1708,226 @@ func streamDryRunJSONWithImport(writer io.Writer, remotes []string, paths []stri
 
 	fmt.Fprint(writer, "]")
 
+	if catalogRemotesJSON != "" {
+		fmt.Fprintf(writer, ",\"catalog_remotes\":%s", catalogRemotesJSON)
+	}
+
 	if len(paths) > 0 {
 		fmt.Fprintf(writer, ",\"paths\":%s", jsonString(paths))
 	}
 
 	fmt.Fprintln(writer, "}")
 	return nil
+}
+
+// getDefaultAtlasURL fetches the deployment's default Atlas URL from the
+// ExoHub API's service-info endpoint (GET {apiBase}/, default_atlas_url
+// field). It tolerates connection errors, non-200 responses, and a missing
+// field (older servers) by reporting ok=false, in which case callers fall
+// back to a generic "default (server-chosen)" marker.
+func getDefaultAtlasURL(apiBase string) (defaultAtlasURL string, ok bool) {
+	endpoint := strings.TrimRight(apiBase, "/") + "/"
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", false
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", false
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", false
+	}
+	var info struct {
+		DefaultAtlasURL string `json:"default_atlas_url"`
+	}
+	if err := json.Unmarshal(body, &info); err != nil || info.DefaultAtlasURL == "" {
+		return "", false
+	}
+	return info.DefaultAtlasURL, true
+}
+
+// catalogTarget is the stable wire shape of one entry in --dry-run --json's
+// "catalog_remotes" array: {remote, bundle_target, bundle_target_source,
+// instance_url}. bundle_target and instance_url are pointers (not omitempty)
+// so an unset value serializes to JSON null rather than disappearing —
+// consumers (e.g. obol) rely on the keys always being present.
+type catalogTarget struct {
+	Remote             string  `json:"remote"`
+	BundleTarget       *string `json:"bundle_target"`
+	BundleTargetSource string  `json:"bundle_target_source"`
+	InstanceURL        *string `json:"instance_url"`
+}
+
+// buildCatalogTargetsJSON renders the bundle target of each catalog remote as
+// a JSON array for the --dry-run --json report (see catalogTarget). When a
+// remote has no atlas_url, the deployment's default Atlas is looked up once
+// (via getDefaultAtlasURL) and shared across all such remotes; bundle_target
+// is null when the live lookup fails (older server or no network) — the
+// human-readable "default (server-chosen)" prose is text-output only, never
+// serialized as if it were a URL. Returns "" when there are no catalog
+// remotes, so the "catalog_remotes" field is omitted entirely.
+func buildCatalogTargetsJSON(catalogRemotes []string, remotesConfig *initcmd.RemotesConfig) string {
+	targets := buildCatalogTargets(catalogRemotes, remotesConfig)
+	if len(targets) == 0 {
+		return ""
+	}
+	data, err := json.Marshal(targets)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+// buildCatalogTargets is the typed form of buildCatalogTargetsJSON, used
+// both to render the dry-run "catalog_remotes" array and, for a real
+// publish, to include the same pre-publish target info alongside the
+// "published" outcomes in exo sync --json's combined report.
+func buildCatalogTargets(catalogRemotes []string, remotesConfig *initcmd.RemotesConfig) []catalogTarget {
+	if len(catalogRemotes) == 0 {
+		return nil
+	}
+	apiBase := defaults.APIBase()
+	var defaultURL string
+	var defaultLooked, defaultOK bool
+	targets := make([]catalogTarget, 0, len(catalogRemotes))
+	for _, remote := range catalogRemotes {
+		rc := getRemoteConfigByName(remote, remotesConfig)
+		t := catalogTarget{Remote: remote}
+		if rc != nil && rc.AtlasURL != "" {
+			url := rc.AtlasURL
+			t.BundleTarget = &url
+			t.BundleTargetSource = "atlas_url"
+		} else {
+			if !defaultLooked {
+				defaultURL, defaultOK = getDefaultAtlasURL(apiBase)
+				defaultLooked = true
+			}
+			if defaultOK {
+				url := defaultURL
+				t.BundleTarget = &url
+			}
+			t.BundleTargetSource = "default"
+		}
+		if rc != nil && rc.InstanceURL != "" {
+			instanceURL := rc.InstanceURL
+			t.InstanceURL = &instanceURL
+		}
+		targets = append(targets, t)
+	}
+	return targets
+}
+
+// contentRemoteTarget is one non-catalog remote's current content routing
+// shown in --dry-run --json --ref's report: the s3url a ref's content would
+// be found under given the CURRENT .exohub/remotes (e.g. after a bucket or
+// prefix move), never the ref's own checked-out copy.
+type contentRemoteTarget struct {
+	Remote string `json:"remote"`
+	Type   string `json:"type"`
+	S3URL  string `json:"s3url,omitempty"`
+}
+
+// refTarget is the stable wire shape of one entry in --dry-run --json
+// --ref's "refs" array: a ref's own identity (ref, ref_commit) alongside the
+// routing it would publish through right now, taken from the CURRENT
+// .exohub/remotes rather than from the ref's own, possibly stale, copy of
+// that file (exo-cli#176).
+type refTarget struct {
+	Ref            string                `json:"ref"`
+	RefCommit      string                `json:"ref_commit"`
+	ContentRemotes []contentRemoteTarget `json:"content_remotes,omitempty"`
+	CatalogRemotes []catalogTarget       `json:"catalog_remotes"`
+}
+
+// runRefDryRunJSON implements `exo sync --dry-run --json --ref <ref>`: for
+// each given ref, it reports the ref's own identity (ref, ref_commit)
+// together with the routing (s3url, atlas_url, instance_url) that publishing
+// it would use right now — read fresh from .exohub/remotes (whatever is
+// currently checked out), independent of what that ref's own copy of the
+// file says. This lets a guard (e.g. datasetdb's obol) verify the target
+// before `exo publish --ref` actually runs.
+func runRefDryRunJSON(refs []string, withRemotes []string, remotesConfig *initcmd.RemotesConfig, jobs string, logPrefix string) error {
+	resolvedRefs, err := resolveCheckRefs(refs)
+	if err != nil {
+		return err
+	}
+
+	remotes := withRemotes
+	if len(remotes) == 0 {
+		remotes, err = listAnnexRemotes()
+		if err != nil {
+			return err
+		}
+	}
+
+	var contentRemotes, catalogRemotes []string
+	for _, remote := range remotes {
+		if isCatalogRemoteType(remote, remotesConfig) {
+			catalogRemotes = append(catalogRemotes, remote)
+		} else {
+			contentRemotes = append(contentRemotes, remote)
+		}
+	}
+	if len(catalogRemotes) == 0 {
+		return fmt.Errorf("--ref with --dry-run --json requires at least one catalog remote (configure one in .exohub/remotes, or select one with --with)")
+	}
+
+	var contentTargets []contentRemoteTarget
+	for _, remote := range contentRemotes {
+		rc := getRemoteConfigByName(remote, remotesConfig)
+		if rc == nil {
+			continue
+		}
+		contentTargets = append(contentTargets, contentRemoteTarget{Remote: remote, Type: rc.Type, S3URL: rc.S3URL})
+	}
+	catalogTargets := buildCatalogTargets(catalogRemotes, remotesConfig)
+
+	targets := make([]refTarget, 0, len(resolvedRefs))
+	for _, ref := range resolvedRefs {
+		commitOut, err := runCommandOutput([]string{"git", "rev-parse", ref})
+		if err != nil {
+			return fmt.Errorf("resolving ref %q: %w", ref, err)
+		}
+		targets = append(targets, refTarget{
+			Ref:            ref,
+			RefCommit:      strings.TrimSpace(commitOut),
+			ContentRemotes: contentTargets,
+			CatalogRemotes: catalogTargets,
+		})
+	}
+
+	report := struct {
+		Refs []refTarget `json:"refs"`
+	}{Refs: targets}
+
+	var buf bytes.Buffer
+	writer := io.MultiWriter(os.Stdout, &buf)
+	enc := json.NewEncoder(writer)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(report); err != nil {
+		return err
+	}
+
+	cmd := []string{"exo", "sync", "--dry-run", "--json"}
+	for _, remote := range remotes {
+		cmd = append(cmd, "--with", remote)
+	}
+	for _, ref := range refs {
+		cmd = append(cmd, "--ref", ref)
+	}
+	extras := map[string]any{
+		"dry_run":          true,
+		"remote_mutations": false,
+		"json":             true,
+	}
+	return logging.RecordDryRunLogPrefix("sync", strings.Join(resolvedRefs, "+"), cmd, nil, jobs, buf.String(), extras, logPrefix)
 }
 
 // getImportDryRunFilesWithSize queries S3 and returns the list of files that would be imported with sizes
@@ -2259,6 +2582,17 @@ func isExportRemote(name string) bool {
 	return false
 }
 
+// isReadonlyRemote reports whether remote is declared `readonly: true` in
+// .exohub/remotes (exo-cli#147, design D3 "defense in depth"): a readonly
+// remote is never a copy/export target, regardless of whether its grants
+// happen to allow writes. This is distinct from remoteHasGrantsConfig +
+// hasGrantsWriteAccess, which detect the *absence* of write access rather
+// than declare it off-limits.
+func isReadonlyRemote(name string, remotesConfig *initcmd.RemotesConfig) bool {
+	rc := getRemoteConfigByName(name, remotesConfig)
+	return rc != nil && rc.Readonly
+}
+
 // remoteHasGrantsConfig checks if a remote has grants=true in its git-annex config.
 func remoteHasGrantsConfig(name string) bool {
 	cmd := exec.Command("git", "config", "--get", fmt.Sprintf("remote.%s.annex-uuid", name))
@@ -2803,6 +3137,82 @@ func getRemoteConfigByName(name string, remotesConfig *initcmd.RemotesConfig) *i
 	return nil
 }
 
+// currentCheckoutLabel names whatever is currently checked out, for use in
+// checkRoutingNotStale's refusal message: the branch name when on a branch,
+// else the exact tag HEAD is at, else HEAD's short commit hash.
+func currentCheckoutLabel() string {
+	if branch, err := runCommandOutput([]string{"git", "symbolic-ref", "--quiet", "--short", "HEAD"}); err == nil {
+		if branch = strings.TrimSpace(branch); branch != "" {
+			return branch
+		}
+	}
+	if tag, err := runCommandOutput([]string{"git", "describe", "--tags", "--exact-match", "HEAD"}); err == nil {
+		if tag = strings.TrimSpace(tag); tag != "" {
+			return tag
+		}
+	}
+	if sha, err := runCommandOutput([]string{"git", "rev-parse", "--short", "HEAD"}); err == nil {
+		if sha = strings.TrimSpace(sha); sha != "" {
+			return sha
+		}
+	}
+	return "HEAD"
+}
+
+// defaultRoutingBranchName strips a leading remote prefix (e.g. "origin/")
+// from a ResolveDefaultRoutingRef result, so it can be compared against a
+// local branch name returned by `git symbolic-ref --short HEAD`.
+func defaultRoutingBranchName(defaultRef string) string {
+	if idx := strings.Index(defaultRef, "/"); idx >= 0 {
+		return defaultRef[idx+1:]
+	}
+	return defaultRef
+}
+
+// checkRoutingNotStale refuses to publish a catalog remote when the current
+// checkout (detached HEAD at a tag/commit, or any branch other than the
+// repository's default) has its own .exohub/remotes routing differ from the
+// default branch's (exo-cli#176): an old tag or stale branch published
+// before a bucket/prefix move or an atlas_url addition would otherwise
+// silently use its own stale or missing routing (the 2026-11-07
+// catalog-fallback incident). It only applies to the plain publish path (no
+// --bundle-dir, so no --ref either): that split deliberately takes routing
+// from whatever is checked out regardless of the published ref's content, so
+// it is exempt by construction. Remotes are matched to their default-branch
+// counterpart by UUID first, then name (initcmd.FindRemoteConfig), so a
+// remote renamed as part of the same migration is still recognized.
+func checkRoutingNotStale(remote string, current *initcmd.RemoteConfig) error {
+	if _, err := runCommandOutput([]string{"git", "rev-parse", "--verify", "HEAD"}); err != nil {
+		return nil // not a git repo (yet), or no commits — nothing to compare against
+	}
+
+	defaultRef := initcmd.ResolveDefaultRoutingRef()
+	defaultBranchName := defaultRoutingBranchName(defaultRef)
+	if branch, err := runCommandOutput([]string{"git", "symbolic-ref", "--quiet", "--short", "HEAD"}); err == nil {
+		if branch = strings.TrimSpace(branch); branch != "" && branch == defaultBranchName {
+			return nil // already on the default branch
+		}
+	}
+
+	defaultConfig, err := initcmd.LoadRemotesConfigFromRef(defaultRef)
+	if err != nil {
+		return nil
+	}
+	if current == nil {
+		return nil
+	}
+	defaultRemote := initcmd.FindRemoteConfig(*current, defaultConfig)
+	if !initcmd.RoutingFieldsDiffer(current, defaultRemote) {
+		return nil
+	}
+
+	currentLabel := currentCheckoutLabel()
+	return fmt.Errorf(
+		"refusing to publish to catalog remote %q: this checkout (%s) has routing that differs from %s's (e.g. a missing atlas_url after a bucket/prefix move) — publishing now would silently use stale or default routing.\n"+
+			"Publish it from %s instead: exo publish --ref %s (or 'exo sync --bundle-dir <dir>')",
+		remote, currentLabel, defaultRef, defaultRef, currentLabel)
+}
+
 // bundleManifest is a minimal view of bundle.json.
 type bundleManifest struct {
 	RefName string `json:"ref_name"`
@@ -2811,15 +3221,120 @@ type bundleManifest struct {
 }
 
 // syncCatalogRemote delegates publishing to a catalog remote's binary.
-// The binary is called with: <binary> publish --s3url=... --bundle-dir=... [--artifactdb-dir=...] [--grants] [--instance-url=...] [--api-url=...]
+// The binary is called with: <binary> publish --s3url=... --bundle-dir=... [--artifactdb-dir=...] [--grants] [--instance-url=...] [--atlas-url=...] [--api-url=...]
 func syncCatalogRemote(remote string, remotesConfig *initcmd.RemotesConfig, binaryName string, selectedBundle ...string) error {
-	rc := getRemoteConfigByName(remote, remotesConfig)
-	if rc == nil {
-		return fmt.Errorf("remote '%s' not found in .exohub/remotes", remote)
+	_, err := runCatalogPublish(remote, remotesConfig, binaryName, false, selectedBundle...)
+	return err
+}
+
+// runPublishJSON publishes each of the given (all-catalog) remotes and
+// prints a single JSON document to stdout: {"published":[{remote,
+// atlas_url_used, published, error}, ...]}. It stops at the first failure
+// (same fail-fast, no-partial-state semantics as the human-output path),
+// still including that remote's failed record in the printed report, and
+// exits non-zero.
+func runPublishJSON(remotes []string, remotesConfig *initcmd.RemotesConfig, selectedBundle ...string) {
+	var records []catalogPublishResult
+	var failed error
+
+	for _, remote := range remotes {
+		if selectedBundleDir(selectedBundle) == "" && shouldSkipPublish(remote, remotesConfig) {
+			continue
+		}
+		catalogBinary, ok := getCatalogRemoteBinary(remote, remotesConfig)
+		if !ok {
+			rc := getRemoteConfigByName(remote, remotesConfig)
+			if rc != nil && rc.Mode == "" {
+				fmt.Fprintf(os.Stderr, "Error: catalog remote '%s' (type: %s) requires 'mode' field (e.g. mode: export)\n", remote, rc.Type)
+			} else {
+				fmt.Fprintf(os.Stderr, "Error: binary 'git-annex-remote-%s-%s' not found in PATH\n", rc.Type, rc.Mode)
+			}
+			os.Exit(1)
+		}
+
+		result, err := runCatalogPublish(remote, remotesConfig, catalogBinary, true, selectedBundle...)
+		if result == nil {
+			result = &catalogPublishResult{Remote: remote}
+		}
+		records = append(records, *result)
+		if err != nil {
+			failed = err
+			break
+		}
 	}
 
+	output := struct {
+		CatalogRemotes []catalogTarget        `json:"catalog_remotes"`
+		Published      []catalogPublishResult `json:"published"`
+	}{
+		CatalogRemotes: buildCatalogTargets(remotes, remotesConfig),
+		Published:      records,
+	}
+	data, err := json.Marshal(output)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: failed to marshal publish report: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println(string(data))
+
+	if failed != nil {
+		fmt.Fprintf(os.Stderr, "Publish failed: %v\n", failed)
+		os.Exit(1)
+	}
+}
+
+// catalogPublishError is the "error" object in a post-publish --json record:
+// {code, message, allowed}. Mirrors the catalog binary's publishJSONError.
+type catalogPublishError struct {
+	Code    string   `json:"code"`
+	Message string   `json:"message"`
+	Allowed []string `json:"allowed,omitempty"`
+}
+
+// catalogPublishResult is the stable wire shape of one entry in exo sync
+// --json's post-publish report: {remote, atlas_url_used, published, error}.
+// atlas_url_used is a pointer (not omitempty) so it serializes to JSON null
+// rather than disappearing when unset; error is present only on a refusal.
+type catalogPublishResult struct {
+	Remote       string               `json:"remote"`
+	AtlasURLUsed *string              `json:"atlas_url_used"`
+	Published    bool                 `json:"published"`
+	Error        *catalogPublishError `json:"error,omitempty"`
+}
+
+// binaryPublishResult mirrors the one-line JSON object the catalog binary
+// prints to stdout with --json: {atlas_url_used, published, error}.
+type binaryPublishResult struct {
+	AtlasURLUsed *string              `json:"atlas_url_used"`
+	Published    bool                 `json:"published"`
+	Error        *catalogPublishError `json:"error,omitempty"`
+}
+
+// runCatalogPublish delegates publishing to a catalog remote's binary. It is
+// the shared implementation behind syncCatalogRemote (human output) and the
+// exo sync --json post-publish report. When jsonMode is true, it passes
+// --json to the catalog binary, captures the binary's stdout (instead of
+// passing it through) to parse the one-line publish result, and sends its
+// own progress line to stderr instead of stdout so --json's single-JSON-
+// document-on-stdout guarantee holds.
+func runCatalogPublish(remote string, remotesConfig *initcmd.RemotesConfig, binaryName string, jsonMode bool, selectedBundle ...string) (*catalogPublishResult, error) {
+	rc := getRemoteConfigByName(remote, remotesConfig)
+	if rc == nil {
+		return nil, fmt.Errorf("remote '%s' not found in .exohub/remotes", remote)
+	}
+
+	if selectedBundleDir(selectedBundle) == "" {
+		if err := checkRoutingNotStale(remote, rc); err != nil {
+			return nil, err
+		}
+	}
+
+	statusWriter := io.Writer(os.Stdout)
+	if jsonMode {
+		statusWriter = os.Stderr
+	}
 	remoteStyle := lipgloss.NewStyle().Foreground(palette.Current().Error.Adaptive()).Bold(true)
-	fmt.Printf("💎↑ Publishing to catalog remote '%s' via %s\n", remoteStyle.Render(remote), binaryName)
+	fmt.Fprintf(statusWriter, "💎↑ Publishing to catalog remote '%s' via %s\n", remoteStyle.Render(remote), binaryName)
 
 	// Find bundle directory
 	bundleDir := selectedBundleDir(selectedBundle)
@@ -2827,18 +3342,18 @@ func syncCatalogRemote(remote string, remotesConfig *initcmd.RemotesConfig, bina
 	if bundleDir != "" {
 		info, err := readSelectedBundle(bundleDir)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		repoURL = info.RepoURL
 	} else {
 		var err error
 		bundleDir, _, _, repoURL, err = findBundleInfoForNotification()
 		if err != nil {
-			return fmt.Errorf("no bundle output found (run 'exo bundle' first): %w", err)
+			return nil, fmt.Errorf("no bundle output found (run 'exo bundle' first): %w", err)
 		}
 	}
 	if repoURL == "" {
-		return fmt.Errorf("bundle has no repo_url (no git remote configured) — refusing to sync to catalog remote %q; configure a git remote and re-run 'exo bundle'", remote)
+		return nil, fmt.Errorf("bundle has no repo_url (no git remote configured) — refusing to sync to catalog remote %q; configure a git remote and re-run 'exo bundle'", remote)
 	}
 
 	// Build publish command args
@@ -2847,9 +3362,20 @@ func syncCatalogRemote(remote string, remotesConfig *initcmd.RemotesConfig, bina
 		"--bundle-dir", bundleDir,
 	}
 
-	// Include .artifactdb/ if present
-	if info, statErr := os.Stat(".artifactdb"); statErr == nil && info.IsDir() {
-		args = append(args, "--artifactdb-dir", ".artifactdb")
+	// Include .artifactdb/ if present. A selected bundle dir's own .artifactdb/
+	// (e.g. git-archived from a ref by 'exo publish --ref', see exo-cli#176)
+	// takes priority over the working tree's, so an older ref's publish
+	// carries its own instance payload rather than HEAD's; falls back to the
+	// working tree's .artifactdb/ when the bundle dir has none (the prior,
+	// still-supported plain --bundle-dir usage).
+	artifactdbDir := ".artifactdb"
+	if bd := selectedBundleDir(selectedBundle); bd != "" {
+		if info, statErr := os.Stat(filepath.Join(bd, ".artifactdb")); statErr == nil && info.IsDir() {
+			artifactdbDir = filepath.Join(bd, ".artifactdb")
+		}
+	}
+	if info, statErr := os.Stat(artifactdbDir); statErr == nil && info.IsDir() {
+		args = append(args, "--artifactdb-dir", artifactdbDir)
 	}
 
 	if rc.Grants {
@@ -2857,6 +3383,9 @@ func syncCatalogRemote(remote string, remotesConfig *initcmd.RemotesConfig, bina
 	}
 	if rc.InstanceURL != "" {
 		args = append(args, "--instance-url", rc.InstanceURL)
+	}
+	if rc.AtlasURL != "" {
+		args = append(args, "--atlas-url", rc.AtlasURL)
 	}
 	if rc.ProjectID != "" {
 		args = append(args, "--project-id", rc.ProjectID)
@@ -2866,25 +3395,62 @@ func syncCatalogRemote(remote string, remotesConfig *initcmd.RemotesConfig, bina
 	apiURL := defaults.APIBase()
 	args = append(args, "--api-url", apiURL)
 
+	if jsonMode {
+		args = append(args, "--json")
+	}
+
 	if commandutil.IsDebug() {
 		fmt.Fprintf(os.Stderr, "DEBUG: EXOHUB_API_URL=%s\n", apiURL)
 		fmt.Fprintf(os.Stderr, "DEBUG: catalog binary=%s args=%v\n", binaryName, args)
 		if rc.InstanceURL != "" {
 			fmt.Fprintf(os.Stderr, "DEBUG: instance_url=%s\n", rc.InstanceURL)
 		}
+		if rc.AtlasURL != "" {
+			fmt.Fprintf(os.Stderr, "DEBUG: atlas_url=%s\n", rc.AtlasURL)
+		}
 	}
 
 	// Run the catalog binary with AWS_PROFILE injected so s5cmd picks up exohub credentials
 	cmd := commandutil.Command(binaryName, args...)
-	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("%s publish failed: %w", binaryName, err)
+	var stdoutBuf bytes.Buffer
+	if jsonMode {
+		cmd.Stdout = &stdoutBuf
+	} else {
+		cmd.Stdout = os.Stdout
 	}
 
-	return nil
+	runErr := cmd.Run()
+
+	var result *catalogPublishResult
+	if jsonMode {
+		result = parseCatalogPublishResult(remote, stdoutBuf.Bytes())
+	}
+
+	if runErr != nil {
+		return result, fmt.Errorf("%s publish failed: %w", binaryName, runErr)
+	}
+	return result, nil
+}
+
+// parseCatalogPublishResult parses the catalog binary's one-line --json
+// publish result from its captured stdout into a catalogPublishResult
+// carrying the remote's name. An empty or unparseable line yields a zero
+// result (published=false, no error) — the caller's non-nil cmd.Run() error
+// (if any) is still the authoritative failure signal.
+func parseCatalogPublishResult(remote string, stdout []byte) *catalogPublishResult {
+	line := strings.TrimSpace(string(stdout))
+	var parsed binaryPublishResult
+	if line != "" {
+		_ = json.Unmarshal([]byte(line), &parsed)
+	}
+	return &catalogPublishResult{
+		Remote:       remote,
+		AtlasURLUsed: parsed.AtlasURLUsed,
+		Published:    parsed.Published,
+		Error:        parsed.Error,
+	}
 }
 
 // findBundleInfoForNotification locates bundle.json and extracts ref info.

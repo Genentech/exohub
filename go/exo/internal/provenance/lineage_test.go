@@ -579,3 +579,147 @@ func TestLineage_UncoveredFileScalesWithRecordsNotHistory(t *testing.T) {
 		t.Errorf("BuildLineage() took %s for an uncovered file with no Collection record, want it independent of commit history", elapsed)
 	}
 }
+
+// TestLineage_NamedCollectionFallback covers show's fallback to a covered
+// named collection when the path has no provenance of its own and no
+// covered enclosing folder collection (add-explicit-collections design D6).
+func TestLineage_NamedCollectionFallback(t *testing.T) {
+	root, run := stateTestRepo(t, false)
+	writeRepoFile(t, root, "cohort_a/sample1.bam", "s1")
+	writeCollectionManifest(t, root, "cohort-a-bams", `{"paths": ["cohort_a/sample1.bam"]}`)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	reader := NewWorktreeReader(root)
+	id, _, _, _, err := ResolveCollection(reader, "cohort-a-bams", false)
+	if err != nil {
+		t.Fatalf("ResolveCollection() error = %v", err)
+	}
+	writeRepoFile(t, root, RecordDir+"/r1.jsonld", entityRecord(id, "wasGeneratedBy", NewActivityID()))
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "record")
+
+	lineage, err := BuildLineage(NewRefReader(root, "HEAD"), "cohort_a/sample1.bam", 0)
+	if err != nil {
+		t.Fatalf("BuildLineage() error = %v", err)
+	}
+	if lineage.Subject.ID != id || lineage.Subject.Source != LineageSourceNamedCollection {
+		t.Fatalf("Subject = %+v, want named collection fallback to %s", lineage.Subject, id)
+	}
+	if lineage.Subject.CollectionName != "cohort-a-bams" {
+		t.Errorf("CollectionName = %q, want cohort-a-bams", lineage.Subject.CollectionName)
+	}
+	if !lineage.Covered {
+		t.Error("Covered = false, want true")
+	}
+}
+
+// TestLineage_NamedCollectionFallbackPrefersFolder covers overlap (design
+// D7): when both an enclosing folder collection and a named collection
+// cover the path, show prefers the folder, the more specific,
+// filesystem-scoped fact.
+func TestLineage_NamedCollectionFallbackPrefersFolder(t *testing.T) {
+	root, run := stateTestRepo(t, false)
+	writeRepoFile(t, root, "data/expr.tdb/fragment1", "f1")
+	writeCollectionManifest(t, root, "mixed", `{"paths": ["data/expr.tdb/"]}`)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	reader := NewWorktreeReader(root)
+	treeID, err := reader.ResolveContentID("data/expr.tdb/")
+	if err != nil {
+		t.Fatalf("ResolveContentID() error = %v", err)
+	}
+	namedID, _, _, _, err := ResolveCollection(reader, "mixed", false)
+	if err != nil {
+		t.Fatalf("ResolveCollection() error = %v", err)
+	}
+	writeRepoFile(t, root, RecordDir+"/r1.jsonld", entityRecord(treeID, "wasGeneratedBy", NewActivityID()))
+	writeRepoFile(t, root, RecordDir+"/r2.jsonld", entityRecord(namedID, "wasGeneratedBy", NewActivityID()))
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "records")
+
+	lineage, err := BuildLineage(NewRefReader(root, "HEAD"), "data/expr.tdb/fragment1", 0)
+	if err != nil {
+		t.Fatalf("BuildLineage() error = %v", err)
+	}
+	if lineage.Subject.ID != treeID || lineage.Subject.Source != LineageSourceFolderFallback {
+		t.Fatalf("Subject = %+v, want folder fallback to %s (folder preferred over named collection)", lineage.Subject, treeID)
+	}
+}
+
+// TestLineage_NamedCollectionFallbackDisclosesOthers covers multi-collection
+// disclosure (design D6: "states the others by name rather than silently
+// dropping them"): when more than one named collection covers the path,
+// Subject picks the first by name and lists the rest in OtherCollections.
+func TestLineage_NamedCollectionFallbackDisclosesOthers(t *testing.T) {
+	root, run := stateTestRepo(t, false)
+	writeRepoFile(t, root, "cohort_a/sample1.bam", "s1")
+	writeCollectionManifest(t, root, "release-2026", `{"paths": ["cohort_a/sample1.bam"]}`)
+	writeCollectionManifest(t, root, "cohort-a-bams", `{"paths": ["cohort_a/sample1.bam"]}`)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	reader := NewWorktreeReader(root)
+	idA, _, _, _, err := ResolveCollection(reader, "cohort-a-bams", false)
+	if err != nil {
+		t.Fatalf("ResolveCollection() error = %v", err)
+	}
+	idB, _, _, _, err := ResolveCollection(reader, "release-2026", false)
+	if err != nil {
+		t.Fatalf("ResolveCollection() error = %v", err)
+	}
+	writeRepoFile(t, root, RecordDir+"/r1.jsonld", entityRecord(idA, "wasGeneratedBy", NewActivityID()))
+	writeRepoFile(t, root, RecordDir+"/r2.jsonld", entityRecord(idB, "wasGeneratedBy", NewActivityID()))
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "records")
+
+	lineage, err := BuildLineage(NewRefReader(root, "HEAD"), "cohort_a/sample1.bam", 0)
+	if err != nil {
+		t.Fatalf("BuildLineage() error = %v", err)
+	}
+	// "cohort-a-bams" sorts before "release-2026".
+	if lineage.Subject.CollectionName != "cohort-a-bams" {
+		t.Fatalf("CollectionName = %q, want cohort-a-bams (lexicographically first)", lineage.Subject.CollectionName)
+	}
+	if len(lineage.Subject.OtherCollections) != 1 || lineage.Subject.OtherCollections[0] != "release-2026" {
+		t.Errorf("OtherCollections = %v, want [release-2026]", lineage.Subject.OtherCollections)
+	}
+
+	doc, err := BuildLineageDocument(lineage)
+	if err != nil {
+		t.Fatalf("BuildLineageDocument() error = %v", err)
+	}
+	if len(doc.NamedCollections) != 2 || doc.NamedCollections[0] != "cohort-a-bams" || doc.NamedCollections[1] != "release-2026" {
+		t.Errorf("NamedCollections = %v, want [cohort-a-bams release-2026]", doc.NamedCollections)
+	}
+}
+
+// TestLineage_NamedCollectionNotCoveredFallsThrough covers the "a named
+// collection applies but isn't covered" case: show must not fall back to
+// an uncovered named collection, falling through to the path's own
+// (uncovered) id instead.
+func TestLineage_NamedCollectionNotCoveredFallsThrough(t *testing.T) {
+	root, run := stateTestRepo(t, false)
+	writeRepoFile(t, root, "cohort_a/sample1.bam", "s1")
+	writeCollectionManifest(t, root, "cohort-a-bams", `{"paths": ["cohort_a/sample1.bam"]}`)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	reader := NewWorktreeReader(root)
+	ownID, err := reader.ResolveContentID("cohort_a/sample1.bam")
+	if err != nil {
+		t.Fatalf("ResolveContentID() error = %v", err)
+	}
+
+	lineage, err := BuildLineage(NewRefReader(root, "HEAD"), "cohort_a/sample1.bam", 0)
+	if err != nil {
+		t.Fatalf("BuildLineage() error = %v", err)
+	}
+	if lineage.Subject.ID != ownID || lineage.Subject.Source != LineageSourceOwn {
+		t.Fatalf("Subject = %+v, want own %s (named collection declared but not covered)", lineage.Subject, ownID)
+	}
+	if lineage.Covered {
+		t.Error("Covered = true, want false")
+	}
+}

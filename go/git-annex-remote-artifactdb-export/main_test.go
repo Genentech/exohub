@@ -4,12 +4,97 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestLoadExoTokenFromEnv(t *testing.T) {
+	t.Setenv("EXO_TOKEN", `{"access_token":"env-token"}`)
+
+	if got := loadExoToken(); got != "env-token" {
+		t.Errorf("loadExoToken() = %q, want %q", got, "env-token")
+	}
+}
+
+func TestLoadExoTokenFromEnvRawJWT(t *testing.T) {
+	raw := "eyJhbGciOiJIUzI1NiJ9.payload.signature"
+	t.Setenv("EXO_TOKEN", raw)
+
+	if got := loadExoToken(); got != raw {
+		t.Errorf("loadExoToken() = %q, want %q", got, raw)
+	}
+}
+
+func TestLoadExoTokenFromTokenFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	tokenFile := filepath.Join(tmpDir, "token.json")
+	if err := os.WriteFile(tokenFile, []byte(`{"access_token":"file-token"}`), 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	t.Setenv("EXO_TOKEN", "")
+	t.Setenv("EXO_TOKEN_FILE", tokenFile)
+
+	if got := loadExoToken(); got != "file-token" {
+		t.Errorf("loadExoToken() = %q, want %q", got, "file-token")
+	}
+}
+
+func TestLoadExoTokenFromConfigDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	tokenDir := filepath.Join(tmpDir, "exo", "credentials")
+	if err := os.MkdirAll(tokenDir, 0700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	tokenFile := filepath.Join(tokenDir, "token.json")
+	if err := os.WriteFile(tokenFile, []byte(`{"access_token":"configdir-token"}`), 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	t.Setenv("EXO_TOKEN", "")
+	t.Setenv("EXO_TOKEN_FILE", "")
+	t.Setenv("EXO_CONFIG_DIR", tmpDir)
+
+	if got := loadExoToken(); got != "configdir-token" {
+		t.Errorf("loadExoToken() = %q, want %q", got, "configdir-token")
+	}
+}
+
+func TestLoadExoTokenDefaultPath(t *testing.T) {
+	tmpDir := t.TempDir()
+	tokenDir := filepath.Join(tmpDir, "exo", "credentials")
+	if err := os.MkdirAll(tokenDir, 0700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	tokenFile := filepath.Join(tokenDir, "token.json")
+	if err := os.WriteFile(tokenFile, []byte(`{"access_token":"default-token"}`), 0600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	t.Setenv("EXO_TOKEN", "")
+	t.Setenv("EXO_TOKEN_FILE", "")
+	t.Setenv("EXO_CONFIG_DIR", "")
+	t.Setenv("XDG_CONFIG_HOME", tmpDir)
+	t.Setenv("HOME", tmpDir)
+
+	if got := loadExoToken(); got != "default-token" {
+		t.Errorf("loadExoToken() = %q, want %q", got, "default-token")
+	}
+}
+
+func TestLoadExoTokenMissing(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("EXO_TOKEN", "")
+	t.Setenv("EXO_TOKEN_FILE", "")
+	t.Setenv("EXO_CONFIG_DIR", tmpDir)
+
+	if got := loadExoToken(); got != "" {
+		t.Errorf("loadExoToken() = %q, want empty", got)
+	}
+}
 
 func TestParseS3url(t *testing.T) {
 	tests := []struct {
@@ -81,6 +166,7 @@ func TestHandleInitRemote(t *testing.T) {
 	config = map[string]string{
 		"s3url":        "s3://bucket/_artifactdb",
 		"instance_url": "https://catalog.example.com/v1/mydb",
+		"atlas_url":    "https://atlas.example.com/v1/sandbox1",
 		"grants":       "true",
 	}
 
@@ -94,6 +180,9 @@ func TestHandleInitRemote(t *testing.T) {
 		if strings.HasPrefix(line, "CONFIG instance_url=") {
 			found["instance_url"] = true
 		}
+		if strings.HasPrefix(line, "CONFIG atlas_url=") {
+			found["atlas_url"] = true
+		}
 		if strings.HasPrefix(line, "CONFIG grants=") {
 			found["grants"] = true
 		}
@@ -102,8 +191,29 @@ func TestHandleInitRemote(t *testing.T) {
 		}
 	}
 
-	if !found["s3url"] || !found["instance_url"] || !found["grants"] || !found["success"] {
+	if !found["s3url"] || !found["instance_url"] || !found["atlas_url"] || !found["grants"] || !found["success"] {
 		t.Errorf("handleInitRemote output missing expected lines: %v", output)
+	}
+}
+
+func TestHandleInitRemoteNoAtlasURL(t *testing.T) {
+	var output []string
+	origWriteLine := writeLine
+	writeLine = func(line string) {
+		output = append(output, line)
+	}
+	defer func() { writeLine = origWriteLine }()
+
+	config = map[string]string{
+		"s3url": "s3://bucket/_artifactdb",
+	}
+
+	handleInitRemote()
+
+	for _, line := range output {
+		if strings.HasPrefix(line, "CONFIG atlas_url=") {
+			t.Errorf("handleInitRemote emitted CONFIG atlas_url when none was set: %v", output)
+		}
 	}
 }
 
@@ -287,5 +397,299 @@ func TestUploadPermissions_MissingRequiredFields(t *testing.T) {
 				t.Errorf("error = %v, want it to contain %q", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestPublishNotify_WithAtlasURL(t *testing.T) {
+	var gotBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := make([]byte, r.ContentLength)
+		_, _ = r.Body.Read(body)
+		gotBody = body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok","results":[]}`))
+	}))
+	defer server.Close()
+
+	_, err := publishNotify(server.URL, "myproject", "ssh://git@host/org/myproject.git", "abc123", "v1.0.0",
+		"s3://bucket/prefix/v1.0.0/", "s3://bucket/prefix", "", "https://atlas.example.com/v1/sandbox1")
+	if err != nil {
+		t.Fatalf("publishNotify() error = %v", err)
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(gotBody, &payload); err != nil {
+		t.Fatalf("failed to parse request payload: %v", err)
+	}
+	if got, want := payload["atlas_url"], "https://atlas.example.com/v1/sandbox1"; got != want {
+		t.Errorf("payload[atlas_url] = %v, want %v", got, want)
+	}
+}
+
+func TestPublishNotify_WithoutAtlasURL(t *testing.T) {
+	var gotBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := make([]byte, r.ContentLength)
+		_, _ = r.Body.Read(body)
+		gotBody = body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok","results":[]}`))
+	}))
+	defer server.Close()
+
+	_, err := publishNotify(server.URL, "myproject", "ssh://git@host/org/myproject.git", "abc123", "v1.0.0",
+		"s3://bucket/prefix/v1.0.0/", "s3://bucket/prefix", "", "")
+	if err != nil {
+		t.Fatalf("publishNotify() error = %v", err)
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(gotBody, &payload); err != nil {
+		t.Fatalf("failed to parse request payload: %v", err)
+	}
+	if _, present := payload["atlas_url"]; present {
+		t.Errorf("payload should not contain atlas_url when unset, got: %s", string(gotBody))
+	}
+}
+
+func TestPublishNotify_422WithAtlasURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = w.Write([]byte(`{"detail":"atlas_url not in allowlist"}`))
+	}))
+	defer server.Close()
+
+	_, err := publishNotify(server.URL, "myproject", "ssh://git@host/org/myproject.git", "abc123", "v1.0.0",
+		"s3://bucket/prefix/v1.0.0/", "s3://bucket/prefix", "", "https://atlas.example.com/v1/not-allowed")
+	if err == nil {
+		t.Fatal("expected error for 422 response, got nil")
+	}
+	if !strings.Contains(err.Error(), "API returned 422") {
+		t.Errorf("error = %v, want it to mention 'API returned 422'", err)
+	}
+}
+
+func TestPublishNotify_422ReturnsAPIError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = w.Write([]byte(`{"detail":{"code":"atlas_url_not_allowlisted","message":"atlas_url not allowed"}}`))
+	}))
+	defer server.Close()
+
+	_, err := publishNotify(server.URL, "myproject", "ssh://git@host/org/myproject.git", "abc123", "v1.0.0",
+		"s3://bucket/prefix/v1.0.0/", "s3://bucket/prefix", "", "")
+
+	var apiErr *apiError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("err = %v, want *apiError", err)
+	}
+	if apiErr.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("apiErr.StatusCode = %d, want 422", apiErr.StatusCode)
+	}
+}
+
+func TestDescribePublishError_StructuredCode(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want []string // substrings expected in the output
+	}{
+		{
+			name: "atlas_url_not_allowlisted",
+			body: `{"detail":{"code":"atlas_url_not_allowlisted","message":"atlas_url not allowed","allowed":["https://atlas.example.com/v1/a","https://atlas.example.com/v1/b"]}}`,
+			want: []string{"atlas_url not allowed", "the catalog remote's atlas_url", ".exohub/remotes", "https://atlas.example.com/v1/a"},
+		},
+		{
+			name: "instance_url_not_allowlisted",
+			body: `{"detail":{"code":"instance_url_not_allowlisted","message":"instance_url not allowed","allowed":["https://artifactdb.example.com/v1/a"]}}`,
+			want: []string{"instance_url not allowed", "the catalog remote's instance_url", ".exohub/remotes", "https://artifactdb.example.com/v1/a"},
+		},
+		{
+			name: "unknown code falls back to server message",
+			body: `{"detail":{"code":"some_future_code","message":"a brand new refusal"}}`,
+			want: []string{"a brand new refusal"},
+		},
+		{
+			name: "old-server plain string detail",
+			body: `{"detail":"atlas_url not in allowlist"}`,
+			want: []string{"atlas_url not in allowlist"},
+		},
+		{
+			name: "FastAPI validation-error list",
+			body: `{"detail":[{"loc":["body","atlas_url"],"msg":"Input should be a valid URL"}]}`,
+			want: []string{"body.atlas_url", "Input should be a valid URL"},
+		},
+		{
+			name: "unparseable body falls back to raw text",
+			body: `not json`,
+			want: []string{"not json"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := describePublishError([]byte(tc.body))
+			for _, want := range tc.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("describePublishError(%q) = %q, want substring %q", tc.body, got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestPublishJSONErrorFromBody_StructuredCode(t *testing.T) {
+	body := []byte(`{"detail":{"code":"atlas_url_not_allowlisted","message":"atlas_url not allowed","allowed":["https://atlas.example.com/v1/a","https://atlas.example.com/v1/b"]}}`)
+	got := publishJSONErrorFromBody(body)
+	if got == nil {
+		t.Fatal("publishJSONErrorFromBody() = nil")
+	}
+	if got.Code != "atlas_url_not_allowlisted" || got.Message != "atlas_url not allowed" {
+		t.Errorf("got = %+v", got)
+	}
+	if !reflect.DeepEqual(got.Allowed, []string{"https://atlas.example.com/v1/a", "https://atlas.example.com/v1/b"}) {
+		t.Errorf("got.Allowed = %v", got.Allowed)
+	}
+}
+
+func TestPublishJSONErrorFromBody_InstanceURLNotAllowlisted(t *testing.T) {
+	body := []byte(`{"detail":{"code":"instance_url_not_allowlisted","message":"instance_url not allowed","allowed":["https://artifactdb.example.com/v1/a"]}}`)
+	got := publishJSONErrorFromBody(body)
+	if got == nil {
+		t.Fatal("publishJSONErrorFromBody() = nil")
+	}
+	if got.Code != "instance_url_not_allowlisted" || got.Message != "instance_url not allowed" {
+		t.Errorf("got = %+v", got)
+	}
+	if !reflect.DeepEqual(got.Allowed, []string{"https://artifactdb.example.com/v1/a"}) {
+		t.Errorf("got.Allowed = %v", got.Allowed)
+	}
+}
+
+func TestPublishJSONErrorFromBody_PlainStringFallsBackToMessageOnly(t *testing.T) {
+	body := []byte(`{"detail":"atlas_url not in allowlist"}`)
+	got := publishJSONErrorFromBody(body)
+	if got == nil {
+		t.Fatal("publishJSONErrorFromBody() = nil")
+	}
+	if got.Code != "" {
+		t.Errorf("got.Code = %q, want empty for an old-server plain-string detail", got.Code)
+	}
+	if got.Message != "atlas_url not in allowlist" {
+		t.Errorf("got.Message = %q", got.Message)
+	}
+	if len(got.Allowed) != 0 {
+		t.Errorf("got.Allowed = %v, want empty", got.Allowed)
+	}
+}
+
+// TestPublishJSONResult_SchemaStable locks the --json publish result's wire
+// shape: {atlas_url_used, published, error}. atlas_url_used must serialize
+// to null (not be absent) when nil, and the error object's code/message keys
+// must always be present (not dropped by omitempty) when error is non-nil.
+// Renaming or dropping any of these keys, or changing atlas_url_used from
+// null to absent, should fail this test.
+func TestPublishJSONResult_SchemaStable(t *testing.T) {
+	success := publishJSONResult{Published: true}
+	data, err := json.Marshal(success)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var successFields map[string]interface{}
+	if err := json.Unmarshal(data, &successFields); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"atlas_url_used", "published"} {
+		if _, ok := successFields[key]; !ok {
+			t.Errorf("success result missing key %q: %s", key, data)
+		}
+	}
+	if successFields["atlas_url_used"] != nil {
+		t.Errorf("atlas_url_used = %v, want null when unset", successFields["atlas_url_used"])
+	}
+	if _, present := successFields["error"]; present {
+		t.Errorf("success result should omit \"error\" entirely, got: %s", data)
+	}
+
+	failure := publishJSONResult{Published: false, Error: &publishJSONError{Code: "atlas_url_not_allowlisted", Message: "atlas_url not allowed"}}
+	data, err = json.Marshal(failure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var failureFields map[string]interface{}
+	if err := json.Unmarshal(data, &failureFields); err != nil {
+		t.Fatal(err)
+	}
+	errObj, ok := failureFields["error"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("failure result missing \"error\" object: %s", data)
+	}
+	for _, key := range []string{"code", "message"} {
+		if _, ok := errObj[key]; !ok {
+			t.Errorf("error object missing key %q: %s", key, data)
+		}
+	}
+	if _, present := errObj["allowed"]; present {
+		t.Errorf("error.allowed should be omitted when empty, got: %s", data)
+	}
+}
+
+func TestGetServiceInfo_WithDefaultAtlasURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"default_atlas_url":"https://atlas.example.com/v1/default"}`))
+	}))
+	defer server.Close()
+
+	got, ok := getServiceInfo(server.URL)
+	if !ok {
+		t.Fatal("getServiceInfo() ok = false, want true")
+	}
+	if got != "https://atlas.example.com/v1/default" {
+		t.Errorf("getServiceInfo() = %q, want %q", got, "https://atlas.example.com/v1/default")
+	}
+}
+
+func TestGetServiceInfo_OlderServerWithoutField(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"version":"1.0.0"}`))
+	}))
+	defer server.Close()
+
+	_, ok := getServiceInfo(server.URL)
+	if ok {
+		t.Error("getServiceInfo() ok = true, want false for a server without default_atlas_url")
+	}
+}
+
+func TestGetServiceInfo_Unreachable(t *testing.T) {
+	_, ok := getServiceInfo("http://127.0.0.1:1")
+	if ok {
+		t.Error("getServiceInfo() ok = true, want false for an unreachable server")
+	}
+}
+
+func TestPublishNotify_SuccessSurfacesAtlasURLUsed(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok","atlas_url_used":"https://atlas.example.com/v1/sandbox1","results":[]}`))
+	}))
+	defer server.Close()
+
+	respBody, err := publishNotify(server.URL, "myproject", "ssh://git@host/org/myproject.git", "abc123", "v1.0.0",
+		"s3://bucket/prefix/v1.0.0/", "s3://bucket/prefix", "", "")
+	if err != nil {
+		t.Fatalf("publishNotify() error = %v", err)
+	}
+
+	var resp struct {
+		AtlasURLUsed string `json:"atlas_url_used"`
+	}
+	if err := json.Unmarshal(respBody, &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	if resp.AtlasURLUsed != "https://atlas.example.com/v1/sandbox1" {
+		t.Errorf("atlas_url_used = %q, want %q", resp.AtlasURLUsed, "https://atlas.example.com/v1/sandbox1")
 	}
 }

@@ -117,7 +117,12 @@ func TestEnsureAWSCredentialsMissingFileNoWarning(t *testing.T) {
 	t.Setenv("AWS_ACCESS_KEY_ID", "")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
 	t.Setenv("EXOHUB_CLI_DEBUG", "")
-	// Point the credentials file to a path that cannot exist.
+	// Point the credentials file to a path that cannot exist. Clear any
+	// ambient overrides (AWS_SHARED_CREDENTIALS_FILE, EXO_CONFIG_DIR) so the
+	// lookup actually falls through to HOME instead of picking up a real
+	// credentials file from the host/sandbox environment.
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", "")
+	t.Setenv("EXO_CONFIG_DIR", "")
 	t.Setenv("HOME", t.TempDir())
 
 	var buf bytes.Buffer
@@ -152,6 +157,12 @@ func TestEnsureAWSCredentialsDebugOutput(t *testing.T) {
 	t.Setenv("AWS_ACCESS_KEY_ID", "")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
 	t.Setenv("EXOHUB_CLI_DEBUG", "1")
+	// Clear any ambient overrides (AWS_SHARED_CREDENTIALS_FILE, EXO_CONFIG_DIR)
+	// so the lookup actually falls through to HOME instead of picking up a
+	// real credentials file from the host/sandbox environment, which would
+	// make ensureAWSCredentials succeed and skip the debug message.
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", "")
+	t.Setenv("EXO_CONFIG_DIR", "")
 	t.Setenv("HOME", t.TempDir())
 
 	r, w, err := os.Pipe()

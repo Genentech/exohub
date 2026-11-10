@@ -81,7 +81,36 @@ type CompileResult struct {
 // returns a non-nil error only for a lower-level failure, for example a
 // git command error.
 func CompileBundle(reader *Reader, selected []string) (*CompileResult, *Report, error) {
+	return compileBundle(reader, selected, false)
+}
+
+// CompileBundleWithVerify is CompileBundle, additionally re-resolving every
+// named collection's "members" entries over the network and comparing each
+// against its lock file when verify is true (design D5 amendment of
+// add-exohub-asset-import: "exo bundle --verify", for reproducing a bundle
+// without trusting a lock that might be stale). A mismatch, or a "members"
+// reference that no longer resolves, is reported the same way a lower-level
+// failure is: a non-nil error, since (unlike an ordinary provenance
+// Finding) it means the bundle about to be produced would not be the one
+// the lock claims it is.
+func CompileBundleWithVerify(reader *Reader, selected []string, verify bool) (*CompileResult, *Report, error) {
+	return compileBundle(reader, selected, verify)
+}
+
+func compileBundle(reader *Reader, selected []string, verify bool) (*CompileResult, *Report, error) {
 	report := &Report{}
+
+	if verify {
+		names, err := ListCollectionNames(reader)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, name := range names {
+			if err := VerifyCollectionLock(reader, name); err != nil {
+				return nil, nil, err
+			}
+		}
+	}
 
 	parsed, err := parseRecordFiles(reader, report)
 	if err != nil {
@@ -115,7 +144,12 @@ func CompileBundle(reader *Reader, selected []string) (*CompileResult, *Report, 
 		return nil, nil, fmt.Errorf("resolve folder tree ids: %w", err)
 	}
 
-	scoped, includedRecords, err := scopeGraph(contentIDs, treeIDs, merged, selected)
+	namedCollections, err := resolveNamedCollections(reader)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	scoped, includedRecords, err := scopeGraph(contentIDs, treeIDs, merged, selected, namedCollections)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -145,8 +179,8 @@ func CompileBundle(reader *Reader, selected []string) (*CompileResult, *Report, 
 	sort.Slice(scoped, func(i, j int) bool { return scoped[i].ID() < scoped[j].ID() })
 
 	doc := &CompiledDocument{Context: ctx, Records: records, Graph: scoped}
-	lineage := BuildArtifactLineage(doc, contentIDs, treeIDs)
-	catalog := BuildProvenanceDocument(doc, reader.ref)
+	lineage := BuildArtifactLineage(doc, contentIDs, treeIDs, namedCollections)
+	catalog := BuildProvenanceDocument(doc, reader.ref, contentIDs, treeIDs)
 	return &CompileResult{
 		Document:    doc,
 		RecordCount: len(records),
@@ -154,6 +188,60 @@ func CompileBundle(reader *Reader, selected []string) (*CompileResult, *Report, 
 		Lineage:     lineage,
 		Catalog:     catalog,
 	}, report, nil
+}
+
+// namedCollectionInfo is one named collection resolved once per
+// CompileBundle call (design D8's "Named collections in bundle
+// compilation scope"), reused both for scope resolution (scopeGraph) and
+// for per-artifact lineage and provenance.json output (catalog_lineage.go):
+// CoveredIDs is every leaf content id and folder tree id the collection
+// currently covers, directly or through a nested named collection
+// (ResolveCollectionCoverage), matching the set coverage.go's
+// namedCollectionCoverage unions across every covered collection.
+type namedCollectionInfo struct {
+	Name       string
+	ID         string
+	CoveredIDs map[string]bool
+	// Project and Version are set only for an external collection (design
+	// D5 of add-exohub-asset-import), reached through some local manifest's
+	// "members": the ExoHub project and pinned version it is defined in,
+	// for BuildArtifactLineage to set on its lineage.collections entry.
+	Project string
+	Version string
+}
+
+// resolveNamedCollections resolves every named collection manifest tracked
+// at reader's checked state (design D2), once, so the result can be reused
+// for scope resolution and for lineage/catalog output without re-running
+// the same git-backed resolution per artifact.
+func resolveNamedCollections(reader *Reader) ([]namedCollectionInfo, error) {
+	names, err := ListCollectionNames(reader)
+	if err != nil {
+		return nil, err
+	}
+	infos := make([]namedCollectionInfo, 0, len(names))
+	seenExternal := map[string]bool{}
+	for _, name := range names {
+		id, coveredIDs, external, err := ResolveCollectionCoverage(reader, name)
+		if err != nil {
+			return nil, fmt.Errorf("collection:%s: %w", name, err)
+		}
+		infos = append(infos, namedCollectionInfo{Name: name, ID: id, CoveredIDs: coveredIDs})
+		for _, e := range external {
+			if seenExternal[e.ID] {
+				continue
+			}
+			seenExternal[e.ID] = true
+			infos = append(infos, namedCollectionInfo{
+				Name:       e.Name,
+				ID:         e.ID,
+				CoveredIDs: e.CoveredIDs,
+				Project:    e.Project,
+				Version:    e.Version,
+			})
+		}
+	}
+	return infos, nil
 }
 
 // scopeGraph keeps merged's nodes that are the bundle's selected artifacts
@@ -177,7 +265,7 @@ func CompileBundle(reader *Reader, selected []string) (*CompileResult, *Report, 
 // resolved up front via Reader.FileEntries, Reader.AllContentIDs and
 // Reader.AllTreeIDs, in a constant number of git invocations regardless of
 // how many files the repository or selected has.
-func scopeGraph(contentIDs, treeIDs map[string]string, merged *MergedGraph, selected []string) ([]Node, map[string]bool, error) {
+func scopeGraph(contentIDs, treeIDs map[string]string, merged *MergedGraph, selected []string, namedCollections []namedCollectionInfo) ([]Node, map[string]bool, error) {
 	// pathByID covers every node id present anywhere at the ref, file or
 	// folder, selected or not, so a node kept only as an upstream
 	// reference still shows where it lives if it happens to still be in
@@ -213,6 +301,33 @@ func scopeGraph(contentIDs, treeIDs map[string]string, merged *MergedGraph, sele
 			}
 			if _, known := merged.Nodes[id]; known {
 				inScope[id] = true
+			}
+		}
+	}
+
+	// A named collection is in scope on the same terms as a folder
+	// collection (design D6 "Named collections in bundle compilation
+	// scope"): its current id is pulled into scope when one of selected's
+	// files — directly, or through an enclosing folder member — is one of
+	// its current, possibly nested, members (namedCollectionInfo.CoveredIDs).
+	for _, path := range selected {
+		id, hasID := contentIDs[path]
+		for _, nc := range namedCollections {
+			if inScope[nc.ID] {
+				continue
+			}
+			if _, known := merged.Nodes[nc.ID]; !known {
+				continue
+			}
+			if hasID && nc.CoveredIDs[id] {
+				inScope[nc.ID] = true
+				continue
+			}
+			for _, dir := range pathAncestors(path) {
+				if tid, ok := treeIDs[dir]; ok && nc.CoveredIDs[tid] {
+					inScope[nc.ID] = true
+					break
+				}
 			}
 		}
 	}
