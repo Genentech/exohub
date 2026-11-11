@@ -30,7 +30,7 @@ var builtinDryRunReportSchema = ""
 
 // builtinUpgradeURL is the built-in fallback for EXO_UPGRADE_URL.
 // Overridden to an internal URL by defaults_internal.go when built with -tags internal.
-var builtinUpgradeURL = ""
+var builtinUpgradeURL = "https://github.com/Genentech/exohub/releases/latest/download/install.sh"
 
 // builtinInstallCmd is the built-in fallback for EXOHUB_INSTALL_CMD.
 // Overridden to an internal install command by defaults_internal.go when built with -tags internal.
