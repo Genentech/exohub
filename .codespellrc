@@ -1,0 +1,11 @@
+[codespell]
+# Ref: https://github.com/codespell-project/codespell#using-a-config-file
+skip = .git,.git-meta,.gitignore,.gitattributes,.*cache,*.svg,go.sum,*.css,*.min.*,.codespellrc,*/static/xterm/*
+check-hidden = true
+# Ignore camelCase and PascalCase identifiers (common in code)
+ignore-regex = \b[a-z]+[A-Z]\w*\b|\b[A-Z][a-z]+[A-Z]\w*\b
+ignore-words-list =
+  # Go import alias for github.com/muesli/termenv
+  te,
+  # accepted alternative spelling of "unparsable", used in comments and test names
+  unparseable

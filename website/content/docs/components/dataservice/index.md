@@ -58,9 +58,9 @@ An interactive OpenAPI reference is served by every deployment at `/api/docs`.
 | Method | Path | Success | Description |
 |--------|------|---------|-------------|
 | `GET` | `/` | `200` | Deployment discovery — service version, supported scopes, data root, endpoints. No auth. |
-| `POST` | `/api/projects/download` | `202` | Start (or re-use) a project download |
-| `POST` | `/api/projects/upload` | `202` | Start (or re-use) a project upload |
-| `POST` | `/api/projects/prune` | `202` | Start (or re-use) the deletion of a project's local copy |
+| `POST` | `/api/projects/download` | `202` | Start (or reuse) a project download |
+| `POST` | `/api/projects/upload` | `202` | Start (or reuse) a project upload |
+| `POST` | `/api/projects/prune` | `202` | Start (or reuse) the deletion of a project's local copy |
 | `GET` | `/api/projects/list` | `200` | List the projects in a workspace, synchronously |
 | `GET` | `/api/projects/describe` | `200` | Describe a project's local copy, synchronously |
 | `POST` | `/api/exo/<command>[/<subcommand>]` | `202` | Run an exo command the deployment exposes; with `help=true`, `200` and its help (see [Exo commands](#exo-commands)) |
