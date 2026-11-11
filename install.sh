@@ -52,7 +52,13 @@ resolve_exo_tag() {
     fi
     echo "$tag"
   else
-    echo "$version"
+    # accept exo/v1.2.3, v1.2.3 or 1.2.3; releases are tagged v1.2.3
+    tag="${version#exo/}"
+    case "$tag" in
+      v*) ;;
+      *) tag="v${tag}" ;;
+    esac
+    echo "$tag"
   fi
 }
 

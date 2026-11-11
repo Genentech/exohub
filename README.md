@@ -39,7 +39,7 @@ curl -fsSL https://github.com/Genentech/exohub/releases/latest/download/install.
 
 Installs `exo` and its helper binaries for your OS/architecture (SHA256-verified) into
 `~/.local/bin` (or `/usr/local/bin` as root). Pass `--dest <dir>` for a custom location;
-`--version exo/vX.Y.Z` to pin a release.
+`--version vX.Y.Z` (or `X.Y.Z`) to pin a release.
 
 `git-annex` is not bundled — install it separately:
 - macOS: `brew install git-annex`
