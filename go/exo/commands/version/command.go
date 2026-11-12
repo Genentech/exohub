@@ -21,6 +21,10 @@ import (
 
 const versionProject = "exocli"
 
+// errNoVersionCheckURL means no update check is configured, which is the
+// default for the open source build, so it is not worth a warning.
+var errNoVersionCheckURL = errors.New("version check unavailable: no version check URL configured (set EXOHUB_VERSION_CHECK_URL)")
+
 func NewCommand(version, commit, date string) *cobra.Command {
 	if version == "" {
 		version = "dev"
@@ -46,7 +50,8 @@ func NewCommand(version, commit, date string) *cobra.Command {
 				printCompanionVersions(cmd.OutOrStdout(), full)
 			}
 			if version != "" && version != "dev" {
-				if err := checkForUpdate(cmd.Context(), cmd.OutOrStdout(), version); err != nil {
+				err := checkForUpdate(cmd.Context(), cmd.OutOrStdout(), version)
+				if err != nil && !errors.Is(err, errNoVersionCheckURL) {
 					fmt.Fprintf(cmd.ErrOrStderr(), "Failed to check for updates: %s\n", err)
 				}
 			}
@@ -134,7 +139,7 @@ func checkForUpdate(ctx context.Context, out io.Writer, current string) error {
 func fetchLatestVersion(ctx context.Context) (string, error) {
 	versionBase := defaults.VersionBaseURL()
 	if versionBase == "" {
-		return "", errors.New("version check unavailable: no version check URL configured (set EXOHUB_VERSION_CHECK_URL)")
+		return "", errNoVersionCheckURL
 	}
 	url := fmt.Sprintf("%s/projects/%s/versions", versionBase, versionProject)
 	if os.Getenv("EXOHUB_CLI_DEBUG") == "1" {

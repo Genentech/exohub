@@ -1,8 +1,12 @@
 package version
 
 import (
+	"bytes"
+	"context"
 	"strings"
 	"testing"
+
+	"github.com/Genentech/exohub/go/exo/internal/defaults"
 )
 
 func TestNormalizeVersion(t *testing.T) {
@@ -106,5 +110,26 @@ func TestGetBinaryVersion_notFound(t *testing.T) {
 	got := getBinaryVersion("__no_such_binary_xyz__", []string{})
 	if got != "not found" {
 		t.Fatalf("getBinaryVersion not found: %q", got)
+	}
+}
+
+func TestVersionCommand_noVersionCheckURLIsQuiet(t *testing.T) {
+	t.Setenv("EXOHUB_VERSION_CHECK_URL", "")
+	if defaults.VersionBaseURL() != "" {
+		t.Skip("build has a built-in version check URL")
+	}
+	cmd := NewCommand("1.2.3", "", "")
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs([]string{})
+	if err := cmd.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("version command: %v", err)
+	}
+	if got := strings.TrimSpace(stdout.String()); got != "1.2.3" {
+		t.Fatalf("stdout = %q, want %q", got, "1.2.3")
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want nothing", stderr.String())
 	}
 }
