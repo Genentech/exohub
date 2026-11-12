@@ -274,6 +274,32 @@ exo sync --all            # re-upload anything missing from every ref, not just 
 exo sync --check --verify # confirm nothing is still silently missing
 ```
 
+#### Migrating Content on a Move (`--migrate-content`)
+
+By default, confirming a move with `--allow-move` only invalidates stale presence so `exo sync --all` re-uploads whatever is missing from the new location — content is never copied automatically. Pass `--migrate-content` alongside `--allow-move` to copy the content from the old `s3url` prefix to the new one *before* switching:
+
+```bash
+exo init --profile my-profile --remote catalog --yes --allow-move --migrate-content
+```
+
+- Credentials for each side are obtained from `exo-credential-helper` (the exohub profile, the identity-provider fallback, or S3 Access Grants) — never the default AWS chain.
+- A server-side S3 `CopyObject` is used when a single credential set can read the old location and write the new one (same bucket and identity); otherwise objects are streamed through a bounded temp file.
+- Every planned object is verified present at the destination (size, and checksum when comparable) **before** the switch is applied — if anything is missing, the command fails and the remote's `s3url` is left unchanged.
+- Objects already at the destination are skipped, so an interrupted or failed migration can be resumed by simply re-running the same command.
+- The old prefix's content is never deleted — cleanup stays a separate, explicit step.
+
+Use `--dry-run` (optionally with `--json`) to preview the plan — object count, bytes, and mode (`server-side` or `stream`) — without copying or switching anything:
+
+```bash
+exo init --profile my-profile --remote catalog --allow-move --migrate-content --dry-run
+```
+
+```
+Would copy 42 object(s) (1073741824 bytes), skip 3 already at the destination, mode=server-side (s3://my-bucket/old-prefix -> s3://my-bucket/new-prefix)
+```
+
+Use `--jobs` to bound how many object copies run concurrently.
+
 ### Init Options
 
 | Flag | Description |
@@ -292,6 +318,8 @@ exo sync --check --verify # confirm nothing is still silently missing
 | `--reset` | Remove `.exohub/` and `.git/` before initializing |
 | `--remote <name>` | Only configure or validate the named remote; combined with `--profile`, refreshes that remote from the profile |
 | `--allow-move` | Confirm an `s3url` change (`--profile`, with or without `--remote`) is an intentional location move; `--yes` alone does not approve it |
+| `--migrate-content` | With `--allow-move`, copy existing content from the old `s3url` prefix to the new one via server-side S3 copy before switching; requires `--allow-move` |
+| `--jobs <N>` | Bounded concurrency for `--migrate-content`'s object copies |
 | `--dead <uuid>` | Mark a remote UUID as dead |
 | `--destroy <uuid>` | Destroy a UUID from git-annex history (destructive) |
 | `--confirm <uuid>` | Confirmation UUID for `--destroy` in non-interactive mode |

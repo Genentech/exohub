@@ -45,7 +45,7 @@ exo init --profile tutorials
 
 A **profile** is a server-authored scaffold fetched by name. It automatically fills in `.exohub/remotes` (with your unixID and folder name substituted in), `.exohub/permissions`, and the bundle — no forking, no manual editing required.
 
-The `tutorials` profile provisions three remotes under `s3://exohub-sandbox-uat/tutorials/<your-unixid>/mnist/`:
+The `tutorials` profile provisions three remotes under `s3://example-sandbox-bucket/tutorials/<your-unixid>/mnist/`:
 
 - `s3-archive` — annex remote (full versioned history)
 - `s3-export` — export remote (snapshot for direct S3 access)
@@ -275,7 +275,7 @@ We can verify the content of s3:
 
 ```bash
 # => annex remote
-$ aws s3 ls s3://exohub-sandbox-uat/tutorials/lelongs/mnist/_annex/
+$ aws s3 ls s3://example-sandbox-bucket/tutorials/lelongs/mnist/_annex/
 2026-03-21 00:37:38    1648877 SHA256E-s1648877-S1073741824-C1--8d422c7b0a1c1c79245a5bcf07fe86e33eeafee792b84584aec276f5a2dbc4e6.gz
 2026-03-21 00:37:37   18165756 SHA256E-s18165756-S1073741824-C1--655b844dfda9e78639c8f05c1b46870fe960fad72cd186266e80871c18db2d26
 2026-03-21 00:37:39      28881 SHA256E-s28881-S1073741824-C1--3552534a0a558bbed6aed32b30c495cca23d567ec52cac8be1a0730e8010255c.gz
@@ -285,13 +285,13 @@ $ aws s3 ls s3://exohub-sandbox-uat/tutorials/lelongs/mnist/_annex/
 
 
 # => export remote
-$ aws s3 ls s3://exohub-sandbox-uat/tutorials/lelongs/mnist/_export/
+$ aws s3 ls s3://example-sandbox-bucket/tutorials/lelongs/mnist/_export/
                            PRE .exohub/
                            PRE data/
                            PRE scripts/
 2026-03-21 00:37:34       1210 README.md
 
-$ aws s3 ls s3://exohub-sandbox-uat/tutorials/lelongs/mnist/_export/data/processed/
+$ aws s3 ls s3://example-sandbox-bucket/tutorials/lelongs/mnist/_export/data/processed/
 2026-03-21 00:37:34    3813084 test.parquet
 2026-03-21 00:37:35   18165756 train.parquet
 ```
