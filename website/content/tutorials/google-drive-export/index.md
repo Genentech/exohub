@@ -36,11 +36,11 @@ existing remotes:
 remotes:
   - name: s3-archive
     type: annex
-    s3url: s3://exohub-sandbox-uat/tutorials/YOUR_UNIXID/mnist/_annex
+    s3url: s3://example-sandbox-bucket/tutorials/YOUR_UNIXID/mnist/_annex
 
   - name: s3-export
     type: export
-    s3url: s3://exohub-sandbox-uat/tutorials/YOUR_UNIXID/mnist/_export
+    s3url: s3://example-sandbox-bucket/tutorials/YOUR_UNIXID/mnist/_export
 
   - name: my-drive                              # any name you like
     type: drive

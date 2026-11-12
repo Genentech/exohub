@@ -173,6 +173,11 @@
   pageRef = "docs/components"
   weight = 30
 
+[[docs]]
+  name = "CLI Reference"
+  pageRef = "docs/reference/cli"
+  weight = 40
+
 [[components]]
   name = "ExoGit"
   pageRef = "docs/components/exogit"

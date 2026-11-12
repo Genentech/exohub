@@ -7,7 +7,7 @@ cascade:
   outputs: ["html", "markdown"]
 ---
 
-This guide walks you through using ExoHub to manage your datasets. This guide covers **exo CLI v0.137.1**. Whether you're downloading data for analysis, collaborating with your team, or setting up automated pipelines, this guide covers everything you need to know.
+This guide walks you through using ExoHub to manage your datasets. This guide covers **exo CLI v0.140.2**. Whether you're downloading data for analysis, collaborating with your team, or setting up automated pipelines, this guide covers everything you need to know.
 
 ## What You'll Learn
 
@@ -28,6 +28,8 @@ This guide walks you through using ExoHub to manage your datasets. This guide co
 15. [**Themes & Appearance**]({{< ref "themes" >}}) — Customize colors, dark/light mode, daily tips, and the web UI
 16. [**Troubleshooting**]({{< ref "troubleshooting" >}}) — Diagnosing and fixing issues
 17. [**Environment Variables**]({{< ref "environment-variables" >}}) — All environment variables supported by the CLI
+
+Looking for the full `--help` output of a specific command? See the [**CLI Reference**]({{< ref "/docs/reference/cli" >}}).
 
 ## Prerequisites
 

@@ -447,6 +447,36 @@ If a sync was interrupted:
    exo sync --with backup-remote --path data/problem-file.parquet
    ```
 
+### Recovering from a Rewritten (Force-Pushed) Remote
+
+If `exo sync` or `exo broadcast` (or `exo publish`, which calls them in steps 1 and 4) fails with an error ending in a hint like this:
+
+```
+Sync failed: ...
+remote s3-archive rewrote main (force-push) since this clone last synced, which is why the sync failed: its synced/main refs still hold the old history. Run `exo sync --reset-synced s3-archive` (it previews first; add --yes to apply) after checking your local work is safe
+```
+
+the remote's `main` branch was force-pushed after your clone last synced with it, so the local `synced/main` branch no longer shares history with it. (If the failed sync left a merge in progress, exo already aborted it for you.)
+
+1. **Preview the reset:**
+   ```bash
+   exo sync --reset-synced s3-archive
+   ```
+   This refuses, listing the commits, if local `main` has commits the remote doesn't have in either its current or pre-rewrite history — push or otherwise preserve those first.
+
+2. **Perform the reset once it's safe:**
+   ```bash
+   exo sync --reset-synced s3-archive --yes
+   ```
+
+3. **Re-run the sync/broadcast that failed:**
+   ```bash
+   exo sync
+   exo broadcast --with s3-archive
+   ```
+
+See [Recovering From a Force-Pushed Remote]({{< ref "syncing#recovering-from-a-force-pushed-remote---reset-synced" >}}) in the Syncing guide for the full explanation of the safety checks.
+
 ### Recovering from Repository Corruption
 
 If the git-annex metadata is corrupted:

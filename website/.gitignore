@@ -11,6 +11,8 @@
 *~
 *.swp
 *.swo
+__pycache__/
+*.pyc
 
 # Editor files
 .vscode/

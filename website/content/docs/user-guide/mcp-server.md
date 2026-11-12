@@ -252,6 +252,8 @@ Orchestrate the full publish workflow: sync content to storage remotes, generate
 |-----------|----------|-------------|
 | `repo_dir` | Yes | Path to the git repository |
 | `sync` | No | Array of remote names to sync in step 1; overrides auto-discovery when provided |
+| `ref` | No | Array of tags/commits to publish with the current routing (repeatable). Content and metadata come from each ref, while routing (remotes, `atlas_url`, `instance_url`) comes from the current checked-out `.exohub/remotes` — this is how an older tag whose own routing predates a migration gets published to the current catalog instead of a stale or missing target |
+| `force` | No | With `ref`, publish even if the ref's content-availability check finds fixable/lost content on the current remote(s) |
 
 **Prerequisites:** git-annex initialized. Remotes defined in `.exohub/remotes`.
 
@@ -296,7 +298,7 @@ Add a new storage remote to the repository. Creates an S3 or local remote for st
 | `repo_dir` | Yes | Path to the git repository |
 | `name` | Yes | Remote name (e.g., `s3-annex`, `s3-export`) |
 | `type` | Yes | Remote type: `annex`, `export`, `artifactdb`, or `exospace` |
-| `s3url` | No | S3 URL (required for `annex`, `export`, `artifactdb`). Example: `s3://exohub-sandbox-uat/sandbox/<org>/<repo>/_annex` |
+| `s3url` | No | S3 URL (required for `annex`, `export`, `artifactdb`). Example: `s3://example-sandbox-bucket/sandbox/<org>/<repo>/_annex` |
 | `rsyncurl` | No | Rsync URL or local path (required for `exospace`). Example: `rsync://host/path` |
 | `tracking_branch` | No | Tracking branch for export remotes (defaults to current branch) |
 | `grants` | No | Enable fine-grained S3 Access Grants permissions (default: `true`) |

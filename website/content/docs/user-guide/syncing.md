@@ -231,6 +231,17 @@ Add `--verify` to also check presence on each remote directly (`checkpresentkey`
 exo sync --check --verify
 ```
 
+### Previewing a Ref's Catalog Target
+
+`exo sync --dry-run --json --ref <ref>` previews, for a catalog remote, the routing (`s3url`, `atlas_url`, `instance_url`) that publishing `<ref>` would use right now — read fresh from the **current** `.exohub/remotes`, never from `<ref>`'s own checked-out copy — alongside `<ref>`'s own identity (`ref`, `ref_commit`):
+
+```bash
+exo sync --dry-run --json --ref v1.0.0
+exo sync --dry-run --json --ref v1.0.0 --ref v1.1.0
+```
+
+This requires at least one catalog remote (via `--with` or auto-discovery), and is how a guard can verify the publish target before `exo publish --ref` actually runs — a ref that predates a routing change (a bucket/prefix move, a new `atlas_url`) still resolves to the current catalog, not a stale or missing one.
+
 ### `exo sync --all`
 
 The explicit, full-cost uploader: pushes the annexed content of **every local branch and tag** to every writable, plain annex remote, respecting each remote's own preferred content expression. Catalog, import, export, readonly, and write-restricted remotes are skipped (they use other sync mechanisms).
@@ -241,6 +252,33 @@ exo sync --all --dry-run --json    # preview without uploading
 ```
 
 Use `--all` to repair `fixable` content reported by `--check`, or to seed a remote from an existing repository's full history. `--all` can only upload content that exists in this clone — if some content is `lost`, `--all` still uploads everything it can and reports the loss with the same exit code as `--check`.
+
+### Recovering From a Force-Pushed Remote (`--reset-synced`)
+
+If a content remote's `main` branch is rewritten (force-pushed) after this clone last synced with it, the local git-annex `synced/main` branch no longer shares history with the remote's new `main`, and a plain merge would hit a confusing conflict. `exo sync` and `exo broadcast` (and `exo publish`'s steps 1 and 4, which call them) no longer check for this up front — doing so used to misfire on a brand-new repo with only unpushed local commits. Instead, each records what it last observed on the remote's `main` before running, runs the sync, and only if it **fails** checks whether that failure was actually caused by a real rewrite (comparing against tips observed on the remote's `main` — its pre-fetch tip and remote-tracking reflog, never local `synced/main`). If so, it appends a hint to the original error instead of leaving you with a bare git-annex conflict:
+
+```
+Sync failed: ...
+remote s3-archive rewrote main (force-push) since this clone last synced, which is why the sync failed: its synced/main refs still hold the old history. Run `exo sync --reset-synced s3-archive` (it previews first; add --yes to apply) after checking your local work is safe
+```
+
+If the failed sync left a merge in progress, exo aborts it automatically and says so (`exo aborted the half-done merge the sync left behind; your working tree is back to its state before the sync.`) — or tells you to run `git merge --abort` yourself if it couldn't.
+
+Fix the rewrite by resetting the local `synced/main` branch to match the remote's rewritten history:
+
+```bash
+exo sync --reset-synced s3-archive     # preview the reset
+exo sync --reset-synced s3-archive --yes   # perform it
+```
+
+`--reset-synced` cannot be combined with `--check`, `--all`, `--dry-run`, `--json`, `--with`, or `--bundle-dir`, and `--yes` only has an effect alongside `--reset-synced`.
+
+Two safety checks happen before anything changes:
+
+- If local `main` has commits the remote doesn't have in either its current or pre-rewrite history, the reset always refuses — regardless of `--yes` — and lists the unpushed commits so nothing is silently discarded.
+- If local `main` holds **only** history the remote rewrote away (no work at risk), the command instead points you at adopting the new history yourself (e.g. `git fetch s3-archive && git reset --hard s3-archive/main`, after confirming that's safe) and re-running.
+
+Once neither case applies, `--reset-synced` only ever touches `synced/main` (and, if needed, the remote's own stale `synced/main`) — never `main` or any other branch.
 
 ## Parallel Jobs
 
@@ -445,6 +483,35 @@ exo publish --sync s3-archive --sync backup-remote
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--sync <remote>` | Remote to sync in step 1; repeat to specify multiple remotes | _(all content remotes)_ |
+
+### Publishing an Older Ref (`--ref`)
+
+Use `--ref` to publish an older tag or commit's content and metadata while keeping **current** routing — the remotes, `s3url`, `atlas_url`, and `instance_url` come from whatever is checked out right now, never from the ref's own, possibly stale, copy of `.exohub/remotes`. This is what makes it safe to publish a tag made before a routing change (a bucket/prefix move, a new `atlas_url`): it always lands on the current catalog instead of silently falling back to a default because the old tag's routing is incomplete.
+
+```bash
+exo publish --ref v1.2.0
+
+# Repeatable: publish several refs in turn, same current routing
+exo publish --ref v1.2.0 --ref v1.3.0
+```
+
+For each ref, `exo publish` builds its bundle and `.artifactdb/` (read from the ref's own tree, not the working tree) into a temporary directory, publishes that directory to the **current** catalog remotes, then removes the temporary directory. Two guards run first, per ref:
+
+1. Every catalog remote the ref's own `.exohub/remotes` references must still exist in the current config (matched by name or git-annex UUID) — otherwise publish refuses rather than silently drop it.
+2. The ref's annexed content must already be present on the current annex remote(s) (checked via `exo sync --check --ref <ref> --verify`) — otherwise publish refuses with a hint to run `exo sync --all`, or `exo init --allow-move --migrate-content` if a remote's storage moved (see [Migrating Content on a Move]({{< ref "repositories#migrating-content-on-a-move---migrate-content" >}})).
+
+Pass `--force` to skip the content-availability check and publish anyway:
+
+```bash
+exo publish --ref v1.2.0 --force
+```
+
+> Without `--ref`, a plain `exo publish` refuses, non-zero, when run from a checkout (detached HEAD, or any branch other than the repository's default) whose own `.exohub/remotes` routing differs from the default branch's — publish that content with `exo publish --ref <ref>` from the default branch instead.
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--ref <tag\|commit>` | Publish this ref's content+metadata with the current routing; repeatable | _(none — publishes HEAD)_ |
+| `--force` | With `--ref`, publish even if the content-availability check finds fixable/lost content on the current remote(s) | `false` |
 
 ### When to Use Publish vs. Manual Steps
 

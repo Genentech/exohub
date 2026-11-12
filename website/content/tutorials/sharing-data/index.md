@@ -33,12 +33,12 @@ Open `.exohub/remotes` and add `grants: true` to the remotes you want to protect
 remotes:
   - name: s3-archive
     type: annex
-    s3url: s3://exohub-sandbox-uat/tutorials/alice/mnist/_annex
+    s3url: s3://example-sandbox-bucket/tutorials/alice/mnist/_annex
     grants: true
 
   - name: s3-export
     type: export
-    s3url: s3://exohub-sandbox-uat/tutorials/alice/mnist/_export
+    s3url: s3://example-sandbox-bucket/tutorials/alice/mnist/_export
     grants: true
 ```
 
@@ -101,12 +101,12 @@ Expected output:
 
 ```
 Initializing remote 's3-archive'...
-Grants synced for s3://exohub-sandbox-uat/tutorials/alice/mnist/_annex
+Grants synced for s3://example-sandbox-bucket/tutorials/alice/mnist/_annex
   + alice: READWRITE
   + bob: READ
 
 Initializing remote 's3-export'...
-Grants synced for s3://exohub-sandbox-uat/tutorials/alice/mnist/_export
+Grants synced for s3://example-sandbox-bucket/tutorials/alice/mnist/_export
   + alice: READWRITE
   + bob: READ
 ```
@@ -134,7 +134,7 @@ Bob's `exo init` output will show his read-only grant is active:
 
 ```
 Initializing remote 's3-archive'...
-Grants synced for s3://exohub-sandbox-uat/tutorials/alice/mnist/_annex
+Grants synced for s3://example-sandbox-bucket/tutorials/alice/mnist/_annex
   alice: READWRITE
   bob: READ (you)
 
@@ -155,7 +155,7 @@ If Bob tries to push data, it will be rejected with a permission error:
 
 ```bash
 exo sync --push
-# Error: 403 Permission denied: write grant required for s3://exohub-sandbox-uat/tutorials/alice/mnist/_annex
+# Error: 403 Permission denied: write grant required for s3://example-sandbox-bucket/tutorials/alice/mnist/_annex
 ```
 
 ## 6. Revoking Access
@@ -183,7 +183,7 @@ Expected output:
 
 ```
 Initializing remote 's3-archive'...
-Grants synced for s3://exohub-sandbox-uat/tutorials/alice/mnist/_annex
+Grants synced for s3://example-sandbox-bucket/tutorials/alice/mnist/_annex
   + alice: READWRITE
   - bob: READ (removed)
 ```
@@ -195,7 +195,7 @@ ExoHub detects the drift between the current grants and the desired state, remov
 After the next `git pull` and `exo init` on Bob's side, his credentials will no longer be issued:
 
 ```
-Error: no grant found for user 'bob' on s3://exohub-sandbox-uat/tutorials/alice/mnist/_annex
+Error: no grant found for user 'bob' on s3://example-sandbox-bucket/tutorials/alice/mnist/_annex
 Ask an owner to add you to .exohub/permissions
 ```
 
