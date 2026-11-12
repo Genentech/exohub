@@ -21,3 +21,12 @@ func TestDocsURL_OSSBuiltin(t *testing.T) {
 		t.Errorf("DocsURL() = %q, want OSS builtin %q", got, want)
 	}
 }
+
+func TestUpgradeURL_OSSBuiltin(t *testing.T) {
+	t.Setenv("EXO_UPGRADE_URL", "")
+	got := UpgradeURL()
+	want := "https://github.com/Genentech/exohub/releases/latest/download/install.sh"
+	if got != want {
+		t.Errorf("UpgradeURL() = %q, want OSS builtin %q", got, want)
+	}
+}
