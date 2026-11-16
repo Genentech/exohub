@@ -7,7 +7,7 @@ import (
 )
 
 func TestExohubAWSProfileDefault(t *testing.T) {
-	t.Setenv("EXOHUB_AWS_PROFILE", "")
+	isolateAWSIdentityEnv(t)
 	if got := exohubAWSProfile(); got != "exohub" {
 		t.Errorf("exohubAWSProfile() = %q, want %q", got, "exohub")
 	}
@@ -21,7 +21,7 @@ func TestExohubAWSProfileOverride(t *testing.T) {
 }
 
 func TestInjectAWSProfileEnv_SetsDefault(t *testing.T) {
-	t.Setenv("EXOHUB_AWS_PROFILE", "")
+	isolateAWSIdentityEnv(t)
 	cmd := exec.Command("echo")
 	cmd.Env = []string{"HOME=/tmp", "PATH=/usr/bin"}
 	InjectAWSProfileEnv(cmd)
@@ -38,7 +38,7 @@ func TestInjectAWSProfileEnv_SetsDefault(t *testing.T) {
 }
 
 func TestInjectAWSProfileEnv_RespectsExistingAWSProfile(t *testing.T) {
-	t.Setenv("EXOHUB_AWS_PROFILE", "")
+	isolateAWSIdentityEnv(t)
 	t.Setenv("AWS_PROFILE", "user-profile")
 	cmd := exec.Command("echo")
 	cmd.Env = []string{"HOME=/tmp", "AWS_PROFILE=user-profile", "PATH=/usr/bin"}
@@ -53,6 +53,7 @@ func TestInjectAWSProfileEnv_RespectsExistingAWSProfile(t *testing.T) {
 }
 
 func TestInjectAWSProfileEnv_UsesOverride(t *testing.T) {
+	isolateAWSIdentityEnv(t)
 	t.Setenv("EXOHUB_AWS_PROFILE", "my-profile")
 	cmd := exec.Command("echo")
 	cmd.Env = []string{"HOME=/tmp"}
@@ -70,7 +71,7 @@ func TestInjectAWSProfileEnv_UsesOverride(t *testing.T) {
 }
 
 func TestInjectAWSProfileEnv_NilEnv(t *testing.T) {
-	t.Setenv("EXOHUB_AWS_PROFILE", "")
+	isolateAWSIdentityEnv(t)
 	cmd := exec.Command("echo")
 	cmd.Env = nil // should initialize from os.Environ()
 	InjectAWSProfileEnv(cmd)
@@ -91,7 +92,7 @@ func TestInjectAWSProfileEnv_NilEnv(t *testing.T) {
 }
 
 func TestInjectAWSProfileEnv_NoDuplicates(t *testing.T) {
-	t.Setenv("EXOHUB_AWS_PROFILE", "")
+	isolateAWSIdentityEnv(t)
 	cmd := exec.Command("echo")
 	cmd.Env = []string{"AWS_PROFILE=old", "HOME=/tmp"}
 	InjectAWSProfileEnv(cmd)
@@ -108,7 +109,7 @@ func TestInjectAWSProfileEnv_NoDuplicates(t *testing.T) {
 }
 
 func TestCommandInjectsAWSProfile(t *testing.T) {
-	t.Setenv("EXOHUB_AWS_PROFILE", "")
+	isolateAWSIdentityEnv(t)
 	t.Setenv("AWS_PROFILE", "")
 	t.Setenv("AWS_ACCESS_KEY_ID", "")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "")

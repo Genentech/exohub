@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -785,6 +786,45 @@ func TestNoDryRunDropSection(t *testing.T) {
 				t.Errorf("dry-run query args must not contain drop flags, got: %v", q.Args)
 			}
 		}
+	}
+}
+
+// matchAnnexGlobSharedVectors is the test-vector table shared verbatim
+// with TestMatchAnnexGlob_SharedVectors in
+// go/git-annex-remote-artifactdb-export/publish_instance_test.go, which
+// ports matchAnnexGlob into that separate Go module (exo-cli#202 review:
+// the catalog binary's exclude-glob matcher must never drift from exo's,
+// since the dry-run "excluded" preview uses this one and the actual
+// publish uses that port). Keep both copies byte-identical; add a row here
+// AND there.
+var matchAnnexGlobSharedVectors = []struct {
+	pattern string
+	path    string
+	want    bool
+}{
+	{"**/x.json", "ax.json", true},
+	{"meta/**", "meta", false},
+	{"dataset_merged.json*", "dataset_merged.json.bak", true},
+	{"dataset_merged.json*", "sub/dataset_merged.json.bak", true},
+	{"meta/*", "meta/a/b", false},
+	{"*.json", "a/b.json", true},
+	// A single * or ? inside a ** pattern must still stay within one path
+	// segment ([^/]*, not .*) — these catch a mutation that lets * cross /
+	// in the ** branch.
+	{"**/m*", "x/m/y", false},
+	{"**/m*", "x/mine.json", true},
+	{"a/**/b?.json", "a/x/y/b1.json", true},
+	{"a/**/b?.json", "a/x/b1/z.json", false},
+}
+
+func TestMatchAnnexGlob_SharedVectors(t *testing.T) {
+	for _, tt := range matchAnnexGlobSharedVectors {
+		t.Run(tt.pattern+"|"+tt.path, func(t *testing.T) {
+			got := matchAnnexGlob(tt.pattern, tt.path)
+			if got != tt.want {
+				t.Errorf("matchAnnexGlob(%q, %q) = %v, want %v", tt.pattern, tt.path, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -1967,7 +2007,7 @@ func TestRunCatalogPublishJSON_Success(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.Stdout = output
-	result, runErr := runCatalogPublish("atlas", config, "fake-catalog", true)
+	result, runErr := runCatalogPublish("atlas", config, "fake-catalog", true, false)
 	os.Stdout = oldStdout
 	output.Close()
 	stdoutData, readErr := os.ReadFile(output.Name())
@@ -1999,6 +2039,382 @@ func TestRunCatalogPublishJSON_Success(t *testing.T) {
 	}
 }
 
+// TestBundleManifestRefKind verifies the --ref-kind mapping (exo-cli#183
+// task 3.0): only ref_type "tag" maps to "tag"; everything else
+// ("branch", "commit", or unset) is treated as a mutable "branch" (no
+// tag-immutability check applies).
+func TestBundleManifestRefKind(t *testing.T) {
+	cases := []struct{ refType, want string }{
+		{"tag", "tag"},
+		{"branch", "branch"},
+		{"commit", "branch"},
+		{"", "branch"},
+	}
+	for _, c := range cases {
+		m := bundleManifest{RefType: c.refType}
+		if got := m.refKind(); got != c.want {
+			t.Errorf("refKind() with ref_type %q = %q, want %q", c.refType, got, c.want)
+		}
+	}
+}
+
+// TestRunCatalogPublish_PassesPerRemoteAccountID verifies that
+// runCatalogPublish passes each remote's own grants_account_id as
+// --grants-account-id to the catalog binary, and omits --grants-account-id
+// for a remote that has none set, so an Atlas remote and a role: instance
+// remote with two different accounts each request credentials under the
+// right account for their own s3url.
+func TestRunCatalogPublish_PassesPerRemoteAccountID(t *testing.T) {
+	jsonLine := `{"atlas_url_used":null,"published":true}`
+
+	config, calls, cleanup := setupCatalogSyncEnvJSON(t, "https://example.com/repo.git", jsonLine, 0)
+	config.Remotes = append(config.Remotes, initcmd.RemoteConfig{
+		Name: "instance", Type: "artifactdb", Role: "instance",
+		S3URL: "s3://bucket/instance", URL: "https://instance.example.com/v1/b",
+		Grants: true, GrantsAccountID: "111122223333",
+	})
+
+	// A .artifactdb/ committed on HEAD so the instance publish doesn't
+	// gracefully skip (exo-cli#183 task 3.3) before building its args.
+	if err := os.MkdirAll(".artifactdb", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(".artifactdb", "dataset.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", ".artifactdb"}, {"commit", "-q", "-m", "add .artifactdb"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com", "GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	if _, err := runCatalogPublish("atlas", config, "fake-catalog", true, false); err != nil {
+		t.Fatalf("runCatalogPublish(atlas): %v", err)
+	}
+	if _, err := runCatalogPublish("instance", config, "fake-catalog", true, false); err != nil {
+		t.Fatalf("runCatalogPublish(instance): %v", err)
+	}
+	cleanup()
+
+	if len(*calls) != 2 {
+		t.Fatalf("expected two publish invocations, got %v", *calls)
+	}
+
+	atlasCall := (*calls)[0]
+	if strings.Contains(atlasCall, "--grants-account-id") {
+		t.Errorf("atlas remote has no grants_account_id, expected no --grants-account-id, got: %q", atlasCall)
+	}
+	if !strings.Contains(atlasCall, "--s3url s3://bucket/atlas") {
+		t.Errorf("expected atlas remote's own s3url, got: %q", atlasCall)
+	}
+
+	instanceCall := (*calls)[1]
+	if !strings.Contains(instanceCall, "--grants-account-id 111122223333") {
+		t.Errorf("expected --grants-account-id 111122223333 for instance remote, got: %q", instanceCall)
+	}
+	if !strings.Contains(instanceCall, "--s3url s3://bucket/instance") {
+		t.Errorf("expected instance remote's own s3url, got: %q", instanceCall)
+	}
+}
+
+// TestRunCatalogPublish_InstancePassesRepoURLAndForce verifies that a
+// role: instance publish passes the bundle's repo_url as --repo-url (the
+// instance catalog-binary invocation has no bundle.json of its own to read
+// it from, unlike role: atlas) and, when force is true, --force (source-repo
+// guard bypass, exo-cli#186).
+func TestRunCatalogPublish_InstancePassesRepoURLAndForce(t *testing.T) {
+	jsonLine := `{"atlas_url_used":null,"published":true}`
+
+	config, calls, cleanup := setupCatalogSyncEnvJSON(t, "https://example.com/repo.git", jsonLine, 0)
+	config.Remotes = append(config.Remotes, initcmd.RemoteConfig{
+		Name: "instance", Type: "artifactdb", Role: "instance",
+		S3URL: "s3://bucket/instance", URL: "https://instance.example.com/v1/b",
+	})
+
+	// A .artifactdb/ committed on HEAD so the instance publish doesn't
+	// gracefully skip (exo-cli#183 task 3.3) before building its args.
+	if err := os.MkdirAll(".artifactdb", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(".artifactdb", "dataset.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", ".artifactdb"}, {"commit", "-q", "-m", "add .artifactdb"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com", "GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	if _, err := runCatalogPublish("instance", config, "fake-catalog", true, true); err != nil {
+		t.Fatalf("runCatalogPublish(instance): %v", err)
+	}
+	cleanup()
+
+	if len(*calls) != 1 {
+		t.Fatalf("expected one publish invocation, got %v", *calls)
+	}
+	instanceCall := (*calls)[0]
+	if !strings.Contains(instanceCall, "--repo-url https://example.com/repo.git") {
+		t.Errorf("expected --repo-url https://example.com/repo.git, got: %q", instanceCall)
+	}
+	if !strings.Contains(instanceCall, "--force") {
+		t.Errorf("expected --force to be passed to the catalog binary, got: %q", instanceCall)
+	}
+}
+
+// TestBuildInstancePublishArgs_SourceS3URLTrailingSlashPreserved verifies
+// that --source-s3url carries the delegation Atlas's s3url exactly as
+// configured (including a trailing slash), since the server compares it
+// verbatim against the instance's recorded source — exo must not strip or
+// add a trailing slash itself.
+func TestBuildInstancePublishArgs_SourceS3URLTrailingSlashPreserved(t *testing.T) {
+	bundleDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(bundleDir, ".artifactdb"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundleDir, ".artifactdb", "dataset.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	atlas := initcmd.RemoteConfig{
+		Name: "atlas", Type: "artifactdb", Role: "atlas",
+		S3URL: "s3://bucket/prefix/",
+	}
+	instance := initcmd.RemoteConfig{
+		Name: "instance", Type: "artifactdb", Role: "instance",
+		S3URL: "s3://bucket/proj", URL: "https://instance.example.com/v1/proj",
+		Grants: true,
+	}
+	remotesConfig := &initcmd.RemotesConfig{Remotes: []initcmd.RemoteConfig{atlas, instance}}
+	info := bundleManifest{RefName: "v1", Ref: "abc123", RefType: "tag", RepoURL: "https://example.com/repo.git"}
+
+	args, cleanup, skip, err := buildInstancePublishArgs("instance", &instance, remotesConfig, bundleDir, "", info, "https://api.example.com", false)
+	if err != nil {
+		t.Fatalf("buildInstancePublishArgs error: %v", err)
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if skip {
+		t.Fatal("expected skip=false")
+	}
+
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--source-s3url s3://bucket/prefix/") {
+		t.Errorf("expected --source-s3url s3://bucket/prefix/ (trailing slash preserved), got: %q", joined)
+	}
+}
+
+// TestBuildInstancePublishArgs_ExplicitArtifactdbDirTakesPriority verifies
+// that an explicit artifactdb dir (passed by 'exo publish --ref' via the
+// hidden 'exo sync --artifactdb-dir', exo-cli#177) wins over a selected
+// bundle dir's own .artifactdb/ subtree, even when both are present.
+func TestBuildInstancePublishArgs_ExplicitArtifactdbDirTakesPriority(t *testing.T) {
+	bundleDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(bundleDir, ".artifactdb"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundleDir, ".artifactdb", "bundledir.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	explicitDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(explicitDir, "explicit.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	atlas := initcmd.RemoteConfig{
+		Name: "atlas", Type: "artifactdb", Role: "atlas",
+		S3URL: "s3://bucket/prefix",
+	}
+	instance := initcmd.RemoteConfig{
+		Name: "instance", Type: "artifactdb", Role: "instance",
+		S3URL: "s3://bucket/proj", URL: "https://instance.example.com/v1/proj",
+	}
+	remotesConfig := &initcmd.RemotesConfig{Remotes: []initcmd.RemoteConfig{atlas, instance}}
+	info := bundleManifest{RefName: "1", Ref: "abc123", RefType: "tag", RepoURL: "https://example.com/repo.git"}
+
+	args, cleanup, skip, err := buildInstancePublishArgs("instance", &instance, remotesConfig, bundleDir, explicitDir, info, "https://api.example.com", false)
+	if err != nil {
+		t.Fatalf("buildInstancePublishArgs error: %v", err)
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if skip {
+		t.Fatal("expected skip=false")
+	}
+
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--artifactdb-dir "+explicitDir) {
+		t.Errorf("expected --artifactdb-dir %s (explicit dir), got: %q", explicitDir, joined)
+	}
+	if strings.Contains(joined, "--artifactdb-dir "+filepath.Join(bundleDir, ".artifactdb")) {
+		t.Errorf("expected the explicit artifactdb dir to take priority over bundleDir/.artifactdb, got: %q", joined)
+	}
+}
+
+// TestBuildInstancePublishArgs_ForwardsExcludeGlobs verifies that an
+// instance remote's exclude globs (RemoteConfig.Exclude) are forwarded as
+// repeated --exclude flags (exo-cli#202).
+func TestBuildInstancePublishArgs_ForwardsExcludeGlobs(t *testing.T) {
+	bundleDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(bundleDir, ".artifactdb"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundleDir, ".artifactdb", "dataset.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	atlas := initcmd.RemoteConfig{
+		Name: "atlas", Type: "artifactdb", Role: "atlas",
+		S3URL: "s3://bucket/prefix",
+	}
+	instance := initcmd.RemoteConfig{
+		Name: "instance", Type: "artifactdb", Role: "instance",
+		S3URL: "s3://bucket/proj", URL: "https://instance.example.com/v1/proj",
+		Exclude: []string{"dataset_merged.json*", "tmp/**"},
+	}
+	remotesConfig := &initcmd.RemotesConfig{Remotes: []initcmd.RemoteConfig{atlas, instance}}
+	info := bundleManifest{RefName: "v1", Ref: "abc123", RefType: "tag", RepoURL: "https://example.com/repo.git"}
+
+	args, cleanup, skip, err := buildInstancePublishArgs("instance", &instance, remotesConfig, bundleDir, "", info, "https://api.example.com", false)
+	if err != nil {
+		t.Fatalf("buildInstancePublishArgs error: %v", err)
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if skip {
+		t.Fatal("expected skip=false")
+	}
+
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--exclude dataset_merged.json*") {
+		t.Errorf("expected --exclude dataset_merged.json*, got: %q", joined)
+	}
+	if !strings.Contains(joined, "--exclude tmp/**") {
+		t.Errorf("expected --exclude tmp/**, got: %q", joined)
+	}
+	// Mutation check: both globs must each appear exactly once as their own
+	// --exclude flag, not merged or dropped.
+	if count := strings.Count(joined, "--exclude "); count != 2 {
+		t.Errorf("expected exactly 2 --exclude flags, got %d in: %q", count, joined)
+	}
+}
+
+// TestBuildInstancePublishArgs_NoExcludeOmitsFlag is the mutation-check
+// counterpart: a remote with no exclude globs never emits --exclude.
+func TestBuildInstancePublishArgs_NoExcludeOmitsFlag(t *testing.T) {
+	bundleDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(bundleDir, ".artifactdb"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundleDir, ".artifactdb", "dataset.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	atlas := initcmd.RemoteConfig{
+		Name: "atlas", Type: "artifactdb", Role: "atlas",
+		S3URL: "s3://bucket/prefix",
+	}
+	instance := initcmd.RemoteConfig{
+		Name: "instance", Type: "artifactdb", Role: "instance",
+		S3URL: "s3://bucket/proj", URL: "https://instance.example.com/v1/proj",
+	}
+	remotesConfig := &initcmd.RemotesConfig{Remotes: []initcmd.RemoteConfig{atlas, instance}}
+	info := bundleManifest{RefName: "v1", Ref: "abc123", RefType: "tag", RepoURL: "https://example.com/repo.git"}
+
+	args, cleanup, skip, err := buildInstancePublishArgs("instance", &instance, remotesConfig, bundleDir, "", info, "https://api.example.com", false)
+	if err != nil {
+		t.Fatalf("buildInstancePublishArgs error: %v", err)
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+	if skip {
+		t.Fatal("expected skip=false")
+	}
+	if strings.Contains(strings.Join(args, " "), "--exclude") {
+		t.Errorf("expected no --exclude flag, got: %q", args)
+	}
+}
+
+// TestBuildAtlasPublishArgs_NeverForwardsExclude verifies that an atlas
+// remote's own exclude globs (if any — atlas remotes don't normally set
+// them, but defensively) are never forwarded to the atlas publish command,
+// since --exclude is role: instance only (exo-cli#202).
+func TestBuildAtlasPublishArgs_NeverForwardsExclude(t *testing.T) {
+	bundleDir := t.TempDir()
+	atlas := &initcmd.RemoteConfig{
+		Name: "atlas", Type: "artifactdb", Role: "atlas",
+		S3URL:   "s3://bucket/prefix",
+		Exclude: []string{"dataset_merged.json*"},
+	}
+	info := bundleManifest{RefName: "v1", Ref: "abc123", RefType: "tag"}
+
+	args := buildAtlasPublishArgs(atlas, bundleDir, info, "https://api.example.com", false)
+	if strings.Contains(strings.Join(args, " "), "--exclude") {
+		t.Errorf("expected no --exclude flag for an atlas remote, got: %q", args)
+	}
+}
+
+// TestRunCatalogPublish_InstanceBinarySkippedResult verifies that when the
+// catalog binary's --role instance publish itself reports
+// {published:false, skipped:true, skip_reason:"no_artifactdb"} (exo-cli#189
+// item 2), runCatalogPublish surfaces it as a catalogPublishResult with
+// Published=false and Skipped set to the reason, and a nil error — not a
+// failure.
+func TestRunCatalogPublish_InstanceBinarySkippedResult(t *testing.T) {
+	jsonLine := `{"published":false,"s3_location":"","skipped":true,"skip_reason":"no_artifactdb"}`
+
+	config, calls, cleanup := setupCatalogSyncEnvJSON(t, "https://example.com/repo.git", jsonLine, 0)
+	config.Remotes = append(config.Remotes, initcmd.RemoteConfig{
+		Name: "instance", Type: "artifactdb", Role: "instance",
+		S3URL: "s3://bucket/instance", URL: "https://instance.example.com/v1/b",
+	})
+
+	// A .artifactdb/ committed on HEAD so the instance publish actually
+	// invokes the catalog binary (rather than the exo-side pre-check skip)
+	// and we're exercising the binary's own result parsing.
+	if err := os.MkdirAll(".artifactdb", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(".artifactdb", "dataset.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", ".artifactdb"}, {"commit", "-q", "-m", "add .artifactdb"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com", "GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	result, runErr := runCatalogPublish("instance", config, "fake-catalog", true, false)
+	cleanup()
+
+	if runErr != nil {
+		t.Fatalf("runCatalogPublish() error = %v, want nil (a skip is not a failure)", runErr)
+	}
+	if result == nil {
+		t.Fatal("result = nil")
+	}
+	if result.Published {
+		t.Error("Published = true, want false for a skipped result")
+	}
+	if result.Skipped == nil || *result.Skipped != "no_artifactdb" {
+		t.Errorf("Skipped = %v, want %q", result.Skipped, "no_artifactdb")
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("expected one publish invocation, got %v", *calls)
+	}
+}
+
 // TestRunCatalogPublishJSON_Refusal verifies that a 422-style refusal from
 // the catalog binary (non-zero exit, --json result with published=false and
 // a structured error) is surfaced as both a non-nil error (for exit-code
@@ -2007,7 +2423,7 @@ func TestRunCatalogPublishJSON_Refusal(t *testing.T) {
 	jsonLine := `{"atlas_url_used":null,"published":false,"error":{"code":"atlas_url_not_allowlisted","message":"atlas_url not allowed","allowed":["https://atlas.example.com/v1/a","https://atlas.example.com/v1/b"]}}`
 	config, _, cleanup := setupCatalogSyncEnvJSON(t, "https://example.com/repo.git", jsonLine, 1)
 
-	result, runErr := runCatalogPublish("atlas", config, "fake-catalog", true)
+	result, runErr := runCatalogPublish("atlas", config, "fake-catalog", true, false)
 	cleanup()
 	if runErr == nil {
 		t.Fatal("expected a non-nil error for a refused publish")
@@ -2034,7 +2450,7 @@ func TestRunCatalogPublishJSON_Refusal(t *testing.T) {
 // must serialize to null (not be absent) when nil; renaming or dropping any
 // of these keys should fail this test.
 func TestCatalogPublishResult_SchemaStable(t *testing.T) {
-	record := catalogPublishResult{Remote: "atlas", Published: true}
+	record := catalogPublishResult{Remote: "atlas", Role: "atlas", Published: true}
 	data, err := json.Marshal(record)
 	if err != nil {
 		t.Fatal(err)
@@ -2043,13 +2459,19 @@ func TestCatalogPublishResult_SchemaStable(t *testing.T) {
 	if err := json.Unmarshal(data, &fields); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"remote", "atlas_url_used", "published"} {
+	for _, key := range []string{"remote", "role", "atlas_url_used", "s3_location", "published", "skipped"} {
 		if _, ok := fields[key]; !ok {
 			t.Errorf("missing key %q: %s", key, data)
 		}
 	}
 	if fields["atlas_url_used"] != nil {
 		t.Errorf("atlas_url_used = %v, want null", fields["atlas_url_used"])
+	}
+	if fields["s3_location"] != nil {
+		t.Errorf("s3_location = %v, want null", fields["s3_location"])
+	}
+	if fields["skipped"] != nil {
+		t.Errorf("skipped = %v, want null", fields["skipped"])
 	}
 	if _, present := fields["error"]; present {
 		t.Errorf("success record should omit \"error\" entirely, got: %s", data)
@@ -2093,7 +2515,7 @@ func setupStaleRoutingRepo(t *testing.T, remoteName string) (staleRemote *initcm
 	run("git", "init", "-q", "-b", "main")
 
 	preMigration := &initcmd.RemotesConfig{
-		Remotes: []initcmd.RemoteConfig{{Name: remoteName, Type: "artifactdb", S3URL: "s3://bucket/sandbox/old-prefix"}},
+		Remotes: []initcmd.RemoteConfig{{Name: remoteName, Type: "artifactdb", Mode: "export", S3URL: "s3://bucket/sandbox/old-prefix"}},
 	}
 	if err := initcmd.SaveRemotesConfig(preMigration); err != nil {
 		t.Fatalf("SaveRemotesConfig: %v", err)
@@ -2103,7 +2525,7 @@ func setupStaleRoutingRepo(t *testing.T, remoteName string) (staleRemote *initcm
 	run("git", "tag", "1")
 
 	postMigration := &initcmd.RemotesConfig{
-		Remotes: []initcmd.RemoteConfig{{Name: remoteName, Type: "artifactdb", S3URL: "s3://bucket/styx/psyche-poc", AtlasURL: "https://atlas.example/sandbox1"}},
+		Remotes: []initcmd.RemoteConfig{{Name: remoteName, Type: "artifactdb", Mode: "export", S3URL: "s3://bucket/exohub/my-profile", URL: "https://atlas.example/sandbox1"}},
 	}
 	if err := initcmd.SaveRemotesConfig(postMigration); err != nil {
 		t.Fatalf("SaveRemotesConfig: %v", err)
@@ -2229,6 +2651,474 @@ func TestCheckRoutingNotStale_RefusesOnNonDefaultBranchWithStaleRouting(t *testi
 	}
 }
 
+// buildExoBinary compiles the real exo binary (main.go at the module root)
+// into a temp file and returns its path, for CLI-level tests that must
+// drive behaviour living behind os.Exit in runSync (so it can't be
+// exercised in-process without killing the test binary).
+func buildExoBinary(t *testing.T) string {
+	t.Helper()
+	modDir, err := exec.Command("go", "env", "GOMOD").Output()
+	if err != nil {
+		t.Fatalf("go env GOMOD: %v", err)
+	}
+	moduleRoot := filepath.Dir(strings.TrimSpace(string(modDir)))
+
+	binPath := filepath.Join(t.TempDir(), "exo")
+	build := exec.Command("go", "build", "-o", binPath, ".")
+	build.Dir = moduleRoot
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build exo: %v\n%s", err, out)
+	}
+	return binPath
+}
+
+// TestSyncDryRunCLIRefusesInvalidRemoteConfigOnLoad is a CLI-level
+// reproduction of the exo-cli maitre's #181 review: an invalid role/mode
+// artifactdb config must be refused by the actual `exo sync --dry-run`
+// invocation, not just by calling Validate() from exo init. It builds the
+// real exo binary and runs it against a repo whose .exohub/remotes has a
+// role: instance remote with a mode set (forbidden).
+//
+// exo sync unconditionally requires the git-annex binary on PATH
+// (requireBins("git-annex")) before it ever reaches .exohub/remotes, so
+// this is skipped where it isn't installed (e.g. the test:unit CI job;
+// see newAnnexRepo above for the same convention) and runs for real in
+// test:integration/locally.
+func TestSyncDryRunCLIRefusesInvalidRemoteConfigOnLoad(t *testing.T) {
+	if _, err := exec.LookPath("git-annex"); err != nil {
+		t.Skip("git-annex not in PATH")
+	}
+	binPath := buildExoBinary(t)
+	repoDir := t.TempDir()
+	runIn := func(name string, args ...string) {
+		t.Helper()
+		cmd := exec.Command(name, args...)
+		cmd.Dir = repoDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s %v: %v\n%s", name, args, err, out)
+		}
+	}
+	runIn("git", "init", "-q", "-b", "main")
+	runIn("git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-q", "-m", "init")
+	// Fake git-annex initialization: runSync only checks
+	// `git config --get annex.uuid` (annexInitialized), never the real
+	// git-annex binary, before reaching .exohub/remotes. This avoids a
+	// hard dependency on git-annex being installed in the CI image that
+	// runs go test (unlike test:integration, test:unit has no git-annex).
+	runIn("git", "config", "annex.uuid", "test-annex-uuid")
+
+	data := []byte("remotes:\n  - name: instance\n    type: artifactdb\n    role: instance\n    mode: export\n    s3url: s3://bucket/DS1\n    url: https://adb.example.com/v1/b\n")
+	if err := os.MkdirAll(filepath.Join(repoDir, ".exohub"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, ".exohub", "remotes"), data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(binPath, "sync", "--dry-run")
+	cmd.Dir = repoDir
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected 'exo sync --dry-run' to exit non-zero, output: %s", out)
+	}
+	if !strings.Contains(string(out), "instance remotes take no mode") {
+		t.Errorf("expected output to contain the validation message, got: %s", out)
+	}
+}
+
+// TestSyncCLISkipsInstanceRemoteBeforeAtlas is the CLI-level counterpart of
+// TestRunPublishJSON_PublishesAtlasBeforeInstanceEvenWhenListedAfter for
+// the human-output publish loop in runSync, which lives behind os.Exit and
+// so can't be driven in-process. With a role: instance remote listed
+// BEFORE an atlas remote in --with, `exo sync --with instance,atlas
+// --bundle-dir <dir>` must reorder to publish the atlas remote first (exit
+// 0), then reach the instance remote and skip it gracefully (no
+// .artifactdb/ for this ref, see extractInstanceArtifactdbFromHEAD),
+// invoking the real catalog binary exactly once (never for the instance
+// remote).
+func TestSyncCLISkipsInstanceRemoteBeforeAtlas(t *testing.T) {
+	if _, err := exec.LookPath("git-annex"); err != nil {
+		t.Skip("git-annex not in PATH")
+	}
+	binPath := buildExoBinary(t)
+
+	repoDir := t.TempDir()
+	runIn := func(name string, args ...string) {
+		t.Helper()
+		cmd := exec.Command(name, args...)
+		cmd.Dir = repoDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s %v: %v\n%s", name, args, err, out)
+		}
+	}
+	runIn("git", "init", "-q", "-b", "main")
+	runIn("git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-q", "-m", "init")
+	// Fake git-annex initialization: runSync only checks
+	// `git config --get annex.uuid` (annexInitialized), never the real
+	// git-annex binary, before reaching .exohub/remotes. This avoids a
+	// hard dependency on git-annex being installed in the CI image that
+	// runs go test (unlike test:integration, test:unit has no git-annex).
+	runIn("git", "config", "annex.uuid", "test-annex-uuid")
+
+	data := []byte("remotes:\n" +
+		"  - name: instance\n    type: artifactdb\n    role: instance\n    s3url: s3://bucket/DS1\n    url: https://adb.example.com/v1/b\n" +
+		"  - name: atlas\n    type: artifactdb\n    mode: export\n    s3url: s3://bucket/atlas-meta\n")
+	if err := os.MkdirAll(filepath.Join(repoDir, ".exohub"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, ".exohub", "remotes"), data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	bundleDir := t.TempDir()
+	manifest, err := json.Marshal(bundleManifest{RefName: "main", Ref: "abc123", RepoURL: "https://example.com/repo.git"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundleDir, "bundle.json"), manifest, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Fake catalog binary on PATH, named as getCatalogRemoteBinary expects
+	// for the atlas remote's type/mode; records its argv so we can assert
+	// it was never invoked for the instance remote.
+	binDir := t.TempDir()
+	logFile := filepath.Join(binDir, "calls.log")
+	script := "#!/bin/sh\necho \"$@\" >> " + logFile + "\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(binDir, "git-annex-remote-artifactdb-export"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(binPath, "sync", "--with", "instance", "--with", "atlas", "--bundle-dir", bundleDir)
+	cmd.Dir = repoDir
+	cmd.Env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("expected 'exo sync --with instance --with atlas' to exit 0, got %v, output:\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "No .artifactdb/") || !strings.Contains(string(out), "skipping instance remote 'instance'") {
+		t.Errorf("expected the instance skip notice, got: %s", out)
+	}
+	if !strings.Contains(string(out), "Publishing to catalog remote 'atlas'") {
+		t.Errorf("expected the atlas remote (listed after the skipped instance) to still publish, got: %s", out)
+	}
+
+	callsData, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("expected the catalog binary to have been invoked once, calls.log missing: %v", err)
+	}
+	calls := strings.Split(strings.TrimSpace(string(callsData)), "\n")
+	if len(calls) != 1 {
+		t.Fatalf("expected the catalog binary invoked exactly once (for atlas only), got: %v", calls)
+	}
+	if strings.Contains(calls[0], "instance") {
+		t.Errorf("catalog binary should never be invoked for the instance remote, got: %v", calls[0])
+	}
+}
+
+// TestSyncJSONCLIReportsInstanceSkippedOnAtlasFailure is the CLI-level
+// reproduction of the exo-cli maitre's MR !332 review: when a role: atlas
+// remote's publish fails, the dependent role: instance remote (delegating
+// to it via data_from) must be reported `skipped` with the Atlas's error
+// in the --json report (not silently dropped, and not aborting before the
+// skip is recorded), the catalog binary must never be invoked for the
+// instance remote, and the process must still exit non-zero.
+func TestSyncJSONCLIReportsInstanceSkippedOnAtlasFailure(t *testing.T) {
+	if _, err := exec.LookPath("git-annex"); err != nil {
+		t.Skip("git-annex not in PATH")
+	}
+	binPath := buildExoBinary(t)
+
+	repoDir := t.TempDir()
+	runIn := func(name string, args ...string) {
+		t.Helper()
+		cmd := exec.Command(name, args...)
+		cmd.Dir = repoDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s %v: %v\n%s", name, args, err, out)
+		}
+	}
+	runIn("git", "init", "-q", "-b", "main")
+	runIn("git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-q", "-m", "init")
+	runIn("git", "config", "annex.uuid", "test-annex-uuid")
+
+	data := []byte("remotes:\n" +
+		"  - name: atlas\n    type: artifactdb\n    mode: export\n    s3url: s3://bucket/atlas-meta\n" +
+		"  - name: instance\n    type: artifactdb\n    role: instance\n    data_from: atlas\n    s3url: s3://bucket/DS1\n    url: https://adb.example.com/v1/b\n")
+	if err := os.MkdirAll(filepath.Join(repoDir, ".exohub"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, ".exohub", "remotes"), data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	bundleDir := t.TempDir()
+	manifest, err := json.Marshal(bundleManifest{RefName: "main", Ref: "abc123", RepoURL: "https://example.com/repo.git"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundleDir, "bundle.json"), manifest, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Fake catalog binary: always fails with a structured --json error (for
+	// the atlas remote; the instance remote must never reach it).
+	binDir := t.TempDir()
+	logFile := filepath.Join(binDir, "calls.log")
+	script := "#!/bin/sh\necho \"$@\" >> " + logFile + "\n" +
+		"case \" $* \" in\n" +
+		"  *\" --json \"*)\n" +
+		"    echo '{\"atlas_url_used\":null,\"published\":false,\"error\":{\"code\":\"atlas_url_not_allowlisted\",\"message\":\"atlas_url not allowed\"}}'\n" +
+		"    ;;\n" +
+		"esac\n" +
+		"exit 1\n"
+	if err := os.WriteFile(filepath.Join(binDir, "git-annex-remote-artifactdb-export"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(binPath, "sync", "--with", "instance", "--with", "atlas", "--bundle-dir", bundleDir, "--json")
+	cmd.Dir = repoDir
+	cmd.Env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"), "EXOHUB_API_URL=http://127.0.0.1:1")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+	if err == nil {
+		t.Fatalf("expected 'exo sync --json' to exit non-zero on the Atlas failure, stdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
+	}
+
+	var report struct {
+		Published []catalogPublishResult `json:"published"`
+	}
+	if jsonErr := json.Unmarshal(stdout.Bytes(), &report); jsonErr != nil {
+		t.Fatalf("expected stdout to be the JSON report, got: %v\nstdout:\n%s\nstderr:\n%s", jsonErr, stdout.String(), stderr.String())
+	}
+	if len(report.Published) != 2 {
+		t.Fatalf("expected both remotes' records, got: %+v", report.Published)
+	}
+	if report.Published[0].Remote != "atlas" || report.Published[0].Published || report.Published[0].Error == nil || report.Published[0].Error.Code != "atlas_url_not_allowlisted" {
+		t.Errorf("expected the atlas remote's failure recorded, got: %+v", report.Published[0])
+	}
+	if report.Published[1].Remote != "instance" || report.Published[1].Role != "instance" || report.Published[1].Published ||
+		report.Published[1].Skipped == nil || !strings.Contains(*report.Published[1].Skipped, "atlas") || !strings.Contains(*report.Published[1].Skipped, "failed to publish") {
+		t.Errorf("expected the instance remote skipped with the Atlas's error, got: %+v", report.Published[1])
+	}
+
+	callsData, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("expected the catalog binary to have been invoked once, calls.log missing: %v", err)
+	}
+	calls := strings.Split(strings.TrimSpace(string(callsData)), "\n")
+	if len(calls) != 1 {
+		t.Fatalf("expected the catalog binary invoked exactly once (for atlas only), got: %v", calls)
+	}
+	if strings.Contains(calls[0], "role instance") {
+		t.Errorf("catalog binary should never be invoked for the instance remote, got: %v", calls[0])
+	}
+}
+
+// TestSyncJSONCLIIndependentAtlasAndInstanceStillPublishOnAPeerFailure
+// verifies that one Atlas remote failing doesn't affect an unrelated
+// Atlas/instance pair: with two Atlas remotes (A fails, B succeeds) and
+// one instance delegating to each, A's instance is skipped (A's error)
+// while B's instance still publishes.
+func TestSyncJSONCLIIndependentAtlasAndInstanceStillPublishOnAPeerFailure(t *testing.T) {
+	if _, err := exec.LookPath("git-annex"); err != nil {
+		t.Skip("git-annex not in PATH")
+	}
+	binPath := buildExoBinary(t)
+
+	repoDir := t.TempDir()
+	runIn := func(name string, args ...string) {
+		t.Helper()
+		cmd := exec.Command(name, args...)
+		cmd.Dir = repoDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s %v: %v\n%s", name, args, err, out)
+		}
+	}
+	runIn("git", "init", "-q", "-b", "main")
+	if err := os.MkdirAll(filepath.Join(repoDir, ".artifactdb"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, ".artifactdb", "dataset.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runIn("git", "add", ".artifactdb")
+	runIn("git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "init")
+	runIn("git", "config", "annex.uuid", "test-annex-uuid")
+
+	data := []byte("remotes:\n" +
+		"  - name: atlas-a\n    type: artifactdb\n    mode: export\n    s3url: s3://bucket/atlas-a\n" +
+		"  - name: atlas-b\n    type: artifactdb\n    mode: export\n    s3url: s3://bucket/atlas-b\n" +
+		"  - name: instance-a\n    type: artifactdb\n    role: instance\n    data_from: atlas-a\n    s3url: s3://bucket/DSA\n    url: https://adb.example.com/v1/a\n" +
+		"  - name: instance-b\n    type: artifactdb\n    role: instance\n    data_from: atlas-b\n    s3url: s3://bucket/DSB\n    url: https://adb.example.com/v1/b\n")
+	if err := os.MkdirAll(filepath.Join(repoDir, ".exohub"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, ".exohub", "remotes"), data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	bundleDir := t.TempDir()
+	manifest, err := json.Marshal(bundleManifest{RefName: "main", Ref: "abc123", RepoURL: "https://example.com/repo.git"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundleDir, "bundle.json"), manifest, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Fake catalog binary: fails only for atlas-a's s3url, succeeds for
+	// everything else (atlas-b and instance-b).
+	binDir := t.TempDir()
+	logFile := filepath.Join(binDir, "calls.log")
+	script := "#!/bin/sh\necho \"$@\" >> " + logFile + "\n" +
+		"case \" $* \" in\n" +
+		"  *\"s3://bucket/atlas-a\"*)\n" +
+		"    case \" $* \" in *\" --json \"*) echo '{\"atlas_url_used\":null,\"published\":false,\"error\":{\"code\":\"atlas_url_not_allowlisted\",\"message\":\"nope\"}}' ;; esac\n" +
+		"    exit 1\n" +
+		"    ;;\n" +
+		"  *\"s3://bucket/atlas-b\"*)\n" +
+		"    case \" $* \" in *\" --json \"*) echo '{\"atlas_url_used\":\"https://atlas.example.com/v1/b\",\"published\":true}' ;; esac\n" +
+		"    exit 0\n" +
+		"    ;;\n" +
+		"  *\"--role instance\"*\"s3://bucket/DSB\"*)\n" +
+		"    case \" $* \" in *\" --json \"*) echo '{\"published\":true,\"s3_location\":\"s3://bucket/DSB/main/\"}' ;; esac\n" +
+		"    exit 0\n" +
+		"    ;;\n" +
+		"esac\n" +
+		"exit 0\n"
+	if err := os.WriteFile(filepath.Join(binDir, "git-annex-remote-artifactdb-export"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(binPath, "sync", "--with", "instance-a", "--with", "instance-b", "--with", "atlas-a", "--with", "atlas-b", "--bundle-dir", bundleDir, "--json")
+	cmd.Dir = repoDir
+	cmd.Env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"), "EXOHUB_API_URL=http://127.0.0.1:1")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+	if err == nil {
+		t.Fatalf("expected 'exo sync --json' to exit non-zero (atlas-a failed), stdout:\n%s\nstderr:\n%s", stdout.String(), stderr.String())
+	}
+
+	var report struct {
+		Published []catalogPublishResult `json:"published"`
+	}
+	if jsonErr := json.Unmarshal(stdout.Bytes(), &report); jsonErr != nil {
+		t.Fatalf("expected stdout to be the JSON report, got: %v\nstdout:\n%s\nstderr:\n%s", jsonErr, stdout.String(), stderr.String())
+	}
+
+	byRemote := map[string]catalogPublishResult{}
+	for _, r := range report.Published {
+		byRemote[r.Remote] = r
+	}
+	if r, ok := byRemote["atlas-a"]; !ok || r.Published || r.Error == nil {
+		t.Errorf("expected atlas-a's failure recorded, got: %+v", r)
+	}
+	if r, ok := byRemote["atlas-b"]; !ok || !r.Published {
+		t.Errorf("expected atlas-b published, got: %+v", r)
+	}
+	if r, ok := byRemote["instance-a"]; !ok || r.Published || r.Skipped == nil {
+		t.Errorf("expected instance-a skipped (its delegation Atlas failed), got: %+v", r)
+	}
+	if r, ok := byRemote["instance-b"]; !ok || !r.Published || r.Skipped != nil {
+		t.Errorf("expected instance-b published (its delegation Atlas succeeded), got: %+v", r)
+	}
+
+	callsData, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("calls.log missing: %v", err)
+	}
+	calls := string(callsData)
+	if strings.Contains(calls, "DSA") {
+		t.Errorf("catalog binary should never be invoked for instance-a (skipped), got calls: %s", calls)
+	}
+	if !strings.Contains(calls, "DSB") {
+		t.Errorf("expected the catalog binary invoked for instance-b, got calls: %s", calls)
+	}
+}
+
+// TestSyncCLIReportsInstanceSkippedOnAtlasFailure is the human-output
+// (text) counterpart of TestSyncJSONCLIReportsInstanceSkippedOnAtlasFailure:
+// when a role: atlas remote's publish fails, the dependent role: instance
+// remote must still be reported skipped with the Atlas's error on stderr
+// (not silently dropped by an early os.Exit), the catalog binary must
+// never be invoked for it, and the process must exit non-zero.
+func TestSyncCLIReportsInstanceSkippedOnAtlasFailure(t *testing.T) {
+	if _, err := exec.LookPath("git-annex"); err != nil {
+		t.Skip("git-annex not in PATH")
+	}
+	binPath := buildExoBinary(t)
+
+	repoDir := t.TempDir()
+	runIn := func(name string, args ...string) {
+		t.Helper()
+		cmd := exec.Command(name, args...)
+		cmd.Dir = repoDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("%s %v: %v\n%s", name, args, err, out)
+		}
+	}
+	runIn("git", "init", "-q", "-b", "main")
+	runIn("git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-q", "-m", "init")
+	runIn("git", "config", "annex.uuid", "test-annex-uuid")
+
+	data := []byte("remotes:\n" +
+		"  - name: atlas\n    type: artifactdb\n    mode: export\n    s3url: s3://bucket/atlas-meta\n" +
+		"  - name: instance\n    type: artifactdb\n    role: instance\n    data_from: atlas\n    s3url: s3://bucket/DS1\n    url: https://adb.example.com/v1/b\n")
+	if err := os.MkdirAll(filepath.Join(repoDir, ".exohub"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, ".exohub", "remotes"), data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	bundleDir := t.TempDir()
+	manifest, err := json.Marshal(bundleManifest{RefName: "main", Ref: "abc123", RepoURL: "https://example.com/repo.git"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundleDir, "bundle.json"), manifest, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	binDir := t.TempDir()
+	logFile := filepath.Join(binDir, "calls.log")
+	script := "#!/bin/sh\necho \"$@\" >> " + logFile + "\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(binDir, "git-annex-remote-artifactdb-export"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(binPath, "sync", "--with", "instance", "--with", "atlas", "--bundle-dir", bundleDir)
+	cmd.Dir = repoDir
+	cmd.Env = append(os.Environ(), "PATH="+binDir+":"+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected 'exo sync' to exit non-zero on the Atlas failure, output:\n%s", out)
+	}
+	if !strings.Contains(string(out), "Publish failed for 'atlas'") {
+		t.Errorf("expected the atlas failure reported, got: %s", out)
+	}
+	if !strings.Contains(string(out), "Skipping instance remote 'instance'") || !strings.Contains(string(out), "atlas") || !strings.Contains(string(out), "failed to publish") {
+		t.Errorf("expected the instance skip notice naming the failed delegation Atlas, got: %s", out)
+	}
+
+	callsData, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatalf("calls.log missing: %v", err)
+	}
+	calls := strings.Split(strings.TrimSpace(string(callsData)), "\n")
+	if len(calls) != 1 {
+		t.Fatalf("expected the catalog binary invoked exactly once (for atlas only), got: %v", calls)
+	}
+	if strings.Contains(calls[0], "role instance") {
+		t.Errorf("catalog binary should never be invoked for the instance remote, got: %v", calls[0])
+	}
+}
+
 // TestRunPublishJSON_CombinesTargetAndOutcome verifies that exo sync --json
 // (without --dry-run) prints a single document with BOTH the pre-publish
 // target info ("catalog_remotes", the same shape as the dry-run report) and
@@ -2237,7 +3127,7 @@ func TestCheckRoutingNotStale_RefusesOnNonDefaultBranchWithStaleRouting(t *testi
 func TestRunPublishJSON_CombinesTargetAndOutcome(t *testing.T) {
 	jsonLine := `{"atlas_url_used":"https://atlas.example.com/v1/sandbox1","published":true}`
 	config, _, cleanup := setupCatalogSyncEnvJSON(t, "https://example.com/repo.git", jsonLine, 0)
-	config.Remotes[0].AtlasURL = "https://atlas.example.com/v1/sandbox1"
+	config.Remotes[0].URL = "https://atlas.example.com/v1/sandbox1"
 
 	oldStdout := os.Stdout
 	output, err := os.CreateTemp(t.TempDir(), "stdout")
@@ -2245,7 +3135,7 @@ func TestRunPublishJSON_CombinesTargetAndOutcome(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.Stdout = output
-	runPublishJSON([]string{"atlas"}, config)
+	runPublishJSON([]string{"atlas"}, config, false)
 	os.Stdout = oldStdout
 	output.Close()
 	data, readErr := os.ReadFile(output.Name())
@@ -2261,9 +3151,8 @@ func TestRunPublishJSON_CombinesTargetAndOutcome(t *testing.T) {
 	if err := json.Unmarshal(data, &report); err != nil {
 		t.Fatalf("invalid JSON report %q: %v", data, err)
 	}
-	if len(report.CatalogRemotes) != 1 || report.CatalogRemotes[0].Remote != "atlas" ||
-		report.CatalogRemotes[0].BundleTarget == nil || *report.CatalogRemotes[0].BundleTarget != "https://atlas.example.com/v1/sandbox1" ||
-		report.CatalogRemotes[0].BundleTargetSource != "atlas_url" {
+	if len(report.CatalogRemotes) != 1 || report.CatalogRemotes[0].Remote != "atlas" || report.CatalogRemotes[0].Role != "atlas" ||
+		report.CatalogRemotes[0].URL == nil || *report.CatalogRemotes[0].URL != "https://atlas.example.com/v1/sandbox1" {
 		t.Errorf("unexpected catalog_remotes: %+v", report.CatalogRemotes)
 	}
 	if len(report.Published) != 1 || report.Published[0].Remote != "atlas" || !report.Published[0].Published ||
@@ -2272,11 +3161,204 @@ func TestRunPublishJSON_CombinesTargetAndOutcome(t *testing.T) {
 	}
 }
 
+// TestRunPublishJSON_PublishesAtlasBeforeInstanceEvenWhenListedAfter
+// verifies the role-ordered publish (exo-cli#183 task 3.1): with a role:
+// instance remote listed BEFORE an atlas remote on --with, runPublishJSON
+// still publishes the Atlas remote first (reordering, not the --with
+// order), then reaches the instance remote; since the ref (HEAD, from the
+// fake bundle.json) has no .artifactdb/, the instance publish gracefully
+// skips with a notice (never calling the catalog binary) rather than
+// failing, and the JSON report carries BOTH remotes' records.
+func TestRunPublishJSON_PublishesAtlasBeforeInstanceEvenWhenListedAfter(t *testing.T) {
+	jsonLine := `{"atlas_url_used":"https://atlas.example.com/v1/sandbox1","published":true}`
+	config, calls, cleanup := setupCatalogSyncEnvJSON(t, "https://example.com/repo.git", jsonLine, 0)
+	config.Remotes[0].URL = "https://atlas.example.com/v1/sandbox1"
+	config.Remotes = append([]initcmd.RemoteConfig{{
+		Name: "instance", Type: "artifactdb", Role: "instance",
+		S3URL: "s3://bucket/DS1", URL: "https://adb.example.com/v1/b",
+	}}, config.Remotes...)
+
+	oldStdout, oldStderr := os.Stdout, os.Stderr
+	stdout, err := os.CreateTemp(t.TempDir(), "stdout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderr, err := os.CreateTemp(t.TempDir(), "stderr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout, os.Stderr = stdout, stderr
+	runPublishJSON([]string{"instance", "atlas"}, config, false)
+	os.Stdout, os.Stderr = oldStdout, oldStderr
+	stdout.Close()
+	stderr.Close()
+
+	stdoutData, err := os.ReadFile(stdout.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderrData, err := os.ReadFile(stderr.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanup()
+
+	if !strings.Contains(string(stderrData), "No .artifactdb/") || !strings.Contains(string(stderrData), "skipping instance remote 'instance'") {
+		t.Errorf("expected a no-.artifactdb skip notice for the instance remote on stderr, got: %s", stderrData)
+	}
+
+	var report struct {
+		Published []catalogPublishResult `json:"published"`
+	}
+	if err := json.Unmarshal(stdoutData, &report); err != nil {
+		t.Fatalf("invalid JSON report %q: %v", stdoutData, err)
+	}
+	if len(report.Published) != 2 {
+		t.Fatalf("expected both remotes' records, got: %+v", report.Published)
+	}
+	if report.Published[0].Remote != "atlas" || report.Published[0].Role != "atlas" || !report.Published[0].Published {
+		t.Errorf("expected the atlas remote published first (reordered ahead of --with's order), got: %+v", report.Published[0])
+	}
+	if report.Published[1].Remote != "instance" || report.Published[1].Role != "instance" || report.Published[1].Published || report.Published[1].Skipped == nil {
+		t.Errorf("expected the instance remote reported skipped (no .artifactdb/, not published), got: %+v", report.Published[1])
+	}
+
+	if len(*calls) != 1 {
+		t.Fatalf("expected the catalog binary invoked exactly once (for atlas only), got: %v", *calls)
+	}
+	if strings.Contains((*calls)[0], "instance") {
+		t.Errorf("catalog binary should never be invoked for the instance remote, got: %v", (*calls)[0])
+	}
+}
+
+// TestOrderCatalogRemotesByRole verifies that role: atlas catalog remotes
+// are always ordered before role: instance ones, preserving the relative
+// order within each group and the position of non-catalog remotes (spec
+// "Publish order per role", exo-cli#183 task 3.1).
+func TestOrderCatalogRemotesByRole(t *testing.T) {
+	config := &initcmd.RemotesConfig{Remotes: []initcmd.RemoteConfig{
+		{Name: "instance", Type: "artifactdb", Role: "instance"},
+		{Name: "atlas", Type: "artifactdb"},
+		{Name: "s3", Type: "annex"},
+	}}
+	got := orderCatalogRemotesByRole([]string{"instance", "s3", "atlas"}, config)
+	want := []string{"s3", "atlas", "instance"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("orderCatalogRemotesByRole() = %v, want %v", got, want)
+	}
+}
+
+// TestDiscoverCatalogAndAnnexRemotes_IncludesRoleInstance verifies that
+// auto-discovery (no --with) unions git-annex's own remotes with any role:
+// instance artifactdb remote declared in .exohub/remotes, since a role:
+// instance remote is never git-annex initremote'd and so is otherwise
+// invisible to listAnnexRemotes (exo-cli#196). Atlas-role entries must
+// still precede instance ones (orderCatalogRemotesByRole).
+func TestDiscoverCatalogAndAnnexRemotes_IncludesRoleInstance(t *testing.T) {
+	_, _, restoreDir := newAnnexRepo(t, "s3")
+	defer restoreDir()
+
+	config := &initcmd.RemotesConfig{Remotes: []initcmd.RemoteConfig{
+		{Name: "s3", Type: "annex"},
+		{Name: "atlas", Type: "artifactdb", Mode: "export", S3URL: "s3://bucket/atlas"},
+		{Name: "instance", Type: "artifactdb", Role: "instance", S3URL: "s3://bucket/DS1", URL: "https://adb.example.com/v1/b"},
+	}}
+
+	got, err := discoverCatalogAndAnnexRemotes(config)
+	if err != nil {
+		t.Fatalf("discoverCatalogAndAnnexRemotes: %v", err)
+	}
+	want := []string{"s3", "instance"}
+	// atlas was never initremote'd in this test repo either, so only s3 (a
+	// real git-annex remote) and instance (unioned in) are expected; what
+	// matters is that instance is present and ordered after any atlas-role
+	// entries actually discovered (none here, since atlas also isn't
+	// initremote'd — see the next test for role ordering).
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("discoverCatalogAndAnnexRemotes() = %v, want %v", got, want)
+	}
+}
+
+// TestDiscoverCatalogAndAnnexRemotes_OrdersAtlasBeforeInstance verifies that
+// when both an atlas-role git-annex remote and a role: instance remote are
+// discovered, the atlas one is ordered first.
+func TestDiscoverCatalogAndAnnexRemotes_OrdersAtlasBeforeInstance(t *testing.T) {
+	_, _, restoreDir := newAnnexRepo(t, "atlas")
+	defer restoreDir()
+
+	config := &initcmd.RemotesConfig{Remotes: []initcmd.RemoteConfig{
+		{Name: "atlas", Type: "artifactdb", Mode: "export", S3URL: "s3://bucket/atlas"},
+		{Name: "instance", Type: "artifactdb", Role: "instance", S3URL: "s3://bucket/DS1", URL: "https://adb.example.com/v1/b"},
+	}}
+
+	got, err := discoverCatalogAndAnnexRemotes(config)
+	if err != nil {
+		t.Fatalf("discoverCatalogAndAnnexRemotes: %v", err)
+	}
+	want := []string{"atlas", "instance"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("discoverCatalogAndAnnexRemotes() = %v, want %v", got, want)
+	}
+}
+
+// TestInstanceSkipReason_SkipsWhenDelegationAtlasFailed verifies that an
+// instance remote is skipped, with its delegation Atlas's error as the
+// reason, when that Atlas's publish failed in this run (spec "Failed Atlas
+// skips the instance").
+func TestInstanceSkipReason_SkipsWhenDelegationAtlasFailed(t *testing.T) {
+	config := &initcmd.RemotesConfig{Remotes: []initcmd.RemoteConfig{
+		{Name: "atlas", Type: "artifactdb", S3URL: "s3://bucket/atlas"},
+		{Name: "instance", Type: "artifactdb", Role: "instance", S3URL: "s3://bucket/DS1", URL: "https://adb.example.com/v1/b"},
+	}}
+	rc := getRemoteConfigByName("instance", config)
+	atlasOutcome := map[string]error{"atlas": fmt.Errorf("atlas_url_not_allowlisted")}
+	reason, skip := instanceSkipReason("instance", rc, config, atlasOutcome)
+	if !skip {
+		t.Fatal("expected skip=true when the delegation Atlas failed")
+	}
+	if !strings.Contains(reason, "atlas") || !strings.Contains(reason, "failed to publish") {
+		t.Errorf("unexpected reason: %q", reason)
+	}
+}
+
+// TestInstanceSkipReason_SkipsWhenAtlasNotAttempted verifies that an
+// instance remote is skipped when its delegation Atlas simply wasn't part
+// of this run at all (not attempted, not necessarily failed).
+func TestInstanceSkipReason_SkipsWhenAtlasNotAttempted(t *testing.T) {
+	config := &initcmd.RemotesConfig{Remotes: []initcmd.RemoteConfig{
+		{Name: "atlas", Type: "artifactdb", S3URL: "s3://bucket/atlas"},
+		{Name: "instance", Type: "artifactdb", Role: "instance", S3URL: "s3://bucket/DS1", URL: "https://adb.example.com/v1/b"},
+	}}
+	rc := getRemoteConfigByName("instance", config)
+	reason, skip := instanceSkipReason("instance", rc, config, map[string]error{})
+	if !skip {
+		t.Fatal("expected skip=true when the delegation Atlas wasn't attempted")
+	}
+	if !strings.Contains(reason, "not published") {
+		t.Errorf("unexpected reason: %q", reason)
+	}
+}
+
+// TestInstanceSkipReason_NoSkipWhenAtlasSucceeded verifies that an
+// instance remote is NOT skipped once its delegation Atlas has published
+// successfully in this run.
+func TestInstanceSkipReason_NoSkipWhenAtlasSucceeded(t *testing.T) {
+	config := &initcmd.RemotesConfig{Remotes: []initcmd.RemoteConfig{
+		{Name: "atlas", Type: "artifactdb", S3URL: "s3://bucket/atlas"},
+		{Name: "instance", Type: "artifactdb", Role: "instance", S3URL: "s3://bucket/DS1", URL: "https://adb.example.com/v1/b"},
+	}}
+	rc := getRemoteConfigByName("instance", config)
+	_, skip := instanceSkipReason("instance", rc, config, map[string]error{"atlas": nil})
+	if skip {
+		t.Fatal("expected no skip once the delegation Atlas has published successfully")
+	}
+}
+
 // TestCatalogBinaryInheritsAWSProfile verifies that the catalog binary launched by
 // syncCatalogRemote is constructed via commandutil.Command so that AWS_PROFILE=exohub
 // is automatically injected into its environment (fixing issue #15).
 func TestCatalogBinaryInheritsAWSProfile(t *testing.T) {
-	t.Setenv("EXOHUB_AWS_PROFILE", "")
+	isolateAWSIdentityEnv(t)
 
 	// commandutil.Command is the function used in syncCatalogRemote.
 	// Verify it injects AWS_PROFILE=exohub into the child environment.
@@ -2304,7 +3386,7 @@ func TestCatalogBinaryNotExecCommand(t *testing.T) {
 	// exec.Command does NOT inject AWS_PROFILE, commandutil.Command does.
 	// This test documents the difference so the contract is clear.
 	t.Setenv("AWS_PROFILE", "")
-	t.Setenv("EXOHUB_AWS_PROFILE", "")
+	isolateAWSIdentityEnv(t)
 
 	// exec.Command: no injection
 	rawCmd := exec.Command("echo", "test")
@@ -2332,6 +3414,29 @@ func TestCatalogBinaryNotExecCommand(t *testing.T) {
 	}
 }
 
+// gitInitMinimalRepo git-inits dir on branch "main" with one empty commit,
+// so code that shells out to git (ls-tree/archive for a role: instance
+// publish's .artifactdb/ extraction, or checkRoutingNotStale) has a real
+// repository to run against instead of erroring on "not a git repository".
+func gitInitMinimalRepo(t *testing.T, dir string) {
+	t.Helper()
+	run := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(),
+			"GIT_CONFIG_NOSYSTEM=1", "HOME="+dir,
+			"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
+			"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com",
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("command %v failed: %v\n%s", args, err, out)
+		}
+	}
+	run("git", "init", "-q", "-b", "main")
+	run("git", "commit", "-q", "--allow-empty", "-m", "init")
+}
+
 // setupCatalogSyncEnv creates a temp repo dir with a bundle.json containing
 // the given repoURL, a fake catalog binary on PATH that records invocations,
 // and a remotesConfig with a single artifactdb-type remote named "atlas".
@@ -2339,6 +3444,7 @@ func setupCatalogSyncEnv(t *testing.T, repoURL string) (remotesConfig *initcmd.R
 	t.Helper()
 
 	repoDir := t.TempDir()
+	gitInitMinimalRepo(t, repoDir)
 	bundleDir := filepath.Join(repoDir, ".exohub", "bundles", "main")
 	if err := os.MkdirAll(bundleDir, 0o755); err != nil {
 		t.Fatalf("mkdir bundle dir: %v", err)
@@ -2407,6 +3513,7 @@ func setupCatalogSyncEnvJSON(t *testing.T, repoURL string, jsonLine string, exit
 	t.Helper()
 
 	repoDir := t.TempDir()
+	gitInitMinimalRepo(t, repoDir)
 	bundleDir := filepath.Join(repoDir, ".exohub", "bundles", "main")
 	if err := os.MkdirAll(bundleDir, 0o755); err != nil {
 		t.Fatalf("mkdir bundle dir: %v", err)
@@ -2481,7 +3588,7 @@ func setupCatalogSyncEnvJSON(t *testing.T, repoURL string, jsonLine string, exit
 func TestSyncCatalogRemoteRejectsEmptyRepoURL(t *testing.T) {
 	remotesConfig, calls, cleanup := setupCatalogSyncEnv(t, "")
 
-	err := syncCatalogRemote("atlas", remotesConfig, "fake-catalog")
+	err := syncCatalogRemote("atlas", remotesConfig, "fake-catalog", false)
 	cleanup()
 
 	if err == nil {
@@ -2500,7 +3607,7 @@ func TestSyncCatalogRemoteRejectsEmptyRepoURL(t *testing.T) {
 func TestSyncCatalogRemoteProceedsWithRepoURL(t *testing.T) {
 	remotesConfig, calls, cleanup := setupCatalogSyncEnv(t, "https://example.com/repo.git")
 
-	err := syncCatalogRemote("atlas", remotesConfig, "fake-catalog")
+	err := syncCatalogRemote("atlas", remotesConfig, "fake-catalog", false)
 	cleanup()
 
 	if err != nil {
@@ -2511,6 +3618,29 @@ func TestSyncCatalogRemoteProceedsWithRepoURL(t *testing.T) {
 	}
 	if !strings.Contains((*calls)[0], "--bundle-dir .exohub/bundles/main") {
 		t.Fatalf("automatic selection changed: %v", *calls)
+	}
+	if strings.Contains((*calls)[0], "--force") {
+		t.Errorf("expected no --force without it being requested, got: %v", *calls)
+	}
+}
+
+// TestSyncCatalogRemoteForcePassesForceToCatalogBinary verifies that
+// syncCatalogRemote(..., force=true) passes --force to the catalog binary
+// for a role: atlas remote (source-repo guard bypass, exo-cli#186).
+func TestSyncCatalogRemoteForcePassesForceToCatalogBinary(t *testing.T) {
+	remotesConfig, calls, cleanup := setupCatalogSyncEnv(t, "https://example.com/repo.git")
+
+	err := syncCatalogRemote("atlas", remotesConfig, "fake-catalog", true)
+	cleanup()
+
+	if err != nil {
+		t.Fatalf("syncCatalogRemote: %v", err)
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("expected catalog binary to be invoked once, got calls: %v", *calls)
+	}
+	if !strings.Contains((*calls)[0], "--force") {
+		t.Errorf("expected --force to be passed to the catalog binary, got: %v", *calls)
 	}
 }
 
@@ -2544,22 +3674,27 @@ func TestCatalogExplicitBundleSelection(t *testing.T) {
 				}
 			}
 			config.Remotes[0].Grants = true
-			config.Remotes[0].InstanceURL = "https://catalog.example.com"
+			config.Remotes[0].URL = "https://atlas.example.com"
 			config.Remotes[0].ProjectID = "project"
 			if err := os.Mkdir(".artifactdb", 0o755); err != nil {
 				t.Fatal(err)
 			}
-			if err := syncCatalogRemote("atlas", config, "fake-catalog", dir); err != nil {
+			if err := syncCatalogRemote("atlas", config, "fake-catalog", false, dir); err != nil {
 				t.Fatal(err)
 			}
 			cleanup()
 			if len(*calls) != 1 {
 				t.Fatalf("expected exactly one publish: %v", *calls)
 			}
-			for _, arg := range []string{"--bundle-dir " + dir, "--s3url s3://bucket/atlas", "--grants", "--instance-url https://catalog.example.com", "--project-id project", "--artifactdb-dir .artifactdb", "--api-url"} {
+			for _, arg := range []string{"--bundle-dir " + dir, "--s3url s3://bucket/atlas", "--grants", "--atlas-url https://atlas.example.com", "--project-id project", "--api-url", "--ref-kind branch", "--commit old-commit"} {
 				if !strings.Contains((*calls)[0], arg) {
 					t.Errorf("missing %q in %s", arg, (*calls)[0])
 				}
+			}
+			// Atlas remotes never receive .artifactdb/ in any publish mode
+			// (spec "Atlas remotes never carry .artifactdb", exo-cli#183 task 3.2).
+			if strings.Contains((*calls)[0], "--artifactdb-dir") {
+				t.Errorf("atlas remote should never receive --artifactdb-dir, got: %s", (*calls)[0])
 			}
 			if strings.Contains((*calls)[0], "--bundle-dir .exohub/bundles/main") {
 				t.Fatal("published automatic bundle")
@@ -2591,7 +3726,7 @@ func TestCatalogExplicitInvalidBundleNoFallback(t *testing.T) {
 					}
 				}
 			}
-			err := syncCatalogRemote("atlas", config, "fake-catalog", dir)
+			err := syncCatalogRemote("atlas", config, "fake-catalog", false, dir)
 			cleanup()
 			if err == nil || len(*calls) != 0 {
 				t.Fatalf("expected failure without publish, err=%v calls=%v", err, *calls)
@@ -2655,8 +3790,11 @@ func TestCatalogExplicitJSONDryRunFailsClearly(t *testing.T) {
 
 func TestRunDryRunTextShowsBundleTargetWithAtlasURL(t *testing.T) {
 	config, calls, cleanup := setupCatalogSyncEnv(t, "https://example.com/repo.git")
-	config.Remotes[0].AtlasURL = "https://atlas.example.com/v1/sandbox1"
-	config.Remotes[0].InstanceURL = "https://catalog.example.com"
+	config.Remotes[0].URL = "https://atlas.example.com/v1/sandbox1"
+	config.Remotes = append(config.Remotes, initcmd.RemoteConfig{
+		Name: "instance", Type: "artifactdb", Role: "instance",
+		S3URL: "s3://bucket/project", URL: "https://catalog.example.com",
+	})
 
 	oldStdout := os.Stdout
 	output, err := os.CreateTemp(t.TempDir(), "preview")
@@ -2664,7 +3802,7 @@ func TestRunDryRunTextShowsBundleTargetWithAtlasURL(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.Stdout = output
-	err = runDryRun([]string{"atlas"}, nil, false, "1", "", config, nil)
+	err = runDryRun([]string{"atlas", "instance"}, nil, false, "1", "", config, nil)
 	os.Stdout = oldStdout
 	output.Close()
 	data, readErr := os.ReadFile(output.Name())
@@ -2672,7 +3810,7 @@ func TestRunDryRunTextShowsBundleTargetWithAtlasURL(t *testing.T) {
 	if err != nil || readErr != nil {
 		t.Fatalf("preview: %v, %v", err, readErr)
 	}
-	for _, want := range []string{"bundle \u2192 https://atlas.example.com/v1/sandbox1 (atlas_url)", ".artifactdb/ \u2192 https://catalog.example.com"} {
+	for _, want := range []string{"bundle \u2192 https://atlas.example.com/v1/sandbox1 (url)", ".artifactdb/ \u2192 https://catalog.example.com"} {
 		if !strings.Contains(string(data), want) {
 			t.Errorf("missing %q in preview: %s", want, data)
 		}
@@ -2708,34 +3846,53 @@ func TestRunDryRunTextShowsBundleTargetDefault(t *testing.T) {
 }
 
 // catalogTargetJSON mirrors the stable "catalog_remotes" wire shape
-// ({remote, bundle_target, bundle_target_source, instance_url}) for
-// decoding in tests; bundle_target/instance_url are pointers so a test can
-// tell "null" apart from "absent".
+// ({remote, role, url, url_source, s3_location, data_from, meta_folder})
+// for decoding in tests; the pointer fields let a test tell "null" apart
+// from "absent".
 type catalogTargetJSON struct {
-	Remote             string  `json:"remote"`
-	BundleTarget       *string `json:"bundle_target"`
-	BundleTargetSource string  `json:"bundle_target_source"`
-	InstanceURL        *string `json:"instance_url"`
+	Remote     string    `json:"remote"`
+	Role       string    `json:"role"`
+	URL        *string   `json:"url"`
+	URLSource  *string   `json:"url_source"`
+	S3Location *string   `json:"s3_location"`
+	DataFrom   *string   `json:"data_from"`
+	MetaFolder *string   `json:"meta_folder"`
+	Excluded   *[]string `json:"excluded,omitempty"`
 }
 
 func TestBuildCatalogTargetsJSON_WithAtlasURL(t *testing.T) {
 	config := &initcmd.RemotesConfig{
 		Remotes: []initcmd.RemoteConfig{
-			{Name: "atlas", Type: "artifactdb", AtlasURL: "https://atlas.example.com/v1/sandbox1", InstanceURL: "https://catalog.example.com"},
+			{Name: "atlas", Type: "artifactdb", URL: "https://atlas.example.com/v1/main"},
+			{Name: "instance", Type: "artifactdb", Role: "instance", URL: "https://catalog.example.com"},
 		},
 	}
-	got := buildCatalogTargetsJSON([]string{"atlas"}, config)
+	got := buildCatalogTargetsJSON([]string{"atlas", "instance"}, config, "main")
 
 	var targets []catalogTargetJSON
 	if err := json.Unmarshal([]byte(got), &targets); err != nil {
 		t.Fatalf("invalid JSON %q: %v", got, err)
 	}
-	if len(targets) != 1 {
-		t.Fatalf("len(targets) = %d, want 1", len(targets))
+	if len(targets) != 2 {
+		t.Fatalf("len(targets) = %d, want 2", len(targets))
 	}
-	if targets[0].Remote != "atlas" || targets[0].BundleTarget == nil || *targets[0].BundleTarget != "https://atlas.example.com/v1/sandbox1" ||
-		targets[0].BundleTargetSource != "atlas_url" || targets[0].InstanceURL == nil || *targets[0].InstanceURL != "https://catalog.example.com" {
-		t.Errorf("unexpected target: %+v", targets[0])
+	if targets[0].Remote != "atlas" || targets[0].Role != "atlas" || targets[0].URL == nil || *targets[0].URL != "https://atlas.example.com/v1/main" {
+		t.Errorf("unexpected atlas target: %+v", targets[0])
+	}
+	// url_source: "explicit" when the atlas remote sets its own url (the
+	// #185 "clean break" decision); see
+	// TestBuildCatalogTargetsJSON_ResolvesLiveDefault for the "default"
+	// branch.
+	if targets[0].URLSource == nil || *targets[0].URLSource != "explicit" {
+		t.Errorf("atlas url_source = %v, want \"explicit\"", targets[0].URLSource)
+	}
+	if targets[1].Remote != "instance" || targets[1].Role != "instance" ||
+		targets[1].URL == nil || *targets[1].URL != "https://catalog.example.com" ||
+		targets[1].DataFrom == nil || *targets[1].DataFrom != "atlas" {
+		t.Errorf("unexpected instance target: %+v", targets[1])
+	}
+	if targets[1].URLSource != nil {
+		t.Errorf("instance url_source = %v, want null", *targets[1].URLSource)
 	}
 }
 
@@ -2743,7 +3900,7 @@ func TestBuildCatalogTargetsJSON_Default(t *testing.T) {
 	config := &initcmd.RemotesConfig{
 		Remotes: []initcmd.RemoteConfig{{Name: "atlas", Type: "artifactdb"}},
 	}
-	got := buildCatalogTargetsJSON([]string{"atlas"}, config)
+	got := buildCatalogTargetsJSON([]string{"atlas"}, config, "main")
 
 	// Decode into raw maps to assert the keys are present and null (not
 	// absent) when the live default-Atlas lookup fails (no API reachable).
@@ -2754,27 +3911,148 @@ func TestBuildCatalogTargetsJSON_Default(t *testing.T) {
 	if len(raw) != 1 {
 		t.Fatalf("len(raw) = %d, want 1", len(raw))
 	}
-	for _, key := range []string{"remote", "bundle_target", "bundle_target_source", "instance_url"} {
+	for _, key := range []string{"remote", "role", "url", "url_source", "s3_location", "data_from", "meta_folder"} {
 		if _, ok := raw[0][key]; !ok {
 			t.Errorf("missing key %q: %s", key, got)
 		}
 	}
-	if raw[0]["bundle_target"] != nil {
-		t.Errorf("bundle_target = %v, want null (prose must stay in human output only)", raw[0]["bundle_target"])
+	if raw[0]["url"] != nil {
+		t.Errorf("url = %v, want null (prose must stay in human output only)", raw[0]["url"])
 	}
-	if raw[0]["instance_url"] != nil {
-		t.Errorf("instance_url = %v, want null", raw[0]["instance_url"])
+	// The live default-Atlas lookup fails here (no API reachable in test),
+	// but url_source still records that this remote WOULD use the default
+	// Atlas (it has no own url) — "default" regardless of whether the
+	// lookup actually resolved a URL. This distinguishes it from a role:
+	// instance entry (url_source always null) even when url is also null
+	// for both. See TestBuildCatalogTargetsJSON_ResolvesLiveDefault for the
+	// lookup-succeeds case (same url_source, url now non-null).
+	if raw[0]["url_source"] != "default" {
+		t.Errorf("url_source = %v, want \"default\" (even though the lookup failed)", raw[0]["url_source"])
 	}
-	if raw[0]["bundle_target_source"] != "default" {
-		t.Errorf("bundle_target_source = %v, want \"default\"", raw[0]["bundle_target_source"])
+	if raw[0]["role"] != "atlas" {
+		t.Errorf("role = %v, want \"atlas\"", raw[0]["role"])
 	}
 }
 
 func TestBuildCatalogTargetsJSON_Empty(t *testing.T) {
-	if got := buildCatalogTargetsJSON(nil, nil); got != "" {
+	if got := buildCatalogTargetsJSON(nil, nil, "main"); got != "" {
 		t.Errorf("buildCatalogTargetsJSON(nil) = %q, want empty string", got)
 	}
 }
+
+// TestBuildCatalogTargetsJSON_InstanceExcludedFiles verifies that a role:
+// instance remote's exclude globs surface, in the dry-run "catalog_remotes"
+// report, as the "excluded" field listing which of the ref's .artifactdb/
+// files they'd keep off the upload (exo-cli#202).
+func TestBuildCatalogTargetsJSON_InstanceExcludedFiles(t *testing.T) {
+	repoDir := t.TempDir()
+	gitInitMinimalRepo(t, repoDir)
+
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer os.Chdir(oldDir) //nolint:errcheck
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	if err := os.MkdirAll(".artifactdb", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(".artifactdb", "dataset.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(".artifactdb", "dataset_merged.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", ".artifactdb"}, {"commit", "-q", "-m", "add .artifactdb"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com", "GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	config := &initcmd.RemotesConfig{
+		Remotes: []initcmd.RemoteConfig{
+			{
+				Name: "instance", Type: "artifactdb", Role: "instance",
+				S3URL: "s3://bucket/proj", URL: "https://instance.example.com/v1/proj",
+				Exclude: []string{"dataset_merged.json*"},
+			},
+		},
+	}
+	got := buildCatalogTargetsJSON([]string{"instance"}, config, "main")
+
+	var targets []catalogTargetJSON
+	if err := json.Unmarshal([]byte(got), &targets); err != nil {
+		t.Fatalf("invalid JSON %q: %v", got, err)
+	}
+	if len(targets) != 1 {
+		t.Fatalf("len(targets) = %d, want 1", len(targets))
+	}
+	if targets[0].Excluded == nil {
+		t.Fatalf("Excluded = nil, want [dataset_merged.json]: %s", got)
+	}
+	if excluded := *targets[0].Excluded; len(excluded) != 1 || excluded[0] != "dataset_merged.json" {
+		t.Errorf("Excluded = %v, want [dataset_merged.json]", excluded)
+	}
+}
+
+// TestBuildCatalogTargetsJSON_InstanceNoExcludeOmitsField is the
+// mutation-check counterpart: a role: instance remote with no exclude
+// globs configured omits the "excluded" field entirely (additive field,
+// not present-but-empty).
+func TestBuildCatalogTargetsJSON_InstanceNoExcludeOmitsField(t *testing.T) {
+	repoDir := t.TempDir()
+	gitInitMinimalRepo(t, repoDir)
+
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer os.Chdir(oldDir) //nolint:errcheck
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	if err := os.MkdirAll(".artifactdb", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(".artifactdb", "dataset.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", ".artifactdb"}, {"commit", "-q", "-m", "add .artifactdb"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com", "GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	config := &initcmd.RemotesConfig{
+		Remotes: []initcmd.RemoteConfig{
+			{
+				Name: "instance", Type: "artifactdb", Role: "instance",
+				S3URL: "s3://bucket/proj", URL: "https://instance.example.com/v1/proj",
+			},
+		},
+	}
+	got := buildCatalogTargetsJSON([]string{"instance"}, config, "main")
+
+	var raw []map[string]interface{}
+	if err := json.Unmarshal([]byte(got), &raw); err != nil {
+		t.Fatalf("invalid JSON %q: %v", got, err)
+	}
+	if len(raw) != 1 {
+		t.Fatalf("len(raw) = %d, want 1", len(raw))
+	}
+	if _, ok := raw[0]["excluded"]; ok {
+		t.Errorf("excluded key should be absent when no exclude globs are configured, got: %s", got)
+	}
+}
+
 
 // gitInitWithCommits creates a plain (non-annex) git repo at dir with one
 // commit tagged "1", then a second commit on the same branch (simulating a
@@ -2832,8 +4110,8 @@ func TestRunRefDryRunJSON_UsesCurrentRoutingAndRefIdentity(t *testing.T) {
 
 	config := &initcmd.RemotesConfig{
 		Remotes: []initcmd.RemoteConfig{
-			{Name: "s3", Type: "annex", S3URL: "s3://bucket/styx/psyche-poc"},
-			{Name: "atlas", Type: "artifactdb", S3URL: "s3://bucket/atlas-meta", AtlasURL: "https://atlas.example/sandbox1", InstanceURL: "https://catalog.example"},
+			{Name: "s3", Type: "annex", S3URL: "s3://bucket/exohub/my-profile"},
+			{Name: "atlas", Type: "artifactdb", S3URL: "s3://bucket/atlas-meta", URL: "https://atlas.example/sandbox1"},
 		},
 	}
 
@@ -2860,14 +4138,60 @@ func TestRunRefDryRunJSON_UsesCurrentRoutingAndRefIdentity(t *testing.T) {
 	if got.RefCommit != tagCommit {
 		t.Errorf("ref_commit = %q, want tag 1's commit %q (not HEAD's)", got.RefCommit, tagCommit)
 	}
-	if len(got.ContentRemotes) != 1 || got.ContentRemotes[0].S3URL != "s3://bucket/styx/psyche-poc" {
+	if len(got.ContentRemotes) != 1 || got.ContentRemotes[0].S3URL != "s3://bucket/exohub/my-profile" {
 		t.Errorf("expected current (new-prefix) content routing, got: %+v", got.ContentRemotes)
 	}
-	if len(got.CatalogRemotes) != 1 || got.CatalogRemotes[0].BundleTarget == nil || *got.CatalogRemotes[0].BundleTarget != "https://atlas.example/sandbox1" {
+	if len(got.CatalogRemotes) != 1 || got.CatalogRemotes[0].URL == nil || *got.CatalogRemotes[0].URL != "https://atlas.example/sandbox1" {
 		t.Errorf("expected current atlas_url in catalog_remotes, got: %+v", got.CatalogRemotes)
 	}
-	if got.CatalogRemotes[0].BundleTargetSource != "atlas_url" {
-		t.Errorf("bundle_target_source = %q, want %q", got.CatalogRemotes[0].BundleTargetSource, "atlas_url")
+	if got.CatalogRemotes[0].Role != "atlas" {
+		t.Errorf("role = %q, want %q", got.CatalogRemotes[0].Role, "atlas")
+	}
+}
+
+// TestRunRefDryRunJSON_AutoDiscoversRoleInstance verifies that `exo sync
+// --dry-run --json --ref` with no explicit --with still includes a role:
+// instance catalog remote in catalog_remotes, ordered after any atlas entry
+// (exo-cli#196): auto-discovery must not rely solely on listAnnexRemotes,
+// which never sees a role: instance remote.
+func TestRunRefDryRunJSON_AutoDiscoversRoleInstance(t *testing.T) {
+	repoDir, _, restoreDir := newAnnexRepo(t, "atlas")
+	defer restoreDir()
+
+	addAnnexFile(t, repoDir, "a.bin", "v1")
+	if out, err := exec.Command("git", "tag", "1").CombinedOutput(); err != nil {
+		t.Fatalf("git tag: %v\n%s", err, out)
+	}
+
+	config := &initcmd.RemotesConfig{Remotes: []initcmd.RemoteConfig{
+		{Name: "atlas", Type: "artifactdb", Mode: "export", S3URL: "s3://bucket/atlas-meta"},
+		{Name: "instance", Type: "artifactdb", Role: "instance", S3URL: "s3://bucket/DS1", URL: "https://adb.example.com/v1/b"},
+	}}
+
+	output := captureStdout(t, func() {
+		if err := runRefDryRunJSON([]string{"1"}, nil, config, "1", ""); err != nil {
+			t.Fatalf("runRefDryRunJSON: %v", err)
+		}
+	})
+
+	var report struct {
+		Refs []refTarget `json:"refs"`
+	}
+	if err := json.Unmarshal([]byte(output), &report); err != nil {
+		t.Fatalf("invalid JSON: %v\noutput: %s", err, output)
+	}
+	if len(report.Refs) != 1 {
+		t.Fatalf("expected 1 ref, got %d: %s", len(report.Refs), output)
+	}
+	catalogRemotes := report.Refs[0].CatalogRemotes
+	if len(catalogRemotes) != 2 {
+		t.Fatalf("expected 2 catalog remotes (atlas + instance), got: %+v", catalogRemotes)
+	}
+	if catalogRemotes[0].Remote != "atlas" || catalogRemotes[0].Role != "atlas" {
+		t.Errorf("expected atlas first, got: %+v", catalogRemotes[0])
+	}
+	if catalogRemotes[1].Remote != "instance" || catalogRemotes[1].Role != "instance" {
+		t.Errorf("expected instance second, got: %+v", catalogRemotes[1])
 	}
 }
 
@@ -2895,7 +4219,7 @@ func TestRunRefDryRunJSON_RequiresCatalogRemote(t *testing.T) {
 // TestCheckRefSchema_UnaffectedByDryRunRefSchema locks that 'exo sync
 // --check --ref' keeps its own stable {refs_checked, items, summary} shape
 // (checkReport) and is not polluted by --dry-run --json --ref's distinct
-// {refs: [...]} shape (refTarget) — the two --ref consumers (#163's obol
+// {refs: [...]} shape (refTarget) — the two --ref consumers (#163's catalog
 // guard via --dry-run, and the completeness engine via --check) must stay on
 // separate, independently stable schemas (exo-cli#176).
 func TestCheckRefSchema_UnaffectedByDryRunRefSchema(t *testing.T) {
@@ -2984,20 +4308,23 @@ func TestBuildCatalogTargetsJSON_ResolvesLiveDefault(t *testing.T) {
 	config := &initcmd.RemotesConfig{
 		Remotes: []initcmd.RemoteConfig{{Name: "atlas", Type: "artifactdb"}},
 	}
-	got := buildCatalogTargetsJSON([]string{"atlas"}, config)
+	got := buildCatalogTargetsJSON([]string{"atlas"}, config, "main")
 
 	var targets []catalogTargetJSON
 	if err := json.Unmarshal([]byte(got), &targets); err != nil {
 		t.Fatalf("invalid JSON %q: %v", got, err)
 	}
-	if len(targets) != 1 || targets[0].BundleTargetSource != "default" || targets[0].BundleTarget == nil || *targets[0].BundleTarget != "https://atlas.example.com/v1/default" {
+	if len(targets) != 1 || targets[0].Role != "atlas" || targets[0].URL == nil || *targets[0].URL != "https://atlas.example.com/v1/default" {
 		t.Errorf("unexpected target: %+v", targets)
+	}
+	if targets[0].URLSource == nil || *targets[0].URLSource != "default" {
+		t.Errorf("url_source = %v, want \"default\"", targets[0].URLSource)
 	}
 }
 
 func TestRunDryRunJSONIncludesCatalogRemotes(t *testing.T) {
 	config, calls, cleanup := setupCatalogSyncEnv(t, "https://example.com/repo.git")
-	config.Remotes[0].AtlasURL = "https://atlas.example.com/v1/sandbox1"
+	config.Remotes[0].URL = "https://atlas.example.com/v1/sandbox1"
 
 	oldStdout := os.Stdout
 	output, err := os.CreateTemp(t.TempDir(), "preview")
@@ -3027,10 +4354,48 @@ func TestRunDryRunJSONIncludesCatalogRemotes(t *testing.T) {
 	if len(report.Remotes) != 0 {
 		t.Errorf("catalog remote leaked into \"remotes\": %v", report.Remotes)
 	}
-	if len(report.CatalogRemotes) != 1 || report.CatalogRemotes[0].Remote != "atlas" ||
-		report.CatalogRemotes[0].BundleTarget == nil || *report.CatalogRemotes[0].BundleTarget != "https://atlas.example.com/v1/sandbox1" ||
-		report.CatalogRemotes[0].BundleTargetSource != "atlas_url" {
+	if len(report.CatalogRemotes) != 1 || report.CatalogRemotes[0].Remote != "atlas" || report.CatalogRemotes[0].Role != "atlas" ||
+		report.CatalogRemotes[0].URL == nil || *report.CatalogRemotes[0].URL != "https://atlas.example.com/v1/sandbox1" {
 		t.Errorf("unexpected catalog_remotes: %+v", report.CatalogRemotes)
+	}
+}
+
+// TestRunDryRunJSONAutoDiscoversRoleInstance verifies that `exo sync
+// --dry-run --json` with no explicit --with still includes a role: instance
+// catalog remote in catalog_remotes (exo-cli#196): auto-discovery must not
+// rely solely on listAnnexRemotes, which never sees a role: instance
+// remote (never git-annex initremote'd).
+func TestRunDryRunJSONAutoDiscoversRoleInstance(t *testing.T) {
+	_, _, restoreDir := newAnnexRepo(t, "atlas")
+	defer restoreDir()
+
+	config := &initcmd.RemotesConfig{Remotes: []initcmd.RemoteConfig{
+		{Name: "atlas", Type: "artifactdb", Mode: "export", S3URL: "s3://bucket/atlas-meta"},
+		{Name: "instance", Type: "artifactdb", Role: "instance", S3URL: "s3://bucket/DS1", URL: "https://adb.example.com/v1/b"},
+	}}
+
+	oldStdout := os.Stdout
+	output, err := os.CreateTemp(t.TempDir(), "preview")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = output
+	err = runDryRun(nil, nil, true, "1", "", config, nil)
+	os.Stdout = oldStdout
+	output.Close()
+	data, readErr := os.ReadFile(output.Name())
+	if err != nil || readErr != nil {
+		t.Fatalf("preview: %v, %v", err, readErr)
+	}
+
+	var report struct {
+		CatalogRemotes []catalogTargetJSON `json:"catalog_remotes"`
+	}
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatalf("invalid JSON report %q: %v", data, err)
+	}
+	if len(report.CatalogRemotes) != 2 || report.CatalogRemotes[0].Remote != "atlas" || report.CatalogRemotes[1].Remote != "instance" || report.CatalogRemotes[1].Role != "instance" {
+		t.Errorf("expected auto-discovered atlas+instance remotes (atlas first) in catalog_remotes, got: %+v", report.CatalogRemotes)
 	}
 }
 
@@ -3044,7 +4409,7 @@ func TestCatalogExplicitUnreadableManifest(t *testing.T) {
 		cleanup()
 		t.Fatal(err)
 	}
-	err := syncCatalogRemote("atlas", config, "fake-catalog", "selected")
+	err := syncCatalogRemote("atlas", config, "fake-catalog", false, "selected")
 	cleanup()
 	if err == nil || len(*calls) != 0 {
 		t.Fatalf("expected unreadable manifest error without fallback: %v, %v", err, *calls)

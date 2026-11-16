@@ -50,7 +50,7 @@ func RunAnnexFindFiles(baseArgs []string, paths []string) ([]string, error) {
 	return parseAnnexFindJSON(out), nil
 }
 
-func StreamDryRunJSON(writer io.Writer, remotes []string, paths []string, includeDrops bool, schema string, catalogRemotesJSON string) error {
+func StreamDryRunJSON(writer io.Writer, remotes []string, paths []string, includeDrops bool, schema string, catalogRemotesJSON string, historyPreviewJSON string) error {
 	bufWriter := bufio.NewWriter(writer)
 	if _, err := bufWriter.WriteString("{\"$schema\":"); err != nil {
 		return err
@@ -103,6 +103,11 @@ func StreamDryRunJSON(writer io.Writer, remotes []string, paths []string, includ
 	}
 	if catalogRemotesJSON != "" {
 		if _, err := bufWriter.WriteString(",\"catalog_remotes\":" + catalogRemotesJSON); err != nil {
+			return err
+		}
+	}
+	if historyPreviewJSON != "" {
+		if _, err := bufWriter.WriteString(",\"pending_history_upload\":" + historyPreviewJSON); err != nil {
 			return err
 		}
 	}

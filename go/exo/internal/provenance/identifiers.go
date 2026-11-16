@@ -3,6 +3,8 @@ package provenance
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -21,6 +23,9 @@ const (
 	PersonAgentURNPrefix   = "urn:exohub:agent:person:"
 	SoftwareAgentURNPrefix = "urn:exohub:agent:software:"
 	CollectionURNPrefix    = "urn:exohub:collection:sha256:"
+	UsageURNPrefix         = "urn:exohub:usage:"
+	GenerationURNPrefix    = "urn:exohub:generation:"
+	ValueURNPrefix         = "urn:exohub:value:sha256:"
 )
 
 // AnnexEntityID returns the identifier for content stored in git-annex
@@ -81,6 +86,31 @@ func NewRecordID() string {
 // D5).
 func NewActivityID() string {
 	return ActivityURNPrefix + uuid.Must(uuid.NewV7()).String()
+}
+
+// NewUsageID returns a fresh qualifiedUsage node identifier using a UUIDv7
+// (design D2 "Roles via qualified usage and generation").
+func NewUsageID() string {
+	return UsageURNPrefix + uuid.Must(uuid.NewV7()).String()
+}
+
+// NewGenerationID returns a fresh qualifiedGeneration node identifier using
+// a UUIDv7 (design D2 "Roles via qualified usage and generation").
+func NewGenerationID() string {
+	return GenerationURNPrefix + uuid.Must(uuid.NewV7()).String()
+}
+
+// ValueEntityID returns the deterministic id of a parameter or result value
+// entity (design D3 "Parameters and results as value entities"):
+// urn:exohub:value:sha256 of the role name and the value's canonical JSON,
+// so identical parameters across records dedupe in the compiled graph.
+func ValueEntityID(role string, value any) (string, error) {
+	canonical, err := json.Marshal(value)
+	if err != nil {
+		return "", fmt.Errorf("marshal value: %w", err)
+	}
+	digest := sha256.Sum256(append([]byte(role+"\x00"), canonical...))
+	return ValueURNPrefix + hex.EncodeToString(digest[:]), nil
 }
 
 // RecordUUID extracts the UUID from a record identifier

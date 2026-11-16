@@ -17,8 +17,8 @@ import (
 	"github.com/Genentech/exohub/go/exo/commandutil"
 )
 
-// Exit codes for `exo sync --check`, stable for automation (obol and friends)
-// to branch on without parsing --json. See the sync reference docs.
+// Exit codes for `exo sync --check`, stable for automation to branch on
+// without parsing --json. See the sync reference docs.
 const (
 	exitCheckClean   = 0
 	exitCheckFixable = 3

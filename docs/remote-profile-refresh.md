@@ -20,7 +20,8 @@ diff of the changed/added fields, e.g.:
 
 ```
 ==> Remote catalog drift from profile "my-profile":
-  + atlas_url: https://atlas.example.com/...
+  + role: atlas
+  + url: https://atlas.example.com/...
 ```
 
 Unless `--yes` is also passed, you're asked to confirm. On confirmation, only
@@ -65,7 +66,7 @@ entries:
 [
   {
     "remote": "catalog",
-    "field": "atlas_url",
+    "field": "url",
     "profile": "https://atlas.example.com/...",
     "status": "added"
   }
@@ -86,5 +87,5 @@ Combine with `--remote <name>` to scope the report to a single remote.
 
 The command exits `3` if any `added`/`changed`/`unresolved` entry is found,
 and `0` if there's none — distinct from the generic exit `1` used for
-command errors, so automation (e.g. obol) can tell "stale repo" apart from
+command errors, so automation can tell "stale repo" apart from
 "exo itself failed".

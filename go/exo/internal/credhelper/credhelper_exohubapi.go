@@ -21,17 +21,26 @@ type apiErrorResponse struct {
 
 // GetCredsFromServer calls POST /api/grants/credentials (server fallback path).
 // loadToken returns the bearer JWT; pass nil to skip authorization headers.
-func GetCredsFromServer(ctx context.Context, s3URL, permission string, loadToken func() (string, error), debugf func(string, ...any)) (*Credentials, error) {
+// sourceS3URL, when non-empty, is the s3url of the role: instance remote's
+// resolved data_from Atlas remote, so the server can authorize the request
+// against the source project's permissions (the instance bucket has no
+// _grants.json of its own). It is omitted from the request entirely for
+// Atlas remotes and legacy callers.
+func GetCredsFromServer(ctx context.Context, s3URL, permission, sourceS3URL string, loadToken func() (string, error), debugf func(string, ...any)) (*Credentials, error) {
 	if debugf == nil {
 		debugf = func(string, ...any) {}
 	}
 	apiBase := strings.TrimRight(defaults.APIBase(), "/")
 	endpoint := apiBase + "/grants/credentials"
 
-	payload, err := json.Marshal(map[string]string{
+	reqBody := map[string]string{
 		"s3url":      s3URL,
 		"permission": permission,
-	})
+	}
+	if sourceS3URL != "" {
+		reqBody["source_s3url"] = sourceS3URL
+	}
+	payload, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}

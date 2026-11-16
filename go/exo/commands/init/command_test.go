@@ -1108,6 +1108,103 @@ func runCommandOutput(args ...string) (string, error) {
 	return string(out), err
 }
 
+// TestEnsureRemoteConfigS3URLMovePrunesContentSyncedMarkers is the exo-cli#161
+// MR !313 review's requirement: a real s3url move (saved != "" and differs
+// from the new value) must prune the moved remote's
+// refs/exo/content-synced/<remote>/* markers, so the next `exo sync`
+// re-baselines against the new location instead of trusting history markers
+// recorded against the old one. Uses a real git repo (not the withCommand
+// mock) since it needs real ref plumbing (update-ref / for-each-ref).
+func TestEnsureRemoteConfigS3URLMovePrunesContentSyncedMarkers(t *testing.T) {
+	// A real move goes through confirmRemoteLocationMove (exo-cli#166); --yes
+	// (flagYes) approves it non-interactively, same as TestEnsureRemoteConfigS3URLUpdates.
+	oldYes := flagYes
+	flagYes = true
+	t.Cleanup(func() { flagYes = oldYes })
+
+	tmpDir := t.TempDir()
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer os.Chdir(oldDir)
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	env := append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "HOME="+tmpDir,
+		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
+		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com")
+	run := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("command %v: %v\n%s", args, err, out)
+		}
+		return string(out)
+	}
+
+	run("git", "init", "-q")
+	run("git", "commit", "-q", "--allow-empty", "-m", "init")
+	head := strings.TrimSpace(run("git", "rev-parse", "HEAD"))
+	run("git", "update-ref", "refs/exo/content-synced/origin/main", head)
+	run("git", "config", "remote.origin.annex-uuid", "uuid-1234")
+	run("git", "config", "annex-remote.uuid-1234.config.s3url", "s3://old")
+
+	ensureRemoteConfigS3URL(RemoteConfig{Name: "origin", S3URL: "s3://new"})
+
+	out := strings.TrimSpace(run("git", "for-each-ref", "refs/exo/content-synced/origin/"))
+	if out != "" {
+		t.Errorf("expected content-synced markers for 'origin' to be pruned after an s3url move without --migrate-content, got: %q", out)
+	}
+}
+
+// TestEnsureRemoteConfigS3URLFirstTimeInitDoesNotPruneMarkers verifies the
+// move detection doesn't fire on first-time init (saved == ""): an unrelated
+// remote's markers are left untouched.
+func TestEnsureRemoteConfigS3URLFirstTimeInitDoesNotPruneMarkers(t *testing.T) {
+	tmpDir := t.TempDir()
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	defer os.Chdir(oldDir)
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+
+	env := append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "HOME="+tmpDir,
+		"GIT_AUTHOR_NAME=Test", "GIT_AUTHOR_EMAIL=test@test.com",
+		"GIT_COMMITTER_NAME=Test", "GIT_COMMITTER_EMAIL=test@test.com")
+	run := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("command %v: %v\n%s", args, err, out)
+		}
+		return string(out)
+	}
+
+	run("git", "init", "-q")
+	run("git", "commit", "-q", "--allow-empty", "-m", "init")
+	head := strings.TrimSpace(run("git", "rev-parse", "HEAD"))
+	run("git", "update-ref", "refs/exo/content-synced/origin/main", head)
+	run("git", "config", "remote.origin.annex-uuid", "uuid-1234")
+	// No annex-remote.uuid-1234.config.s3url set yet: saved == "", so this is
+	// first-time init, not a move.
+
+	ensureRemoteConfigS3URL(RemoteConfig{Name: "origin", S3URL: "s3://new"})
+
+	out := strings.TrimSpace(run("git", "for-each-ref", "refs/exo/content-synced/origin/"))
+	if out == "" {
+		t.Errorf("expected content-synced markers to survive first-time init, but they were pruned")
+	}
+}
+
 func TestResolveRepoNamePrecedence(t *testing.T) {
 	tmpDir := t.TempDir()
 	oldDir, _ := os.Getwd()
@@ -1211,8 +1308,8 @@ uuid-9999 timestamp=789 name=export-remote exporttree=yes'`)
 	}
 
 	tests := []struct {
-		name     string
-		want     bool
+		name string
+		want bool
 	}{
 		{"test-remote", true},
 		{"another-remote", true},
@@ -1236,10 +1333,10 @@ uuid-9999 timestamp=789 name=export-remote exporttree=yes'`)
 // when constructing enableremote arguments
 func TestEnableOrInitRemoteFiltersInitParams(t *testing.T) {
 	tests := []struct {
-		name         string
-		initArgs     []string
-		wantEnable   []string
-		description  string
+		name        string
+		initArgs    []string
+		wantEnable  []string
+		description string
 	}{
 		{
 			name: "rsync remote",
@@ -1324,13 +1421,13 @@ func TestEnableOrInitRemoteWithUUID(t *testing.T) {
 	defer func() { command = oldCommand }()
 
 	tests := []struct {
-		name            string
-		remoteName      string
-		uuid            string
-		enableSucceeds  bool
-		wantError       bool
-		wantEnableArgs  []string // expected enableremote args (first 5 args)
-		description     string
+		name           string
+		remoteName     string
+		uuid           string
+		enableSucceeds bool
+		wantError      bool
+		wantEnableArgs []string // expected enableremote args (first 5 args)
+		description    string
 	}{
 		{
 			name:           "UUID specified, enableremote succeeds",
@@ -1731,47 +1828,59 @@ func TestNeedsReconfigureArtifactDBAtlasURLChange(t *testing.T) {
 	})
 
 	remote := RemoteConfig{
-		Name:     "my-catalog",
-		Type:     "artifactdb",
-		UUID:     "adb-uuid",
-		S3URL:    "s3://bucket/_catalog",
-		Mode:     "export",
-		AtlasURL: "https://new-atlas.example.com",
+		Name:  "my-catalog",
+		Type:  "artifactdb",
+		UUID:  "adb-uuid",
+		S3URL: "s3://bucket/_catalog",
+		Mode:  "export",
+		URL:   "https://new-atlas.example.com",
 	}
 	if !needsReconfigure(remote) {
 		t.Error("needsReconfigure should return true when atlas_url changes")
 	}
 }
 
-func TestNeedsReconfigureArtifactDBInstanceURLChange(t *testing.T) {
+// TestNeedsReconfigureArtifactDBInstanceRoleNeverReconfigures verifies role:
+// instance remotes are never git-annex special remotes (D3): needsReconfigure
+// never inspects git-annex state for them.
+func TestNeedsReconfigureArtifactDBInstanceRoleNeverReconfigures(t *testing.T) {
 	withCommand(t, func(name string, args ...string) *exec.Cmd {
-		if name == "git" && len(args) >= 3 && args[0] == "config" && args[1] == "--get" {
-			switch {
-			case strings.HasSuffix(args[2], ".annex-uuid"):
-				return exec.Command("printf", "adb-uuid")
-			case strings.Contains(args[2], "annex-remote.adb-uuid.config.s3url"):
-				return exec.Command("printf", "s3://bucket/_catalog")
-			}
-		}
-		if name == "git" && len(args) >= 2 && args[0] == "show" && args[1] == "git-annex:remote.log" {
-			return exec.Command("sh", "-c", "printf 'adb-uuid name=my-catalog instance_url=https://old-instance.example.com exporttree=yes'")
-		}
-		if name == "git" && len(args) >= 2 && args[0] == "annex" && args[1] == "wanted" {
-			return exec.Command("printf", "include=.exohub/bundles/* or include=.artifactdb/*")
-		}
 		return exec.Command("sh", "-c", "exit 1")
 	})
 
 	remote := RemoteConfig{
-		Name:        "my-catalog",
-		Type:        "artifactdb",
-		UUID:        "adb-uuid",
-		S3URL:       "s3://bucket/_catalog",
-		Mode:        "export",
-		InstanceURL: "https://new-instance.example.com",
+		Name:  "my-catalog",
+		Type:  "artifactdb",
+		Role:  "instance",
+		S3URL: "s3://bucket/my-project",
+		URL:   "https://adb.example.com/v1/b",
 	}
-	if !needsReconfigure(remote) {
-		t.Error("needsReconfigure should return true when instance_url changes")
+	if needsReconfigure(remote) {
+		t.Error("needsReconfigure should return false for role: instance (not a git-annex special remote)")
+	}
+}
+
+// TestCreateAndReconfigureArtifactDBInstanceRoleNeverCallGitAnnex verifies
+// createArtifactDBRemoteFromConfig/reconfigureArtifactDBRemote never shell
+// out to git-annex for role: instance remotes (D3).
+func TestCreateAndReconfigureArtifactDBInstanceRoleNeverCallGitAnnex(t *testing.T) {
+	withCommand(t, func(name string, args ...string) *exec.Cmd {
+		t.Fatalf("unexpected command invocation: %s %v", name, args)
+		return exec.Command("sh", "-c", "exit 1")
+	})
+
+	remote := RemoteConfig{
+		Name:  "my-instance",
+		Type:  "artifactdb",
+		Role:  "instance",
+		S3URL: "s3://bucket/my-project",
+		URL:   "https://adb.example.com/v1/b",
+	}
+	if err := createArtifactDBRemoteFromConfig(remote); err != nil {
+		t.Errorf("createArtifactDBRemoteFromConfig: %v", err)
+	}
+	if err := reconfigureArtifactDBRemote(remote); err != nil {
+		t.Errorf("reconfigureArtifactDBRemote: %v", err)
 	}
 }
 
@@ -1786,7 +1895,7 @@ func TestNeedsReconfigureArtifactDBNoChange(t *testing.T) {
 			}
 		}
 		if name == "git" && len(args) >= 2 && args[0] == "show" && args[1] == "git-annex:remote.log" {
-			return exec.Command("sh", "-c", "printf 'adb-uuid name=my-catalog atlas_url=https://atlas.example.com instance_url=https://instance.example.com exporttree=yes'")
+			return exec.Command("sh", "-c", "printf 'adb-uuid name=my-catalog atlas_url=https://atlas.example.com exporttree=yes'")
 		}
 		if name == "git" && len(args) >= 2 && args[0] == "annex" && args[1] == "wanted" {
 			return exec.Command("printf", "include=.exohub/bundles/* or include=.artifactdb/*")
@@ -1795,16 +1904,15 @@ func TestNeedsReconfigureArtifactDBNoChange(t *testing.T) {
 	})
 
 	remote := RemoteConfig{
-		Name:        "my-catalog",
-		Type:        "artifactdb",
-		UUID:        "adb-uuid",
-		S3URL:       "s3://bucket/_catalog",
-		Mode:        "export",
-		AtlasURL:    "https://atlas.example.com",
-		InstanceURL: "https://instance.example.com",
+		Name:  "my-catalog",
+		Type:  "artifactdb",
+		UUID:  "adb-uuid",
+		S3URL: "s3://bucket/_catalog",
+		Mode:  "export",
+		URL:   "https://atlas.example.com",
 	}
 	if needsReconfigure(remote) {
-		t.Error("needsReconfigure should return false when atlas_url/instance_url are unchanged")
+		t.Error("needsReconfigure should return false when atlas_url is unchanged")
 	}
 }
 

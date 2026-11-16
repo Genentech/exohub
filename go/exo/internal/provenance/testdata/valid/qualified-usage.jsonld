@@ -1,0 +1,53 @@
+{
+  "@context": "https://genentech.github.io/exohub/ns/provenance/v1.jsonld",
+  "@id": "urn:exohub:record:01928c9e-0000-7000-8000-000000000030",
+  "exo:assertion": "asserted",
+  "exo:assertedBy": "urn:exohub:agent:person:alice",
+  "generatedAtTime": "2026-11-09T10:00:00Z",
+  "exo:minVersion": "0.138.0",
+  "@graph": [
+    {
+      "@id": "urn:exohub:annex:SHA256E-s2048--de.parquet",
+      "@type": "Entity",
+      "exo:path": "results/de.parquet",
+      "wasGeneratedBy": "urn:exohub:activity:01928c9e-0000-7000-8000-000000000031",
+      "qualifiedGeneration": "urn:exohub:generation:01928c9e-0000-7000-8000-000000000032"
+    },
+    {
+      "@id": "urn:exohub:generation:01928c9e-0000-7000-8000-000000000032",
+      "@type": "Generation",
+      "activity": "urn:exohub:activity:01928c9e-0000-7000-8000-000000000031",
+      "hadRole": "output"
+    },
+    {
+      "@id": "urn:exohub:activity:01928c9e-0000-7000-8000-000000000031",
+      "@type": "Activity",
+      "used": ["urn:exohub:annex:SHA256E-s9999--counts.csv"],
+      "qualifiedUsage": "urn:exohub:usage:01928c9e-0000-7000-8000-000000000033",
+      "hadPlan": "urn:exohub:git:blob:9e1f4c9e1f4c9e1f4c9e1f4c9e1f4c9e1f4c9e1f",
+      "wasAssociatedWith": "urn:exohub:agent:person:alice"
+    },
+    {
+      "@id": "urn:exohub:usage:01928c9e-0000-7000-8000-000000000033",
+      "@type": "Usage",
+      "entity": "urn:exohub:annex:SHA256E-s9999--counts.csv",
+      "hadRole": "counts"
+    },
+    {
+      "@id": "urn:exohub:annex:SHA256E-s9999--counts.csv",
+      "@type": "Entity",
+      "exo:path": "data/counts.csv"
+    },
+    {
+      "@id": "urn:exohub:git:blob:9e1f4c9e1f4c9e1f4c9e1f4c9e1f4c9e1f4c9e1f",
+      "@type": "Entity",
+      "label": "normalize.R",
+      "exo:checksum": "sha256:1b2c3d4e"
+    },
+    {
+      "@id": "urn:exohub:agent:person:alice",
+      "@type": "Person",
+      "label": "Alice"
+    }
+  ]
+}

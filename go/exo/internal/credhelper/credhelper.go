@@ -15,6 +15,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3control"
 	"github.com/aws/aws-sdk-go-v2/service/s3control/types"
+
+	"github.com/Genentech/exohub/go/useragent"
 )
 
 const (
@@ -94,6 +96,7 @@ func GetDataAccess(ctx context.Context, accountID, region, s3URL, permission str
 	cfg, err := config.LoadDefaultConfig(ctx,
 		config.WithRegion(region),
 		config.WithSharedConfigProfile(profile),
+		config.WithAppID(useragent.AppID()),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)

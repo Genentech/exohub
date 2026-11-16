@@ -13,7 +13,7 @@ import (
 
 func createArtifactDBRemoteTUI(ctx *tuiContext) error {
 	name := "exohub-atlas"
-	var s3url, instanceURL, atlasURL string
+	var s3url, atlasURL string
 
 	// Derive s3url from first existing annex remote, replacing _annex suffix with _catalog
 	suggestedS3URL := ""
@@ -57,11 +57,6 @@ func createArtifactDBRemoteTUI(ctx *tuiContext) error {
 					}
 					return nil
 				}),
-			huh.NewInput().
-				Title("ArtifactDB instance URL (optional, for custom metadata)").
-				Placeholder("https://artifactdb.example.com").
-				Description("URL of the ArtifactDB instance").
-				Value(&instanceURL),
 			huh.NewInput().
 				Title("ExoHub Atlas URL (optional, to publish to a non-default Atlas)").
 				Placeholder("https://atlas.example.com/v1/sandbox1").
@@ -109,9 +104,6 @@ func createArtifactDBRemoteTUI(ctx *tuiContext) error {
 	if useGrants {
 		initArgs = append(initArgs, "grants=true")
 	}
-	if instanceURL != "" {
-		initArgs = append(initArgs, "instance_url="+instanceURL)
-	}
 	if atlasURL != "" {
 		initArgs = append(initArgs, "atlas_url="+atlasURL)
 	}
@@ -122,7 +114,7 @@ func createArtifactDBRemoteTUI(ctx *tuiContext) error {
 	// Enable remote again to ensure settings are applied
 	_ = runCommand([]string{"git", "annex", "enableremote", name, "s3url=" + s3url, "exporttree=yes"})
 
-	ensureRemoteConfigS3URL(RemoteConfig{Name: name, S3URL: s3url, Type: "artifactdb", Grants: useGrants, InstanceURL: instanceURL, AtlasURL: atlasURL})
+	ensureRemoteConfigS3URL(RemoteConfig{Name: name, S3URL: s3url, Type: "artifactdb", Grants: useGrants, URL: atlasURL})
 
 	// Set preferred content: only export .exohub/bundles/ and .artifactdb/
 	wanted := "include=.exohub/bundles/* or include=.artifactdb/*"
@@ -138,14 +130,13 @@ func createArtifactDBRemoteTUI(ctx *tuiContext) error {
 	uuid := getRemoteUUID(name)
 
 	remotesConfig.AddRemote(RemoteConfig{
-		Name:        name,
-		Type:        "artifactdb",
-		UUID:        uuid,
-		S3URL:       s3url,
-		Grants:      useGrants,
-		InstanceURL: instanceURL,
-		AtlasURL:    atlasURL,
-		Mode:        "export",
+		Name:   name,
+		Type:   "artifactdb",
+		UUID:   uuid,
+		S3URL:  s3url,
+		Grants: useGrants,
+		URL:    atlasURL,
+		Mode:   "export",
 	})
 
 	if err := SaveRemotesConfig(remotesConfig); err != nil {

@@ -26,6 +26,11 @@ type apiErrorResponse struct {
 
 // printCredsFromServerError prints a user-friendly error for getCredsFromServer failures.
 func printCredsFromServerError(err error, s3URL string) {
+	if hint, ok := instanceSourceRefusalHint(err); ok {
+		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+		fmt.Fprintf(os.Stderr, "Hint: %s\n", hint)
+		return
+	}
 	switch {
 	case err == errAuthRequired:
 		fmt.Fprintf(os.Stderr, "Error: authentication required — run 'exo login' to authenticate\n")
@@ -37,21 +42,54 @@ func printCredsFromServerError(err error, s3URL string) {
 	}
 }
 
+// instanceSourceRefusalHint recognizes the API's instance-remote-specific
+// refusals from authorize_instance_project (exo-cli#195, exohub-workers!651)
+// — a source_s3url pointing at the wrong source project, a first-claim
+// refusal on a project with no recorded source yet, or an old client that
+// omitted source_s3url entirely — and returns an actionable remediation
+// distinct from the generic "ask a dataset owner" hint.
+func instanceSourceRefusalHint(err error) (string, bool) {
+	if err == nil {
+		return "", false
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "bound to a different source"):
+		return "this instance project is bound to a different source project — check data_from/the Atlas remote's s3url in .exohub/remotes", true
+	case strings.Contains(msg, "has no recorded source yet"):
+		return "this instance project has not been claimed yet — a READWRITE request with write access on the source is required to claim it", true
+	case strings.Contains(msg, "does not match instance project_id"):
+		return "data_from's Atlas s3url must end with the instance's project_id segment — check .exohub/remotes", true
+	case strings.Contains(msg, "source_s3url is required"):
+		return "your exo/credential helper predates this server; upgrade", true
+	default:
+		return "", false
+	}
+}
+
 // getCredsFromServer calls POST /api/grants/credentials on the exohub API to
 // provision a grant on-demand (used for public-dataset readers). The server
 // reads _grants.json, checks read_access, and issues temporary credentials via
-// the admin service account.
-func getCredsFromServer(s3URL, permission string, debugf func(string, ...any)) (*credentialOutput, error) {
+// the admin service account. sourceS3URL, when non-empty, is a role: instance
+// remote's resolved data_from Atlas s3url, so the server can authorize
+// against the source project's permissions instead of the instance bucket
+// (which has no _grants.json of its own); it is omitted entirely for Atlas
+// remotes and legacy callers.
+func getCredsFromServer(s3URL, permission, sourceS3URL string, debugf func(string, ...any)) (*credentialOutput, error) {
 	apiBase := strings.TrimRight(resolveEnvDefault("", "EXOHUB_API_URL", builtinAPIBase), "/")
 	if apiBase == "" {
 		return nil, fmt.Errorf("EXOHUB_API_URL is not set; set it to your exohub server URL (e.g. https://your-exohub-server.example.com/api)")
 	}
 	endpoint := apiBase + "/grants/credentials"
 
-	payload, err := json.Marshal(map[string]string{
+	reqBody := map[string]string{
 		"s3url":      s3URL,
 		"permission": permission,
-	})
+	}
+	if sourceS3URL != "" {
+		reqBody["source_s3url"] = sourceS3URL
+	}
+	payload, err := json.Marshal(reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}

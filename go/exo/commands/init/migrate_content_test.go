@@ -415,7 +415,7 @@ func TestRunContentMigration_VerifyCatchesMissingAfterCopy(t *testing.T) {
 
 // --- migrateRemoteContent (full orchestration: credentials + dry-run) ---
 
-func withStubbedCredentials(t *testing.T, fn func(s3url string, grants bool, group, permission string) (aws.Credentials, error)) {
+func withStubbedCredentials(t *testing.T, fn func(s3url string, grants bool, group, permission, accountID string) (aws.Credentials, error)) {
 	t.Helper()
 	old := credentialFetcher
 	credentialFetcher = fn
@@ -436,7 +436,7 @@ func TestMigrateRemoteContent_DryRunChangesNothing(t *testing.T) {
 	server := fake.server()
 	defer server.Close()
 	withTestS3Endpoint(t, server)
-	withStubbedCredentials(t, func(s3url string, grants bool, group, permission string) (aws.Credentials, error) {
+	withStubbedCredentials(t, func(s3url string, grants bool, group, permission, accountID string) (aws.Credentials, error) {
 		return aws.Credentials{AccessKeyID: "same", SecretAccessKey: "same"}, nil
 	})
 
@@ -456,7 +456,7 @@ func TestMigrateRemoteContent_SameIdentityUsesServerSideCopy(t *testing.T) {
 	server := fake.server()
 	defer server.Close()
 	withTestS3Endpoint(t, server)
-	withStubbedCredentials(t, func(s3url string, grants bool, group, permission string) (aws.Credentials, error) {
+	withStubbedCredentials(t, func(s3url string, grants bool, group, permission, accountID string) (aws.Credentials, error) {
 		return aws.Credentials{AccessKeyID: "same", SecretAccessKey: "same"}, nil
 	})
 
@@ -476,7 +476,7 @@ func TestMigrateRemoteContent_DifferingCredentialsStream(t *testing.T) {
 	server := fake.server()
 	defer server.Close()
 	withTestS3Endpoint(t, server)
-	withStubbedCredentials(t, func(s3url string, grants bool, group, permission string) (aws.Credentials, error) {
+	withStubbedCredentials(t, func(s3url string, grants bool, group, permission, accountID string) (aws.Credentials, error) {
 		if strings.Contains(s3url, "old") {
 			return aws.Credentials{AccessKeyID: "reader", SecretAccessKey: "x"}, nil
 		}
@@ -492,6 +492,34 @@ func TestMigrateRemoteContent_DifferingCredentialsStream(t *testing.T) {
 	}
 }
 
+func TestMigrateRemoteContent_PassesRemoteGrantsAccountID(t *testing.T) {
+	withNoLocationLog(t)
+	fake := newFakeS3()
+	fake.seed("bucket", "old/prefix/a.bin", []byte("hello"))
+	server := fake.server()
+	defer server.Close()
+	withTestS3Endpoint(t, server)
+
+	var gotAccountIDs []string
+	withStubbedCredentials(t, func(s3url string, grants bool, group, permission, accountID string) (aws.Credentials, error) {
+		gotAccountIDs = append(gotAccountIDs, accountID)
+		return aws.Credentials{AccessKeyID: "same", SecretAccessKey: "same"}, nil
+	})
+
+	remote := RemoteConfig{Name: "origin", Type: "annex", Grants: true, GrantsAccountID: "111122223333"}
+	if err := migrateRemoteContent(remote, "s3://bucket/old/prefix", "s3://bucket/new/prefix", false, false); err != nil {
+		t.Fatalf("migrateRemoteContent: %v", err)
+	}
+	if len(gotAccountIDs) == 0 {
+		t.Fatal("credentialFetcher was never called")
+	}
+	for _, got := range gotAccountIDs {
+		if got != "111122223333" {
+			t.Errorf("expected accountID %q, got %q", "111122223333", got)
+		}
+	}
+}
+
 func TestMigrateRemoteContent_FailsNonZeroWhenMissingAfterCopy(t *testing.T) {
 	withNoLocationLog(t)
 	fake := newFakeS3()
@@ -500,7 +528,7 @@ func TestMigrateRemoteContent_FailsNonZeroWhenMissingAfterCopy(t *testing.T) {
 	server := fake.server()
 	defer server.Close()
 	withTestS3Endpoint(t, server)
-	withStubbedCredentials(t, func(s3url string, grants bool, group, permission string) (aws.Credentials, error) {
+	withStubbedCredentials(t, func(s3url string, grants bool, group, permission, accountID string) (aws.Credentials, error) {
 		return aws.Credentials{AccessKeyID: "same", SecretAccessKey: "same"}, nil
 	})
 
@@ -520,7 +548,7 @@ func TestEnsureRemoteConfigS3URL_FailedMigrationLeavesS3URLUnchanged(t *testing.
 	server := fake.server()
 	defer server.Close()
 	withTestS3Endpoint(t, server)
-	withStubbedCredentials(t, func(s3url string, grants bool, group, permission string) (aws.Credentials, error) {
+	withStubbedCredentials(t, func(s3url string, grants bool, group, permission, accountID string) (aws.Credentials, error) {
 		return aws.Credentials{AccessKeyID: "same", SecretAccessKey: "same"}, nil
 	})
 
@@ -554,6 +582,69 @@ func TestEnsureRemoteConfigS3URL_FailedMigrationLeavesS3URLUnchanged(t *testing.
 
 	if got := getRemoteConfig("origin", "s3url"); got != savedS3URL {
 		t.Errorf("expected s3url to remain %q after a failed migration, got %q", savedS3URL, got)
+	}
+}
+
+// TestEnsureRemoteConfigS3URL_VerifiedMigrationDoesNotPruneMarkers is the
+// exo-cli#161/#168 interaction: refs/exo/content-synced/<remote>/* markers
+// must survive a *verified* --migrate-content move, since the new location
+// then has the same content history the old one did (migrateRemoteContent
+// already copied and verified it, so pruneContentSyncedMarkers would only
+// force a needless full re-baseline). Contrast with
+// TestEnsureRemoteConfigS3URLMovePrunesContentSyncedMarkers
+// (go/exo/commands/init/command_test.go), the non-migrated move case, where
+// the markers ARE pruned because the new location has no history at all.
+func TestEnsureRemoteConfigS3URL_VerifiedMigrationDoesNotPruneMarkers(t *testing.T) {
+	fake := newFakeS3()
+	fake.seed("bucket", "old/prefix/a.bin", []byte("hello"))
+	server := fake.server()
+	defer server.Close()
+	withTestS3Endpoint(t, server)
+	withStubbedCredentials(t, func(s3url string, grants bool, group, permission, accountID string) (aws.Credentials, error) {
+		return aws.Credentials{AccessKeyID: "same", SecretAccessKey: "same"}, nil
+	})
+
+	oldYes := flagYes
+	oldMigrate := flagMigrateContent
+	flagYes = true
+	flagMigrateContent = true
+	t.Cleanup(func() {
+		flagYes = oldYes
+		flagMigrateContent = oldMigrate
+	})
+
+	savedS3URL := "s3://bucket/old/prefix"
+	var calls []string
+	withCommand(t, func(name string, args ...string) *exec.Cmd {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		if name == "git" && len(args) >= 3 && args[0] == "config" && args[1] == "--get" {
+			if args[2] == "remote.origin.annex-uuid" {
+				return exec.Command("printf", "uuid-1234")
+			}
+			if args[2] == "annex-remote.uuid-1234.config.s3url" {
+				return exec.Command("printf", "%s", savedS3URL)
+			}
+			return exec.Command("sh", "-c", "exit 1")
+		}
+		if name == "git" && len(args) >= 2 && args[0] == "annex" && args[1] == "find" {
+			return exec.Command("sh", "-c", "exit 1") // no location-log entries in this test
+		}
+		return exec.Command("sh", "-c", "exit 0")
+	})
+
+	ensureRemoteConfigS3URL(RemoteConfig{Name: "origin", S3URL: "s3://bucket/new/prefix"})
+
+	if data, ok := fake.get("bucket", "new/prefix/a.bin"); !ok || string(data) != "hello" {
+		t.Fatalf("expected a.bin to be migrated to the new location, got %q ok=%v", data, ok)
+	}
+
+	for _, call := range calls {
+		if strings.Contains(call, "for-each-ref") {
+			t.Errorf("expected a verified --migrate-content move to NOT prune content-synced markers, but for-each-ref was called: %#v", calls)
+		}
+		if strings.Contains(call, "update-ref -d") {
+			t.Errorf("expected a verified --migrate-content move to NOT delete any marker, but update-ref -d was called: %#v", calls)
+		}
 	}
 }
 

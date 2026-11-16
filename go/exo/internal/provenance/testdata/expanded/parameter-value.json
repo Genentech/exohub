@@ -1,0 +1,13 @@
+{
+  "Activity": "http://www.w3.org/ns/prov#Activity",
+  "Usage": "http://www.w3.org/ns/prov#Usage",
+  "Entity": "http://www.w3.org/ns/prov#Entity",
+  "Person": "http://www.w3.org/ns/prov#Person",
+  "used": "http://www.w3.org/ns/prov#used",
+  "qualifiedUsage": "http://www.w3.org/ns/prov#qualifiedUsage",
+  "wasAssociatedWith": "http://www.w3.org/ns/prov#wasAssociatedWith",
+  "entity": "http://www.w3.org/ns/prov#entity",
+  "hadRole": "http://www.w3.org/ns/prov#hadRole",
+  "value": "http://www.w3.org/ns/prov#value",
+  "label": "http://www.w3.org/2000/01/rdf-schema#label"
+}

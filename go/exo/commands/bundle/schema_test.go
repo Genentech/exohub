@@ -342,7 +342,7 @@ func TestCatalogSchemas_ValidateArtifactWithLineage(t *testing.T) {
 				ID:      "urn:exohub:activity:1",
 				Started: "2026-01-01T00:00:00Z",
 				Ended:   "2026-01-01T00:01:00Z",
-				Plan:    &provenance.LineageRef{ID: "urn:exohub:git:blob:plan", Path: "pipeline.nf"},
+				Plan:    &provenance.LineagePlan{ID: "urn:exohub:git:blob:plan", Path: "pipeline.nf"},
 				Agents: []provenance.LineageAgent{{
 					ID:              "urn:exohub:agent:software:bot",
 					Type:            "SoftwareAgent",
@@ -464,6 +464,89 @@ func TestCatalogSchemas_ValidateProvenanceDocument(t *testing.T) {
 }
 
 func intPtr(n int) *int { return &n }
+
+// validateJSON parses raw and validates it against schema. Used for the
+// design D9 catalog fields (roles, parameters, results, environment, plan
+// pointers, source, flattened value/role) that the exo bundle writer does
+// not emit yet (groups 2-4), so no Go struct carries them: a raw JSON
+// literal proves the schema accepts a document shaped the way the future
+// writer will produce it.
+func validateJSON(t *testing.T, schema *jsonschema.Schema, raw string) {
+	t.Helper()
+	var v any
+	if err := json.Unmarshal([]byte(raw), &v); err != nil {
+		t.Fatalf("unmarshal document: %v", err)
+	}
+	if err := schema.Validate(v); err != nil {
+		t.Fatalf("schema validation failed: %v\ndocument: %s", err, raw)
+	}
+}
+
+// TestCatalogSchemas_ValidateArtifactWithCatalogLineageFields asserts the
+// design D9 additive lineage fields (inputs[].role, generated_by.parameters,
+// generated_by.results, generated_by.environment, generated_by.plan's
+// checksum/repository/commit/url, generated_by.source) validate against
+// exohub-artifact/v1.
+func TestCatalogSchemas_ValidateArtifactWithCatalogLineageFields(t *testing.T) {
+	schemas := loadCatalogSchemas(t)
+	validateJSON(t, schemas["exohub-artifact"], `{
+		"$schema": "exohub-artifact/v1.json",
+		"repo_url": "https://example.com/repo.git",
+		"ref": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"path": "results/de.csv",
+		"key": "SHA256E-s3--deadbeef",
+		"backend": "SHA256E",
+		"size": 3,
+		"lineage": {
+			"covered": true,
+			"generated_by": {
+				"id": "urn:exohub:activity:1",
+				"plan": {
+					"id": "urn:exohub:git:blob:plan",
+					"path": "pipeline.nf",
+					"checksum": "sha256:aa11",
+					"repository": "https://github.com/org/pipeline",
+					"commit": "4f2a9c1",
+					"url": "main.nf"
+				},
+				"source": "lid://0d1f",
+				"parameters": [{"name": "alpha", "value": "0.05"}],
+				"results": [{"name": "accuracy", "value": "0.93"}],
+				"environment": [{"kind": "container", "id": "docker://ghcr.io/org/de@sha256:ab12"}]
+			},
+			"inputs": [{"id": "urn:exohub:annex:SHA256E-s10--aa.csv", "path": "data/counts.csv", "role": "counts"}]
+		}
+	}`)
+}
+
+// TestCatalogSchemas_ValidateProvenanceDocumentWithValueAndRoles asserts
+// the design D9 additive exohub-provenance fields (entities[].value and
+// activities[].inputs[]/outputs[] with role) validate against
+// exohub-provenance/v1.
+func TestCatalogSchemas_ValidateProvenanceDocumentWithValueAndRoles(t *testing.T) {
+	schemas := loadCatalogSchemas(t)
+	validateJSON(t, schemas["exohub-provenance"], `{
+		"$schema": "exohub-provenance/v1.json",
+		"ref": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"record_count": 1,
+		"entity_count": 2,
+		"graph_file": "provenance.jsonld",
+		"records": [{"id": "urn:exohub:record:1", "assertion": "recorded", "asserted_by": "urn:exohub:agent:person:alice", "generated_at_time": "2026-01-01T00:00:00Z"}],
+		"agents": [{"id": "urn:exohub:agent:person:alice", "type": "Person", "records": ["urn:exohub:record:1"]}],
+		"activities": [{
+			"id": "urn:exohub:activity:1",
+			"used": ["urn:exohub:annex:SHA256E-s10--aa.csv"],
+			"generated": ["urn:exohub:git:blob:out"],
+			"inputs": [{"id": "urn:exohub:annex:SHA256E-s10--aa.csv", "role": "counts"}],
+			"outputs": [{"id": "urn:exohub:git:blob:out", "role": "accuracy"}],
+			"records": ["urn:exohub:record:1"]
+		}],
+		"entities": [
+			{"id": "urn:exohub:git:blob:out", "type": "Entity", "path": "out.csv", "covered": true, "records": ["urn:exohub:record:1"]},
+			{"id": "urn:exohub:value:sha256:abc", "type": "Entity", "covered": false, "value": "0.93", "records": ["urn:exohub:record:1"]}
+		]
+	}`)
+}
 
 func lineageCollections(l *provenance.ArtifactLineage) []provenance.LineageCollectionEntry {
 	if l == nil {
@@ -835,5 +918,86 @@ func TestBundleOutput_ValidatesAgainstSchemas(t *testing.T) {
 	}
 	if readme.Lineage == nil || len(readme.Lineage.AttributedTo) != 1 || readme.Lineage.AttributedTo[0] != "urn:exohub:agent:person:alice" {
 		t.Errorf("README.md lineage = %+v, want attributed_to [urn:exohub:agent:person:alice]", readme.Lineage)
+	}
+}
+
+// TestBundleOutput_ObjectValuedParameterValidatesAgainstSchema covers the
+// P1/!315 review clarification on issue exo-cli#172: a parameter with an
+// object value is emitted as its canonical JSON string in the artifact
+// document (ES rejects object values at index time), and that document
+// still validates against exohub-artifact/v1.
+func TestBundleOutput_ObjectValuedParameterValidatesAgainstSchema(t *testing.T) {
+	dir, run := setupBundleTestRepo(t)
+	if err := os.WriteFile(filepath.Join(dir, "out.csv"), []byte("out\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	outID := provenance.GitBlobEntityID(strings.TrimSpace(run("git", "rev-parse", "HEAD:out.csv")))
+	actID := provenance.NewActivityID()
+	usageID := provenance.NewUsageID()
+	valueID, err := provenance.ValueEntityID("options", map[string]any{"a": float64(1)})
+	if err != nil {
+		t.Fatalf("ValueEntityID() error = %v", err)
+	}
+
+	rec := fmt.Sprintf(`{
+  "@context": "https://genentech.github.io/exohub/ns/provenance/v1.jsonld",
+  "@id": %q,
+  "exo:assertion": "recorded",
+  "exo:assertedBy": "urn:exohub:agent:person:alice",
+  "generatedAtTime": "2026-10-16T10:00:00Z",
+  "exo:minVersion": "0.143.0",
+  "@graph": [
+    {"@id": %q, "@type": "Entity", "wasGeneratedBy": %q},
+    {"@id": %q, "@type": "Activity", "used": [%q], "qualifiedUsage": %q},
+    {"@id": %q, "@type": "Usage", "entity": %q, "hadRole": "options"},
+    {"@id": %q, "@type": "Entity", "value": {"a": 1}}
+  ]
+}`, provenance.NewRecordID(), outID, actID, actID, valueID, usageID, usageID, valueID, valueID)
+	if err := os.MkdirAll(filepath.Join(dir, ".exohub", "provenance"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".exohub", "provenance", "r.jsonld"), []byte(rec), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "record")
+
+	origDir, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(origDir)
+
+	outputDir := filepath.Join(".exohub", "bundles", "out")
+	if err := runBundle("", "", "default", outputDir, "", false, false, true, false, false, false, false, false, "0.0.0-dev", nil); err != nil {
+		t.Fatalf("runBundle() error = %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(outputDir, "files", "out.csv.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(files/out.csv.json) error = %v", err)
+	}
+	var artifact Artifact
+	if err := json.Unmarshal(data, &artifact); err != nil {
+		t.Fatalf("Unmarshal(files/out.csv.json) error = %v", err)
+	}
+	if artifact.Lineage == nil || artifact.Lineage.GeneratedBy == nil || len(artifact.Lineage.GeneratedBy.Parameters) != 1 {
+		t.Fatalf("artifact.Lineage.GeneratedBy = %+v, want one parameter", artifact.Lineage)
+	}
+	got, ok := artifact.Lineage.GeneratedBy.Parameters[0].Value.(string)
+	if !ok || got != `{"a":1}` {
+		t.Errorf("Parameters[0].Value = %#v, want the JSON string {\"a\":1}", artifact.Lineage.GeneratedBy.Parameters[0].Value)
+	}
+
+	schemas := loadCatalogSchemas(t)
+	var v any
+	if err := json.Unmarshal(data, &v); err != nil {
+		t.Fatalf("unmarshal for schema validation: %v", err)
+	}
+	if err := schemas["exohub-artifact"].Validate(v); err != nil {
+		t.Errorf("files/out.csv.json: schema validation failed: %v", err)
 	}
 }

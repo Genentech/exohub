@@ -200,6 +200,45 @@ func TestHandleProvenanceAddFullArgs(t *testing.T) {
 	}
 }
 
+func TestHandleProvenanceAddLineageFlags(t *testing.T) {
+	dir := fakeGitRepo(t)
+	calls := withFakeCommand(t, `echo '{"path":"out.csv"}'`)
+
+	_, err := handleProvenanceAdd(context.Background(), mustRequest(map[string]any{
+		"repo_dir":        dir,
+		"generated":       []any{"out.csv"},
+		"plan_repository": "https://example.com/org/pipeline.git",
+		"plan_commit":     "abc123",
+		"plan_url":        "main.nf",
+		"param":           []any{"threshold=0.5"},
+		"role":            []any{"reference=ref.fa"},
+		"output_role":     []any{"report=out.csv"},
+		"result":          []any{"count=42"},
+		"environment":     []any{"docker://example.com/image@sha256:deadbeef"},
+		"source":          "lid://run-123",
+	}))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	call := lastExoCall(t, calls)
+	for _, pair := range [][2]string{
+		{"--plan-repository", "https://example.com/org/pipeline.git"},
+		{"--plan-commit", "abc123"},
+		{"--plan-url", "main.nf"},
+		{"--param", "threshold=0.5"},
+		{"--role", "reference=ref.fa"},
+		{"--output-role", "report=out.csv"},
+		{"--result", "count=42"},
+		{"--environment", "docker://example.com/image@sha256:deadbeef"},
+		{"--source", "lid://run-123"},
+	} {
+		if !argPairPresent(call, pair[0], pair[1]) {
+			t.Errorf("exo provenance add args = %v, missing %s %s", call, pair[0], pair[1])
+		}
+	}
+}
+
 func argPresent(call []string, flag string) bool {
 	for _, a := range call {
 		if a == flag {

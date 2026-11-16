@@ -22,8 +22,8 @@ func TestMergeRemoteFieldsIntoFileAddsField(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	rendered := RemoteConfig{Name: "atlas", Type: "artifactdb", Mode: "export", S3URL: "s3://bucket/ds/_catalog/", AtlasURL: "https://atlas.example.com/"}
-	entries := []driftEntry{{Remote: "atlas", Field: "atlas_url", Profile: "https://atlas.example.com/", Status: "added"}}
+	rendered := RemoteConfig{Name: "atlas", Type: "artifactdb", Mode: "export", S3URL: "s3://bucket/ds/_catalog/", URL: "https://atlas.example.com/"}
+	entries := []driftEntry{{Remote: "atlas", Field: "url", Profile: "https://atlas.example.com/", Status: "added"}}
 
 	if err := mergeRemoteFieldsIntoFile(path, "atlas", rendered, entries); err != nil {
 		t.Fatalf("mergeRemoteFieldsIntoFile: %v", err)
@@ -33,7 +33,7 @@ func TestMergeRemoteFieldsIntoFileAddsField(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
-	want := src + "    atlas_url: https://atlas.example.com/\n"
+	want := src + "    url: https://atlas.example.com/\n"
 	if string(got) != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
 	}
@@ -47,14 +47,14 @@ func TestMergeRemoteFieldsIntoFileReplacesExistingValue(t *testing.T) {
 		"    type: artifactdb\n" +
 		"    mode: export\n" +
 		"    s3url: s3://bucket/ds/_catalog/\n" +
-		"    instance_url: https://old-instance.example.com\n"
+		"    url: https://old-atlas.example.com\n"
 	path := filepath.Join(t.TempDir(), "remotes")
 	if err := os.WriteFile(path, []byte(src), 0644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	rendered := RemoteConfig{Name: "atlas", Type: "artifactdb", Mode: "export", S3URL: "s3://bucket/ds/_catalog/", InstanceURL: "https://new-instance.example.com"}
-	entries := []driftEntry{{Remote: "atlas", Field: "instance_url", Current: "https://old-instance.example.com", Profile: "https://new-instance.example.com", Status: "changed"}}
+	rendered := RemoteConfig{Name: "atlas", Type: "artifactdb", Mode: "export", S3URL: "s3://bucket/ds/_catalog/", URL: "https://new-atlas.example.com"}
+	entries := []driftEntry{{Remote: "atlas", Field: "url", Current: "https://old-atlas.example.com", Profile: "https://new-atlas.example.com", Status: "changed"}}
 
 	if err := mergeRemoteFieldsIntoFile(path, "atlas", rendered, entries); err != nil {
 		t.Fatalf("mergeRemoteFieldsIntoFile: %v", err)
@@ -69,7 +69,7 @@ func TestMergeRemoteFieldsIntoFileReplacesExistingValue(t *testing.T) {
 		"    type: artifactdb\n" +
 		"    mode: export\n" +
 		"    s3url: s3://bucket/ds/_catalog/\n" +
-		"    instance_url: https://new-instance.example.com\n"
+		"    url: https://new-atlas.example.com\n"
 	if string(got) != want {
 		t.Errorf("got:\n%s\nwant:\n%s", got, want)
 	}
@@ -93,8 +93,8 @@ func TestMergeRemoteFieldsIntoFileOtherRemotesUntouched(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	rendered := RemoteConfig{Name: "atlas", Type: "artifactdb", Mode: "export", S3URL: "s3://bucket/ds/_catalog/", AtlasURL: "https://atlas.example.com/"}
-	entries := []driftEntry{{Remote: "atlas", Field: "atlas_url", Profile: "https://atlas.example.com/", Status: "added"}}
+	rendered := RemoteConfig{Name: "atlas", Type: "artifactdb", Mode: "export", S3URL: "s3://bucket/ds/_catalog/", URL: "https://atlas.example.com/"}
+	entries := []driftEntry{{Remote: "atlas", Field: "url", Profile: "https://atlas.example.com/", Status: "added"}}
 
 	if err := mergeRemoteFieldsIntoFile(path, "atlas", rendered, entries); err != nil {
 		t.Fatalf("mergeRemoteFieldsIntoFile: %v", err)
@@ -104,7 +104,7 @@ func TestMergeRemoteFieldsIntoFileOtherRemotesUntouched(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
-	want := src + "    atlas_url: https://atlas.example.com/\n"
+	want := src + "    url: https://atlas.example.com/\n"
 	if string(got) != want {
 		t.Errorf("comment/unknown-key/quoting not preserved for the untouched remote:\ngot:\n%s\nwant:\n%s", got, want)
 	}

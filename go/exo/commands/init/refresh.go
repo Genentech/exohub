@@ -265,13 +265,15 @@ func applyRemoteFieldDiff(current, rendered RemoteConfig, entries []driftEntry) 
 	return merged
 }
 
-// renderedRemoteFor fetches profileName and renders its "remotes" template
+// renderedRemotesFor fetches profileName and renders its "remotes" template
 // for the given current remote, resolving answers per resolveRefreshAnswers.
-// It returns the rendered RemoteConfig entry matching remoteName.
-func renderedRemoteFor(spec *ProfileSpec, current RemoteConfig) (RemoteConfig, error) {
+// It returns every remote the profile renders, so a caller migrating a
+// legacy remote (exo-cli#197) can also find the role: instance counterpart
+// the legacy entry's atlas_url/instance_url used to describe together.
+func renderedRemotesFor(spec *ProfileSpec, current RemoteConfig) ([]RemoteConfig, error) {
 	answers, err := resolveRefreshAnswers(spec, current)
 	if err != nil {
-		return RemoteConfig{}, err
+		return nil, err
 	}
 
 	unixID := resolveUnixID()
@@ -280,7 +282,7 @@ func renderedRemoteFor(spec *ProfileSpec, current RemoteConfig) (RemoteConfig, e
 	}
 	cwd, err := os.Getwd()
 	if err != nil {
-		return RemoteConfig{}, fmt.Errorf("could not determine working directory: %w", err)
+		return nil, fmt.Errorf("could not determine working directory: %w", err)
 	}
 	explicitFolder, _ := explicitFolderOverride()
 	existing := &RemotesConfig{Remotes: []RemoteConfig{current}}
@@ -288,7 +290,14 @@ func renderedRemoteFor(spec *ProfileSpec, current RemoteConfig) (RemoteConfig, e
 	warnIfFolderDiffersFromDirectory(folder, folderSource, cwd)
 	data := buildTplData(spec, unixID, folder, resolveEnv(), answers)
 
-	renderedList, err := renderProfileRemotes(spec, data)
+	return renderProfileRemotes(spec, data)
+}
+
+// renderedRemoteFor fetches profileName and renders its "remotes" template
+// for the given current remote, resolving answers per resolveRefreshAnswers.
+// It returns the rendered RemoteConfig entry matching remoteName.
+func renderedRemoteFor(spec *ProfileSpec, current RemoteConfig) (RemoteConfig, error) {
+	renderedList, err := renderedRemotesFor(spec, current)
 	if err != nil {
 		return RemoteConfig{}, err
 	}
@@ -405,6 +414,16 @@ func runProfileRemoteRefresh(profileName, remoteName string, remotesConfig *Remo
 	if err := reconfigureRemote(merged); err != nil && !errors.Is(err, errRemoteSkipped) {
 		return fmt.Errorf("updated .exohub/remotes but git-annex reconfigure failed: %w", err)
 	}
+
+	// A profile refresh never synced grants before (exo-cli#197): an
+	// --allow-move'd s3url/prefix change needs it just as much as the
+	// existing-repo path in handleRemoteValidation already does.
+	if merged.Grants && merged.S3URL != "" {
+		if err := syncGrantsForRemote(merged.S3URL); err != nil {
+			return fmt.Errorf("updated .exohub/remotes but grants sync failed: %w", err)
+		}
+	}
+
 	fmt.Printf("✅ Remote %s refreshed from profile %q\n", SuccessStyle.Render(remoteName), profileName)
 	return nil
 }

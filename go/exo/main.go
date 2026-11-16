@@ -50,9 +50,11 @@ import (
 	"github.com/Genentech/exohub/go/exo/commandutil"
 	"github.com/Genentech/exohub/go/exo/configdir"
 	"github.com/Genentech/exohub/go/exo/internal/defaults"
+	"github.com/Genentech/exohub/go/exo/internal/help"
 	"github.com/Genentech/exohub/go/exo/internal/tips"
 	"github.com/Genentech/exohub/go/exo/palette"
 	"github.com/Genentech/exohub/go/exo/preferences"
+	"github.com/Genentech/exohub/go/useragent"
 )
 
 var (
@@ -76,6 +78,16 @@ func init() {
 }
 
 func main() {
+	useragent.Install(version)
+
+	rootCmd := buildRootCmd(version, commit, date)
+
+	if err := rootCmd.Execute(); err != nil {
+		os.Exit(exitCode(err))
+	}
+}
+
+func buildRootCmd(version, commit, date string) *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:   "exo",
 		Short: "", // Empty to avoid duplication with logo
@@ -106,6 +118,17 @@ func main() {
 	// Custom help template with branded colors
 	rootCmd.SetUsageTemplate(customHelpTemplate())
 
+	// EXO_HELP=short switches to a compact help rendering for agents; default
+	// (unset or "full") keeps today's full cobra help for humans.
+	defaultHelpFunc := rootCmd.HelpFunc()
+	rootCmd.SetHelpFunc(func(cmd *cobra.Command, args []string) {
+		if help.ShortMode() {
+			help.RenderShort(cmd, cmd.OutOrStdout())
+			return
+		}
+		defaultHelpFunc(cmd, args)
+	})
+
 	rootCmd.PersistentFlags().StringVar(&configdir.FlagValue, "config-dir", "", "Root directory for all config, cache and credentials (overrides EXO_CONFIG_DIR)")
 	rootCmd.PersistentFlags().StringVar(&contextcmd.OverrideContext, "context", "", "Use specific context (overrides selected context)")
 
@@ -133,7 +156,7 @@ func main() {
 	rootCmd.AddCommand(manifest.NewCommand())
 	rootCmd.AddCommand(mcpcmd.NewCommand(version))
 	rootCmd.AddCommand(mirror.NewCommand())
-	rootCmd.AddCommand(provenancecmd.NewCommand())
+	rootCmd.AddCommand(provenancecmd.NewCommand(version))
 	rootCmd.AddCommand(publishcmd.NewCommand())
 	rootCmd.AddCommand(pull.NewCommand())
 	rootCmd.AddCommand(safecmd.NewCommand())
@@ -154,9 +177,7 @@ func main() {
 	rootCmd.AddCommand(versioncmd.NewCommand(version, commit, date))
 	rootCmd.AddCommand(whoamicmd.NewCommand())
 
-	if err := rootCmd.Execute(); err != nil {
-		os.Exit(exitCode(err))
-	}
+	return rootCmd
 }
 
 func execCommand(name string, args ...string) error {
@@ -176,6 +197,10 @@ func exitCode(err error) int {
 	}
 	fmt.Fprintln(os.Stderr, err.Error())
 	return 1
+}
+
+func init() {
+	cobra.AddTemplateFunc("manualLine", help.ManualLine)
 }
 
 func customHelpTemplate() string {
@@ -198,9 +223,13 @@ Global Flags:
 Additional help topics:{{range .Commands}}{{if .IsAdditionalHelpTopicCommand}}
   {{rpad .CommandPath .CommandPathPadding}} {{.Short}}{{end}}{{end}}{{end}}{{if .HasAvailableSubCommands}}
 
-Use "` + purpleStyle.Render("{{.CommandPath}} [command]") + ` --help" for more information about a command.{{end}}
-` + helpDocsFooter() + `
-`
+Use "` + purpleStyle.Render("{{.CommandPath}} [command]") + ` --help" for more information about a command.{{end}}{{if not .HasParent}}
+
+Environment:
+  EXO_HELP=short   Compact help for agents (description, usage, flags, man page URL){{end}}
+` + helpDocsFooter() + `{{with manualLine .}}
+{{.}}
+{{end}}`
 }
 
 // helpDocsFooter returns a one-line footer pointing agents at the llms.txt

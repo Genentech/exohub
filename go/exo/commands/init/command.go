@@ -23,9 +23,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	contextcmd "github.com/Genentech/exohub/go/exo/commands/context"
 	"github.com/Genentech/exohub/go/exo/commandutil"
 	"github.com/Genentech/exohub/go/exo/configdir"
-	contextcmd "github.com/Genentech/exohub/go/exo/commands/context"
 	"github.com/Genentech/exohub/go/exo/gitprovider"
 )
 
@@ -115,7 +115,7 @@ Profile mode (--profile):
     and are never proposed for removal. A changed s3url carries a hint
     pointing at --allow-move. Exits 3 if drift is found, 0 if none —
     distinct from the generic exit 1 used for command errors, so automation
-    (e.g. obol) can tell "stale repo" apart from "exo itself failed".
+    can tell "stale repo" apart from "exo itself failed".
 
 Repository creation:
   - Auto-detects provider (Gitea, GitHub, GitLab) from host via HTTP inspection
@@ -323,11 +323,30 @@ func runInit(args []string) (err error) {
 	}
 
 	if profileRequested {
+		// A legacy .exohub/remotes (atlas_url/instance_url) refuses on the
+		// LoadRemotesConfig() above; the --profile path alone is lenient
+		// about it and converts it (exo-cli#197) instead of dying on the
+		// same refusal its own hint recommends.
+		legacyRemotesConfig := remotesConfig
+		if errors.Is(remotesConfigErr, errLegacyRemoteKeys) {
+			if lenient, lenientErr := LoadRemotesConfigAllowLegacy(); lenientErr == nil {
+				legacyRemotesConfig = lenient
+				remotesConfigErr = nil
+			} else {
+				remotesConfigErr = lenientErr
+			}
+		}
+
 		if flagDryRun && flagJSON {
 			if remotesConfigErr != nil {
 				return remotesConfigErr
 			}
-			return runProfileDriftReport(effectiveProfile, flagRemote, remotesConfig)
+			if flagRemote != "" && isGit {
+				if cur, found := findRemoteConfig(legacyRemotesConfig, flagRemote); found && cur.hasLegacyKeys() {
+					return runLegacyRemoteMigrationDriftReport(effectiveProfile, flagRemote, legacyRemotesConfig)
+				}
+			}
+			return runProfileDriftReport(effectiveProfile, flagRemote, legacyRemotesConfig)
 		}
 
 		// On an already-initialized repo, --remote targets a single existing
@@ -337,8 +356,11 @@ func runInit(args []string) (err error) {
 			if remotesConfigErr != nil {
 				return remotesConfigErr
 			}
-			if _, found := findRemoteConfig(remotesConfig, flagRemote); found {
-				return runProfileRemoteRefresh(effectiveProfile, flagRemote, remotesConfig)
+			if cur, found := findRemoteConfig(legacyRemotesConfig, flagRemote); found {
+				if cur.hasLegacyKeys() {
+					return runLegacyRemoteMigration(effectiveProfile, flagRemote, legacyRemotesConfig)
+				}
+				return runProfileRemoteRefresh(effectiveProfile, flagRemote, legacyRemotesConfig)
 			}
 		}
 
@@ -978,6 +1000,13 @@ func handleRemoteValidation(exohubConfig *ExohubConfig, remotesConfig *RemotesCo
 			continue
 		}
 
+		// role: instance artifactdb remotes are never git-annex special
+		// remotes (D3): .exohub/remotes is their only configuration state.
+		if remote.Type == "artifactdb" && remote.Role == "instance" {
+			fmt.Printf("✅ Remote %s is correctly configured (role: instance)\n", SuccessStyle.Render(remote.Name))
+			continue
+		}
+
 		locallyConfigured := remoteExists(remote.Name)
 		existsInAnnex := remoteExistsInAnnex(remote.Name)
 
@@ -1119,6 +1148,12 @@ func handleRemoteValidation(exohubConfig *ExohubConfig, remotesConfig *RemotesCo
 
 // createRemoteFromConfig creates a remote from its configuration
 func createRemoteFromConfig(remote RemoteConfig) error {
+	// role: instance artifactdb remotes are never git-annex special remotes
+	// (D3), so the catalog binary isn't needed to configure them here.
+	if remote.Type == "artifactdb" && remote.Role == "instance" {
+		return createArtifactDBRemoteFromConfig(remote)
+	}
+
 	// Check binary availability
 	if err := checkRemoteBinaries(remote.Type); err != nil {
 		return err
@@ -1254,7 +1289,7 @@ func createAnnexRemoteFromConfig(remote RemoteConfig) error {
 func createExportRemoteFromConfig(remote RemoteConfig) error {
 	if remote.Grants {
 		// Export remotes require write access. Skip if user only has READ grants.
-		if !hasGrantsWriteAccess(remote.S3URL) {
+		if !hasGrantsWriteAccess(remote.S3URL, remote.GrantsAccountID, "") {
 			fmt.Printf("Skipping export remote '%s' (read-only access)\n", remote.Name)
 			return errRemoteSkipped
 		}
@@ -1317,9 +1352,13 @@ func createExportRemoteFromConfig(remote RemoteConfig) error {
 }
 
 func createArtifactDBRemoteFromConfig(remote RemoteConfig) error {
+	if remote.Role == "instance" {
+		fmt.Printf("Remote %s is role: instance (not a git-annex special remote); nothing to initialize\n", remote.Name)
+		return nil
+	}
 	if remote.Grants {
 		// Export remotes require write access. Skip if user only has READ grants.
-		if !hasGrantsWriteAccess(remote.S3URL) {
+		if !hasGrantsWriteAccess(remote.S3URL, remote.GrantsAccountID, "") {
 			fmt.Printf("Skipping export remote '%s' (read-only access)\n", remote.Name)
 			return errRemoteSkipped
 		}
@@ -1335,11 +1374,8 @@ func createArtifactDBRemoteFromConfig(remote RemoteConfig) error {
 	if remote.Grants {
 		initArgs = append(initArgs, "grants=true")
 	}
-	if remote.InstanceURL != "" {
-		initArgs = append(initArgs, "instance_url="+remote.InstanceURL)
-	}
-	if remote.AtlasURL != "" {
-		initArgs = append(initArgs, "atlas_url="+remote.AtlasURL)
+	if remote.URL != "" {
+		initArgs = append(initArgs, "atlas_url="+remote.URL)
 	}
 
 	if err := enableOrInitRemote(remote.Name, remote.UUID, initArgs); err != nil {
@@ -1375,8 +1411,12 @@ func createArtifactDBRemoteFromConfig(remote RemoteConfig) error {
 }
 
 func reconfigureArtifactDBRemote(remote RemoteConfig) error {
+	if remote.Role == "instance" {
+		fmt.Printf("Remote %s is role: instance (not a git-annex special remote); nothing to reconfigure\n", remote.Name)
+		return nil
+	}
 	if remote.Grants {
-		if !hasGrantsWriteAccess(remote.S3URL) {
+		if !hasGrantsWriteAccess(remote.S3URL, remote.GrantsAccountID, "") {
 			fmt.Printf("Skipping export remote '%s' (read-only access)\n", remote.Name)
 			return errRemoteSkipped
 		}
@@ -1386,11 +1426,8 @@ func reconfigureArtifactDBRemote(remote RemoteConfig) error {
 	if remote.Grants {
 		enableArgs = append(enableArgs, "grants=true")
 	}
-	if remote.InstanceURL != "" {
-		enableArgs = append(enableArgs, "instance_url="+remote.InstanceURL)
-	}
-	if remote.AtlasURL != "" {
-		enableArgs = append(enableArgs, "atlas_url="+remote.AtlasURL)
+	if remote.URL != "" {
+		enableArgs = append(enableArgs, "atlas_url="+remote.URL)
 	}
 	_ = runCommand(enableArgs)
 
@@ -1775,6 +1812,10 @@ func needsReconfigure(remote RemoteConfig) bool {
 			}
 		}
 	case "artifactdb":
+		if remote.Role == "instance" {
+			// Not a git-annex special remote (D3); nothing to check here.
+			break
+		}
 		// Check s3url from git config (avoid git annex info which starts the remote binary)
 		currentS3URL := getRemoteConfig(remote.Name, "s3url")
 		if currentS3URL != remote.S3URL {
@@ -1784,17 +1825,11 @@ func needsReconfigure(remote RemoteConfig) bool {
 		if currentGrants != remote.Grants {
 			return true
 		}
-		// Check atlas_url/instance_url drift (exo-cli#164): a profile that
-		// adds or changes either must trigger a reconfigure, not just s3url.
-		if remote.AtlasURL != "" {
+		// Check atlas_url drift (exo-cli#164): a profile that adds or changes
+		// it must trigger a reconfigure, not just s3url.
+		if remote.URL != "" {
 			currentAtlasURL := remoteGetConfigValue(remote.Name, remote.UUID, "atlas_url")
-			if currentAtlasURL != remote.AtlasURL {
-				return true
-			}
-		}
-		if remote.InstanceURL != "" {
-			currentInstanceURL := remoteGetConfigValue(remote.Name, remote.UUID, "instance_url")
-			if currentInstanceURL != remote.InstanceURL {
+			if currentAtlasURL != remote.URL {
 				return true
 			}
 		}
@@ -2101,7 +2136,7 @@ func reconfigureAnnexRemote(remote RemoteConfig) error {
 
 func reconfigureExportRemote(remote RemoteConfig) error {
 	if remote.Grants {
-		if !hasGrantsWriteAccess(remote.S3URL) {
+		if !hasGrantsWriteAccess(remote.S3URL, remote.GrantsAccountID, "") {
 			fmt.Printf("Skipping export remote '%s' (read-only access)\n", remote.Name)
 			return errRemoteSkipped
 		}
@@ -2734,16 +2769,17 @@ func getRemoteInfoS3URL(name string) string {
 // S3 prefix even though the content was never copied to the new one. Left
 // unhandled, `exo sync --all` then copies nothing (git-annex believes it's
 // already there) and `exo get` 404s against the new prefix (exo-cli#166).
-// To guard against that, a real move requires confirmation (or --yes) and,
-// once applied, invalidates this remote's presence so `exo sync --all`
-// re-uploads what's actually missing at the new location.
-// ensureRemoteConfigS3URL persists remote's s3url and keeps git-annex's
-// enableremote config in sync with it. On a move (old s3url non-empty and
-// different from the new one), with --migrate-content, content is copied
-// from the old prefix to the new one and verified *before* the switch is
-// applied: a failed or incomplete migration leaves the s3url untouched
-// (exo-cli#168) rather than switching to a prefix whose content isn't
-// actually there yet.
+// To guard against that, a real move requires confirmation (or --yes); with
+// --migrate-content, content is copied from the old prefix to the new one
+// and verified *before* the switch is applied, so a failed or incomplete
+// migration leaves the s3url untouched (exo-cli#168) rather than switching
+// to a prefix whose content isn't actually there yet. Once the switch is
+// applied, presence is invalidated so `exo sync --all` re-uploads what's
+// actually missing at the new location, and exo sync's default incremental
+// upload's refs/exo/content-synced/* markers (exo-cli#161) are pruned --
+// unless the move was a verified --migrate-content, in which case the new
+// location already has everything the old one did and the markers remain
+// accurate.
 func ensureRemoteConfigS3URL(remote RemoteConfig) {
 	name := remote.Name
 	s3url := remote.S3URL
@@ -2758,6 +2794,14 @@ func ensureRemoteConfigS3URL(remote RemoteConfig) {
 	if saved == s3url {
 		return
 	}
+	// A non-empty saved value that differs from the new one is a real
+	// location move, not first-time init (saved == "" then). After a move,
+	// two things claim stale truths about the old location: git-annex's
+	// location log (exo-cli#166, handled below by confirmRemoteLocationMove
+	// + invalidateMovedRemotePresence) and exo sync's default incremental
+	// upload's refs/exo/content-synced/* markers (exo-cli#161, handled by
+	// pruneContentSyncedMarkers), which claim "uploaded through commit X"
+	// against a location that no longer has that history.
 	isMove := saved != ""
 
 	if isMove && flagDryRun {
@@ -2789,6 +2833,16 @@ func ensureRemoteConfigS3URL(remote RemoteConfig) {
 	_ = runCommand([]string{"git", "annex", "enableremote", name, "s3url=" + s3url})
 	if isMove {
 		invalidateMovedRemotePresence(name)
+		// A verified --migrate-content copied everything from the old
+		// location to the new one (migrateRemoteContent above already
+		// returned without error, i.e. report.ok()), so the new location has
+		// the same history the content-synced markers claim -- pruning them
+		// would only force a needless full re-baseline. Without migration,
+		// the new location has no history at all, so the markers are stale
+		// and must be pruned.
+		if !flagMigrateContent {
+			pruneContentSyncedMarkers(name)
+		}
 	}
 }
 
@@ -2856,6 +2910,28 @@ func invalidateMovedRemotePresence(name string) {
 	// (stale-)present in the log until a full sweep re-verifies it. Spell
 	// out the two follow-up commands so a move is never left half-fixed.
 	fmt.Println("After a move, run 'exo sync --all' to re-upload any content missing from every ref, then 'exo sync --check --verify' to confirm nothing is still silently missing.")
+}
+
+// pruneContentSyncedMarkers deletes every local refs/exo/content-synced/<remote>/*
+// marker for remote. These are exo sync's default incremental-history-upload
+// progress markers (exo-cli#161): strictly local, never branches or tags,
+// never pushed or fetched. This package can't import go/exo/commands/sync to
+// call its marker helpers directly (sync already imports init), so it
+// manipulates the same ref namespace with plain git plumbing instead, exactly
+// as that package documents doing itself.
+func pruneContentSyncedMarkers(remote string) {
+	prefix := fmt.Sprintf("refs/exo/content-synced/%s/", remote)
+	out, err := command("git", "for-each-ref", "--format=%(refname)", prefix).Output()
+	if err != nil {
+		return
+	}
+	for _, ref := range strings.Split(string(out), "\n") {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			continue
+		}
+		_ = runCommand([]string{"git", "update-ref", "-d", ref})
+	}
 }
 
 func createS3Annex() error {
@@ -3415,7 +3491,7 @@ func destroyUUIDFromGitAnnexBranch(uuid, remoteName string) error {
 			// Skip main log files (already processed above)
 			base := filepath.Base(filename)
 			if base != "remote.log" && base != "uuid.log" &&
-			   base != "trust.log" && base != "group.log" {
+				base != "trust.log" && base != "group.log" {
 				filesToFilter = append(filesToFilter, filename)
 			}
 		}
@@ -3548,7 +3624,7 @@ func previewLocationLogFiltering(uuid string) (int, error) {
 		// Skip main log files - we only care about location logs
 		base := filepath.Base(filename)
 		if base != "remote.log" && base != "uuid.log" &&
-		   base != "trust.log" && base != "group.log" {
+			base != "trust.log" && base != "group.log" {
 			count++
 		}
 	}
@@ -3697,7 +3773,7 @@ func countKeysOnUUID(uuid string) (int, error) {
 		// Skip main log files - we only care about location logs (key logs)
 		base := filepath.Base(filename)
 		if base != "remote.log" && base != "uuid.log" &&
-		   base != "trust.log" && base != "group.log" {
+			base != "trust.log" && base != "group.log" {
 			count++
 		}
 	}

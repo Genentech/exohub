@@ -196,6 +196,33 @@ func TestHandleInitRemote(t *testing.T) {
 	}
 }
 
+func TestHandleInitRemoteGrantsAccountID(t *testing.T) {
+	var output []string
+	origWriteLine := writeLine
+	writeLine = func(line string) {
+		output = append(output, line)
+	}
+	defer func() { writeLine = origWriteLine }()
+
+	config = map[string]string{
+		"s3url":             "s3://bucket/_artifactdb",
+		"grants":            "true",
+		"grants_account_id": "111122223333",
+	}
+
+	handleInitRemote()
+
+	found := false
+	for _, line := range output {
+		if line == "CONFIG grants_account_id=111122223333" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("handleInitRemote output missing CONFIG grants_account_id=111122223333: %v", output)
+	}
+}
+
 func TestHandleInitRemoteNoAtlasURL(t *testing.T) {
 	var output []string
 	origWriteLine := writeLine
@@ -214,6 +241,113 @@ func TestHandleInitRemoteNoAtlasURL(t *testing.T) {
 		if strings.HasPrefix(line, "CONFIG atlas_url=") {
 			t.Errorf("handleInitRemote emitted CONFIG atlas_url when none was set: %v", output)
 		}
+	}
+}
+
+// TestFetchGrantsCredentialsForAccountForwardsAccountID verifies that
+// fetchGrantsCredentialsForAccount passes --account-id to the credential
+// helper when given a non-empty accountID, and omits it otherwise, and that
+// fetchGrantsCredentials (the sticky, s3url-only entry point used by the
+// proactive/reactive refresh paths) picks up whatever account was set by the
+// most recent fetchGrantsCredentialsForAccount call.
+func TestFetchGrantsCredentialsForAccountForwardsAccountID(t *testing.T) {
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "args")
+	script := filepath.Join(dir, "fake-cred-helper")
+	content := "#!/bin/sh\necho \"$@\" > " + argsFile + "\n" +
+		`echo '{"AccessKeyId":"FAKEKEY","SecretAccessKey":"FAKESECRET","SessionToken":"FAKETOKEN","Expiration":"2099-01-01T00:00:00Z"}'` + "\n"
+	if err := os.WriteFile(script, []byte(content), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	origBin := credHelperBin
+	defer func() { credHelperBin = origBin }()
+	credHelperBin = script
+
+	origAccountID := currentGrantsAccountID
+	defer func() { currentGrantsAccountID = origAccountID }()
+
+	if err := fetchGrantsCredentialsForAccount("s3://instance-bucket/", "111122223333", ""); err != nil {
+		t.Fatalf("fetchGrantsCredentialsForAccount error: %v", err)
+	}
+	got, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("could not read captured args: %v", err)
+	}
+	if !strings.Contains(string(got), "--account-id 111122223333") {
+		t.Errorf("expected --account-id 111122223333, got: %q", got)
+	}
+
+	// The sticky entry point must reuse the account id set above.
+	if err := fetchGrantsCredentials("s3://instance-bucket/"); err != nil {
+		t.Fatalf("fetchGrantsCredentials error: %v", err)
+	}
+	got, err = os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("could not read captured args: %v", err)
+	}
+	if !strings.Contains(string(got), "--account-id 111122223333") {
+		t.Errorf("expected sticky --account-id 111122223333, got: %q", got)
+	}
+
+	if err := fetchGrantsCredentialsForAccount("s3://atlas-bucket/", "", ""); err != nil {
+		t.Fatalf("fetchGrantsCredentialsForAccount error: %v", err)
+	}
+	got, err = os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("could not read captured args: %v", err)
+	}
+	if strings.Contains(string(got), "--account-id") {
+		t.Errorf("expected no --account-id flag with an empty accountID, got: %q", got)
+	}
+}
+
+// TestFetchGrantsCredentialsForAccount_SourceS3URL verifies --source-s3url
+// is forwarded to the credential helper when set, and omitted when empty.
+func TestFetchGrantsCredentialsForAccount_SourceS3URL(t *testing.T) {
+	dir := t.TempDir()
+	argsFile := filepath.Join(dir, "args")
+	script := filepath.Join(dir, "fake-cred-helper")
+	content := "#!/bin/sh\necho \"$@\" > " + argsFile + "\n" +
+		`echo '{"AccessKeyId":"FAKEKEY","SecretAccessKey":"FAKESECRET","SessionToken":"FAKETOKEN","Expiration":"2099-01-01T00:00:00Z"}'` + "\n"
+	if err := os.WriteFile(script, []byte(content), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	origBin := credHelperBin
+	defer func() { credHelperBin = origBin }()
+	credHelperBin = script
+
+	if err := fetchGrantsCredentialsForAccount("s3://instance-bucket/proj", "", "s3://atlas-bucket/prefix/"); err != nil {
+		t.Fatalf("fetchGrantsCredentialsForAccount error: %v", err)
+	}
+	got, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("could not read captured args: %v", err)
+	}
+	if !strings.Contains(string(got), "--source-s3url s3://atlas-bucket/prefix/") {
+		t.Errorf("expected --source-s3url s3://atlas-bucket/prefix/, got: %q", got)
+	}
+
+	if err := fetchGrantsCredentialsForAccount("s3://atlas-bucket/", "", ""); err != nil {
+		t.Fatalf("fetchGrantsCredentialsForAccount error: %v", err)
+	}
+	got, err = os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("could not read captured args: %v", err)
+	}
+	if strings.Contains(string(got), "--source-s3url") {
+		t.Errorf("expected no --source-s3url flag with an empty sourceS3URL, got: %q", got)
+	}
+}
+
+// TestConfiguredGrantsAccountID verifies that configuredGrantsAccountID
+// (used by the git-annex special-remote PREPARE path) reads grants_account_id
+// from the already-known config map without round-tripping through GETCONFIG.
+func TestConfiguredGrantsAccountID(t *testing.T) {
+	config = map[string]string{"grants_account_id": "111122223333"}
+	if got := configuredGrantsAccountID(); got != "111122223333" {
+		t.Errorf("configuredGrantsAccountID() = %q, want %q", got, "111122223333")
 	}
 }
 
@@ -287,15 +421,15 @@ func captureUploadedPermissions(t *testing.T, rootDir string) map[string]interfa
 
 func TestUploadPermissions_QuotedValues(t *testing.T) {
 	dir := makePermissionsDir(t, `owners:
-  - "aboyounp"
+  - "example-user"
 read_access: "public"
 write_access: "owners"
 `)
 	got := captureUploadedPermissions(t, dir)
 
 	owners, ok := got["owners"].([]interface{})
-	if !ok || len(owners) != 1 || owners[0] != "aboyounp" {
-		t.Errorf("owners = %v, want [aboyounp]", got["owners"])
+	if !ok || len(owners) != 1 || owners[0] != "example-user" {
+		t.Errorf("owners = %v, want [example-user]", got["owners"])
 	}
 	if got["read_access"] != "public" {
 		t.Errorf("read_access = %q, want \"public\"", got["read_access"])
@@ -310,15 +444,15 @@ write_access: "owners"
 
 func TestUploadPermissions_UnquotedValues(t *testing.T) {
 	dir := makePermissionsDir(t, `owners:
-  - aboyounp
+  - example-user
 read_access: public
 write_access: owners
 `)
 	got := captureUploadedPermissions(t, dir)
 
 	owners, ok := got["owners"].([]interface{})
-	if !ok || len(owners) != 1 || owners[0] != "aboyounp" {
-		t.Errorf("owners = %v, want [aboyounp]", got["owners"])
+	if !ok || len(owners) != 1 || owners[0] != "example-user" {
+		t.Errorf("owners = %v, want [example-user]", got["owners"])
 	}
 	if got["read_access"] != "public" {
 		t.Errorf("read_access = %q, want \"public\"", got["read_access"])
@@ -412,7 +546,7 @@ func TestPublishNotify_WithAtlasURL(t *testing.T) {
 	defer server.Close()
 
 	_, err := publishNotify(server.URL, "myproject", "ssh://git@host/org/myproject.git", "abc123", "v1.0.0",
-		"s3://bucket/prefix/v1.0.0/", "s3://bucket/prefix", "", "https://atlas.example.com/v1/sandbox1")
+		"s3://bucket/prefix/v1.0.0/", "s3://bucket/prefix", "", "https://atlas.example.com/v1/sandbox1", false)
 	if err != nil {
 		t.Fatalf("publishNotify() error = %v", err)
 	}
@@ -438,7 +572,7 @@ func TestPublishNotify_WithoutAtlasURL(t *testing.T) {
 	defer server.Close()
 
 	_, err := publishNotify(server.URL, "myproject", "ssh://git@host/org/myproject.git", "abc123", "v1.0.0",
-		"s3://bucket/prefix/v1.0.0/", "s3://bucket/prefix", "", "")
+		"s3://bucket/prefix/v1.0.0/", "s3://bucket/prefix", "", "", false)
 	if err != nil {
 		t.Fatalf("publishNotify() error = %v", err)
 	}
@@ -460,7 +594,7 @@ func TestPublishNotify_422WithAtlasURL(t *testing.T) {
 	defer server.Close()
 
 	_, err := publishNotify(server.URL, "myproject", "ssh://git@host/org/myproject.git", "abc123", "v1.0.0",
-		"s3://bucket/prefix/v1.0.0/", "s3://bucket/prefix", "", "https://atlas.example.com/v1/not-allowed")
+		"s3://bucket/prefix/v1.0.0/", "s3://bucket/prefix", "", "https://atlas.example.com/v1/not-allowed", false)
 	if err == nil {
 		t.Fatal("expected error for 422 response, got nil")
 	}
@@ -477,7 +611,7 @@ func TestPublishNotify_422ReturnsAPIError(t *testing.T) {
 	defer server.Close()
 
 	_, err := publishNotify(server.URL, "myproject", "ssh://git@host/org/myproject.git", "abc123", "v1.0.0",
-		"s3://bucket/prefix/v1.0.0/", "s3://bucket/prefix", "", "")
+		"s3://bucket/prefix/v1.0.0/", "s3://bucket/prefix", "", "", false)
 
 	var apiErr *apiError
 	if !errors.As(err, &apiErr) {
@@ -678,7 +812,7 @@ func TestPublishNotify_SuccessSurfacesAtlasURLUsed(t *testing.T) {
 	defer server.Close()
 
 	respBody, err := publishNotify(server.URL, "myproject", "ssh://git@host/org/myproject.git", "abc123", "v1.0.0",
-		"s3://bucket/prefix/v1.0.0/", "s3://bucket/prefix", "", "")
+		"s3://bucket/prefix/v1.0.0/", "s3://bucket/prefix", "", "", false)
 	if err != nil {
 		t.Fatalf("publishNotify() error = %v", err)
 	}
@@ -691,5 +825,280 @@ func TestPublishNotify_SuccessSurfacesAtlasURLUsed(t *testing.T) {
 	}
 	if resp.AtlasURLUsed != "https://atlas.example.com/v1/sandbox1" {
 		t.Errorf("atlas_url_used = %q, want %q", resp.AtlasURLUsed, "https://atlas.example.com/v1/sandbox1")
+	}
+}
+
+func TestExtractBundleRef(t *testing.T) {
+	tests := []struct {
+		body   string
+		want   string
+		wantOk bool
+	}{
+		{`{"ref":"abc123"}`, "abc123", true},
+		{`{"ref":""}`, "", false},
+		{`{}`, "", false},
+		{`not json`, "", false},
+	}
+	for _, tt := range tests {
+		got, ok := extractBundleRef([]byte(tt.body))
+		if got != tt.want || ok != tt.wantOk {
+			t.Errorf("extractBundleRef(%q) = (%q, %v), want (%q, %v)", tt.body, got, ok, tt.want, tt.wantOk)
+		}
+	}
+}
+
+func TestExtractMarkerCommit(t *testing.T) {
+	tests := []struct {
+		body   string
+		want   string
+		wantOk bool
+	}{
+		{`{"commit":"abc123"}`, "abc123", true},
+		{`{"commit":""}`, "", false},
+		{`{}`, "", false},
+		{`not json`, "", false},
+	}
+	for _, tt := range tests {
+		got, ok := extractMarkerCommit([]byte(tt.body))
+		if got != tt.want || ok != tt.wantOk {
+			t.Errorf("extractMarkerCommit(%q) = (%q, %v), want (%q, %v)", tt.body, got, ok, tt.want, tt.wantOk)
+		}
+	}
+}
+
+func TestCheckTagImmutability_RequiresCommitForTag(t *testing.T) {
+	err := checkTagImmutability("s5cmd", "tag", "1", "", "s3://bucket/DS1/1/..complete", extractMarkerCommit)
+	if err == nil {
+		t.Fatal("expected an error when --commit is missing for --ref-kind tag, got nil")
+	}
+}
+
+func TestCheckTagImmutability_EmptyRefKindNeverChecks(t *testing.T) {
+	err := checkTagImmutability("s5cmd", "", "1", "", "s3://bucket/DS1/1/..complete", extractMarkerCommit)
+	if err != nil {
+		t.Errorf("checkTagImmutability() = %v, want nil when --ref-kind is unset", err)
+	}
+}
+
+// writeFakeS5cmdFS installs a fake s5cmd backed by a real local filesystem
+// rooted at root (an s3://bucket/key object maps to root/bucket/key), so
+// tests can drive runPublishBundleUpload end to end and assert on what
+// objects actually land (or don't) rather than only on the args s5cmd was
+// called with. Supports the 3 subcommands runPublishBundleUpload uses:
+// "sync SRC DST [--exclude PATTERN]..." (PATTERN matched against each
+// file's path relative to SRC using shell glob, consistent with s5cmd's own
+// --exclude), "ls PATTERN" (exit 0 with matches on stdout, 1 otherwise), and
+// "rm PATTERN" (deletes matches). Every invocation is also logged to
+// logFile, one space-joined line per call.
+func writeFakeS5cmdFS(t *testing.T, path, root, logFile string) {
+	t.Helper()
+	script := `#!/bin/bash
+set -e
+ROOT=` + root + `
+LOG=` + logFile + `
+echo "$@" >> "$LOG"
+cmd="$1"; shift
+case "$cmd" in
+  sync)
+    excludes=()
+    pos=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --exclude) excludes+=("$2"); shift 2 ;;
+        *) pos+=("$1"); shift ;;
+      esac
+    done
+    src="${pos[0]}"
+    dst="${pos[1]#s3://}"
+    dstPath="$ROOT/$dst"
+    mkdir -p "$dstPath"
+    if [ -d "$src" ]; then
+      (cd "$src" && find . -type f) | while IFS= read -r f; do
+        rel="${f#./}"
+        skip=0
+        for pat in "${excludes[@]}"; do
+          case "$rel" in
+            $pat) skip=1 ;;
+          esac
+        done
+        if [ "$skip" -eq 0 ]; then
+          mkdir -p "$dstPath/$(dirname "$rel")"
+          cp "$src/$rel" "$dstPath/$rel"
+          echo "cp $rel"
+        fi
+      done
+    fi
+    ;;
+  ls)
+    relPattern="${1#s3://}"
+    found=0
+    if [ -d "$ROOT" ]; then
+      while IFS= read -r -d '' f; do
+        rel="${f#$ROOT/}"
+        case "$rel" in
+          $relPattern) echo "s3://$rel"; found=1 ;;
+        esac
+      done < <(find "$ROOT" -type f -print0 2>/dev/null)
+    fi
+    [ "$found" -eq 1 ] && exit 0 || exit 1
+    ;;
+  rm)
+    relPattern="${1#s3://}"
+    if [ -d "$ROOT" ]; then
+      while IFS= read -r -d '' f; do
+        rel="${f#$ROOT/}"
+        case "$rel" in
+          $relPattern) rm -f "$f" ;;
+        esac
+      done < <(find "$ROOT" -type f -print0 2>/dev/null)
+    fi
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac
+`
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake s5cmd: %v", err)
+	}
+}
+
+// readLogLines reads logFile and returns its non-empty lines, or nil if the
+// file doesn't exist (no calls were made).
+func readLogLines(t *testing.T, logFile string) []string {
+	t.Helper()
+	data, err := os.ReadFile(logFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		t.Fatalf("read log file: %v", err)
+	}
+	var lines []string
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+// TestRunPublishBundleUpload_ExcludesArtifactDBFromUpload verifies, against
+// a real (fake-S3-backed) bundle upload, that a bundle dir containing
+// .artifactdb/ never lands under <s3Base>/.exohub-bundle/: the --exclude
+// '.artifactdb/*' guard in runPublishBundleUpload. Mutation check: dropping
+// that exclude pattern from the runS5cmdSync call makes this FAIL, since the
+// fake upload would then actually copy the .artifactdb/ file through.
+func TestRunPublishBundleUpload_ExcludesArtifactDBFromUpload(t *testing.T) {
+	bundleDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bundleDir, "bundle.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(bundleDir, ".artifactdb"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundleDir, ".artifactdb", "x.json"), []byte(`{"id":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	root := filepath.Join(dir, "fake-s3")
+	logFile := filepath.Join(dir, "calls.log")
+	fakeS5 := filepath.Join(dir, "s5cmd")
+	writeFakeS5cmdFS(t, fakeS5, root, logFile)
+
+	if _, err := runPublishBundleUpload(fakeS5, bundleDir, "s3://bucket/prefix/v1"); err != nil {
+		t.Fatalf("runPublishBundleUpload: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(root, "bucket/prefix/v1/.exohub-bundle/bundle.json")); err != nil {
+		t.Errorf("expected bundle.json uploaded, got: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "bucket/prefix/v1/.exohub-bundle/.artifactdb/x.json")); !os.IsNotExist(err) {
+		t.Errorf("expected .artifactdb/x.json to be excluded from the Atlas upload, stat err = %v", err)
+	}
+
+	lines := readLogLines(t, logFile)
+	var sawExclude bool
+	for _, line := range lines {
+		if strings.HasPrefix(line, "sync ") && strings.Contains(line, "--exclude .artifactdb/*") {
+			sawExclude = true
+		}
+	}
+	if !sawExclude {
+		t.Errorf("expected the bundle sync call to carry --exclude .artifactdb/*, got: %v", lines)
+	}
+}
+
+// TestRunPublishBundleUpload_SelfHealsPreExistingStalePrefix verifies that a
+// pre-existing <s3Base>/.exohub-bundle/.artifactdb/ object (left by a
+// publish made with a pre-fix exo-cli) is removed during the upload, via an
+// 's5cmd rm' for exactly that prefix. Mutation check: dropping the
+// cleanupStaleBundleArtifactDB call from runPublishBundleUpload makes this
+// FAIL, since the stray object would still be present afterwards.
+func TestRunPublishBundleUpload_SelfHealsPreExistingStalePrefix(t *testing.T) {
+	bundleDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bundleDir, "bundle.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	root := filepath.Join(dir, "fake-s3")
+	logFile := filepath.Join(dir, "calls.log")
+	fakeS5 := filepath.Join(dir, "s5cmd")
+	writeFakeS5cmdFS(t, fakeS5, root, logFile)
+
+	staleObject := filepath.Join(root, "bucket/prefix/v1/.exohub-bundle/.artifactdb/old.json")
+	if err := os.MkdirAll(filepath.Dir(staleObject), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(staleObject, []byte(`{"stale":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// An unrelated object at the legitimate instance path must survive.
+	liveObject := filepath.Join(root, "bucket/prefix/v1/.artifactdb/live.json")
+	if err := os.MkdirAll(filepath.Dir(liveObject), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(liveObject, []byte(`{"live":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runPublishBundleUpload(fakeS5, bundleDir, "s3://bucket/prefix/v1"); err != nil {
+		t.Fatalf("runPublishBundleUpload: %v", err)
+	}
+
+	if _, err := os.Stat(staleObject); !os.IsNotExist(err) {
+		t.Errorf("expected the stale nested .artifactdb/ object to be removed, stat err = %v", err)
+	}
+	if _, err := os.Stat(liveObject); err != nil {
+		t.Errorf("expected the legitimate instance-path object to survive, got: %v", err)
+	}
+}
+
+// TestRunPublishBundleUpload_NoOpCleanupWhenNoStalePrefix verifies the
+// cleanup issues no 'rm' when nothing is stale (the common, non-buggy
+// case), so a normal publish never issues a spurious delete.
+func TestRunPublishBundleUpload_NoOpCleanupWhenNoStalePrefix(t *testing.T) {
+	bundleDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bundleDir, "bundle.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	root := filepath.Join(dir, "fake-s3")
+	logFile := filepath.Join(dir, "calls.log")
+	fakeS5 := filepath.Join(dir, "s5cmd")
+	writeFakeS5cmdFS(t, fakeS5, root, logFile)
+
+	if _, err := runPublishBundleUpload(fakeS5, bundleDir, "s3://bucket/prefix/v1"); err != nil {
+		t.Fatalf("runPublishBundleUpload: %v", err)
+	}
+
+	for _, line := range readLogLines(t, logFile) {
+		if strings.HasPrefix(line, "rm ") {
+			t.Errorf("expected no 's5cmd rm' call when nothing is stale, got line: %q", line)
+		}
 	}
 }

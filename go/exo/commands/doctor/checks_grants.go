@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path"      // path (not filepath) for S3 key construction — avoids backslash on Windows
+	"path" // path (not filepath) for S3 key construction — avoids backslash on Windows
 	"path/filepath"
 	"strings"
 	"time"
@@ -19,6 +19,7 @@ import (
 	"github.com/Genentech/exohub/go/exo/commands/login"
 	"github.com/Genentech/exohub/go/exo/configdir"
 	"github.com/Genentech/exohub/go/exo/internal/credhelper"
+	"github.com/Genentech/exohub/go/useragent"
 )
 
 const groupGrants = "Grants & S3 Access"
@@ -54,14 +55,47 @@ func runGrantsChecks(repoDir, remoteFilter string, writeTest bool) []CheckResult
 	var results []CheckResult
 	for _, remote := range grantedRemotes {
 		// Pass repoDir so write-test uses the correct permissions file regardless of CWD.
-		results = append(results, checkRemoteGrants(repoDir, remote, tokenLoader, writeTest)...)
+		results = append(results, checkRemoteGrants(repoDir, remote, rf.Remotes, tokenLoader, writeTest)...)
 	}
 	return results
 }
 
-func checkRemoteGrants(repoDir string, remote remoteEntry, tokenLoader func() (string, error), writeTest bool) []CheckResult {
+// resolveSourceS3URL returns, for a role: instance remote, the s3url of its
+// resolved data_from Atlas remote (the delegate the server should authorize
+// credential requests against, since the instance bucket has no
+// _grants.json of its own) — mirroring initcmd.ResolveDelegationAtlas's
+// data_from-or-single-atlas resolution. Returns "" for role: atlas remotes
+// (and when no delegate can be resolved), so the check falls back to the
+// unscoped server request.
+func resolveSourceS3URL(remote remoteEntry, all []remoteEntry) string {
+	if remote.Role != "instance" {
+		return ""
+	}
+	if remote.DataFrom != "" {
+		for _, r := range all {
+			if r.Name == remote.DataFrom {
+				return r.S3URL
+			}
+		}
+		return ""
+	}
+	var atlases []remoteEntry
+	for _, r := range all {
+		if r.Type == "artifactdb" && (r.Role == "" || r.Role == "atlas") {
+			atlases = append(atlases, r)
+		}
+	}
+	if len(atlases) == 1 {
+		return atlases[0].S3URL
+	}
+	return ""
+}
+
+func checkRemoteGrants(repoDir string, remote remoteEntry, allRemotes []remoteEntry, tokenLoader func() (string, error), writeTest bool) []CheckResult {
 	prefix := fmt.Sprintf("grants.%s", remote.Name)
 	s3url := remote.S3URL
+	accountID := remote.GrantsAccountID
+	sourceS3URL := resolveSourceS3URL(remote, allRemotes)
 	ctx := context.Background()
 
 	var results []CheckResult
@@ -70,13 +104,13 @@ func checkRemoteGrants(repoDir string, remote remoteEntry, tokenLoader func() (s
 	results = append(results, checkGrantScope(prefix, remote))
 
 	// 2. GetDataAccess READ
-	results = append(results, checkGetDataAccess(ctx, prefix, s3url, "READ"))
+	results = append(results, checkGetDataAccess(ctx, prefix, s3url, accountID, "READ"))
 
 	// 3. GetDataAccess READWRITE
-	results = append(results, checkGetDataAccess(ctx, prefix, s3url, "READWRITE"))
+	results = append(results, checkGetDataAccess(ctx, prefix, s3url, accountID, "READWRITE"))
 
 	// 4. Server fallback (POST /api/grants/credentials) + vended principal
-	results = append(results, checkServerFallback(ctx, prefix, s3url, tokenLoader))
+	results = append(results, checkServerFallback(ctx, prefix, s3url, sourceS3URL, tokenLoader))
 
 	// 5. Write canary (opt-in)
 	if writeTest {
@@ -92,25 +126,36 @@ func checkGrantScope(prefix string, remote remoteEntry) CheckResult {
 	return pass(id, groupGrants, fmt.Sprintf("Remote %q s3url scope: %s", remote.Name, s3url))
 }
 
-func checkGetDataAccess(ctx context.Context, prefix, s3url, permission string) CheckResult {
-	id := fmt.Sprintf("%s.get-data-access-%s", prefix, strings.ToLower(permission))
+// accountLabel returns the account id used for display, falling back to
+// "default" when the remote has no grants_account_id (meaning
+// EXOHUB_GRANTS_ACCOUNT_ID or the build default resolves the account).
+func accountLabel(accountID string) string {
+	if accountID == "" {
+		return "default"
+	}
+	return accountID
+}
 
-	result, err := credhelper.GetDataAccess(ctx, "", "", s3url, permission, 900, nil)
+func checkGetDataAccess(ctx context.Context, prefix, s3url, accountID, permission string) CheckResult {
+	id := fmt.Sprintf("%s.get-data-access-%s", prefix, strings.ToLower(permission))
+	account := accountLabel(accountID)
+
+	result, err := credhelper.GetDataAccess(ctx, accountID, "", s3url, permission, 900, nil)
 	if err != nil {
 		if credhelper.IsMissingCredentialsError(err) {
 			return warn(id, groupGrants,
-				fmt.Sprintf("GetDataAccess(%s): no local AWS profile (exohub)", permission),
+				fmt.Sprintf("GetDataAccess(%s, account=%s): no local AWS profile (exohub)", permission, account),
 				Redact(err.Error()),
 				"Run 'exo login' to provision the exohub AWS profile")
 		}
 		if credhelper.IsAccessDeniedError(err) {
 			return fail(id, groupGrants,
-				fmt.Sprintf("GetDataAccess(%s): AccessDenied — no matching grant", permission),
+				fmt.Sprintf("GetDataAccess(%s, account=%s): AccessDenied — no matching grant", permission, account),
 				Redact(err.Error()),
 				"Run 'exo init' to provision grants, or ask a dataset owner to grant access")
 		}
 		return warn(id, groupGrants,
-			fmt.Sprintf("GetDataAccess(%s): %v", permission, err),
+			fmt.Sprintf("GetDataAccess(%s, account=%s): %v", permission, account, err),
 			Redact(err.Error()),
 			"Check VPN/network or run 'exo login'")
 	}
@@ -129,17 +174,21 @@ func checkGetDataAccess(ctx context.Context, prefix, s3url, permission string) C
 	if strings.EqualFold(permission, "READWRITE") {
 		if probeErr := probeS3Write(ctx, result.Credentials, s3url); probeErr != nil {
 			return fail(id, groupGrants,
-				fmt.Sprintf("GetDataAccess(%s): credentials vended but write probe denied — read-only creds", permission),
+				fmt.Sprintf("GetDataAccess(%s, account=%s): credentials vended but write probe denied — read-only creds", permission, account),
 				Redact(probeErr.Error()),
 				"Run 'exo init' to provision READWRITE grants, or ask a dataset owner to grant write access")
 		}
 	}
 
 	return pass(id, groupGrants,
-		fmt.Sprintf("GetDataAccess(%s) OK — role=%s%s", permission, result.GranteeType, expiry))
+		fmt.Sprintf("GetDataAccess(%s, account=%s) OK — role=%s%s", permission, account, result.GranteeType, expiry))
 }
 
-func checkServerFallback(ctx context.Context, prefix, s3url string, tokenLoader func() (string, error)) CheckResult {
+// checkServerFallback probes POST /api/grants/credentials. sourceS3URL,
+// when non-empty (role: instance remotes only), is carried as source_s3url
+// so the server authorizes against the source Atlas project's permissions
+// instead of the instance bucket (which has no _grants.json of its own).
+func checkServerFallback(ctx context.Context, prefix, s3url, sourceS3URL string, tokenLoader func() (string, error)) CheckResult {
 	id := prefix + ".server-fallback"
 
 	// Try READWRITE first, then READ, to determine the vended principal.
@@ -149,7 +198,7 @@ func checkServerFallback(ctx context.Context, prefix, s3url string, tokenLoader 
 	// sts:GetCallerIdentity with the vended credentials and report the real ARN
 	// (e.g. "arn:aws:sts::123:assumed-role/ExoHubLocationRole/..." vs
 	// "arn:aws:sts::123:assumed-role/<identity-role>/lelongs").
-	creds, err := credhelper.GetCredsFromServer(ctx, s3url, "READWRITE", tokenLoader, nil)
+	creds, err := credhelper.GetCredsFromServer(ctx, s3url, "READWRITE", sourceS3URL, tokenLoader, nil)
 	if err == nil {
 		// Verify the vended READWRITE credentials actually allow writes.
 		if probeErr := probeS3Write(ctx, creds, s3url); probeErr != nil {
@@ -162,6 +211,13 @@ func checkServerFallback(ctx context.Context, prefix, s3url string, tokenLoader 
 			"Server fallback READWRITE OK — vended principal: location role (write-capable)")
 	}
 
+	if remediation, ok := instanceSourceRefusalHint(err); ok {
+		return fail(id, groupGrants,
+			"Server fallback: instance remote refused",
+			Redact(err.Error()),
+			remediation)
+	}
+
 	if errors.Is(err, credhelper.ErrAuthRequired) {
 		return fail(id, groupGrants,
 			"Server fallback: not authenticated (401)",
@@ -170,13 +226,19 @@ func checkServerFallback(ctx context.Context, prefix, s3url string, tokenLoader 
 	}
 	if errors.Is(err, credhelper.ErrAccessDenied) {
 		// Try READ
-		creds, err2 := credhelper.GetCredsFromServer(ctx, s3url, "READ", tokenLoader, nil)
+		creds, err2 := credhelper.GetCredsFromServer(ctx, s3url, "READ", sourceS3URL, tokenLoader, nil)
 		if err2 == nil {
 			_ = creds
 			return warn(id, groupGrants,
 				"Server fallback READ OK but READWRITE denied — read-only access",
 				fmt.Sprintf("Vended principal: identity role (read-only). s3url=%s", s3url),
 				"Ask a dataset owner to grant you write access")
+		}
+		if remediation, ok := instanceSourceRefusalHint(err2); ok {
+			return fail(id, groupGrants,
+				"Server fallback: instance remote refused",
+				Redact(err2.Error()),
+				remediation)
 		}
 		return fail(id, groupGrants,
 			"Server fallback: access denied for both READ and READWRITE",
@@ -189,6 +251,31 @@ func checkServerFallback(ctx context.Context, prefix, s3url string, tokenLoader 
 		"Server fallback API unreachable",
 		Redact(err.Error()),
 		"Check VPN connection. The server fallback requires VPN access.")
+}
+
+// instanceSourceRefusalHint recognizes the API's instance-remote-specific
+// refusals from authorize_instance_project (exo-cli#195, exohub-workers!651)
+// — a source_s3url pointing at the wrong source project, a first-claim
+// refusal on a project with no recorded source yet, or an old client that
+// omitted source_s3url entirely — and returns an actionable remediation
+// distinct from the generic "ask a dataset owner" hint.
+func instanceSourceRefusalHint(err error) (string, bool) {
+	if err == nil {
+		return "", false
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "bound to a different source"):
+		return "This instance project is bound to a different source project — check data_from/the Atlas remote's s3url in .exohub/remotes", true
+	case strings.Contains(msg, "has no recorded source yet"):
+		return "This instance project has not been claimed yet — a READWRITE request with write access on the source is required to claim it", true
+	case strings.Contains(msg, "does not match instance project_id"):
+		return "data_from's Atlas s3url must end with the instance's project_id segment — check .exohub/remotes", true
+	case strings.Contains(msg, "source_s3url is required"):
+		return "Your exo/credential helper predates this server; upgrade", true
+	default:
+		return "", false
+	}
 }
 
 // probeS3Write performs a zero-byte PutObject + DeleteObject canary write to
@@ -220,6 +307,7 @@ func probeS3Write(ctx context.Context, creds *credhelper.Credentials, s3url stri
 				SessionToken:    creds.SessionToken,
 			}, nil
 		})),
+		awsconfig.WithAppID(useragent.AppID()),
 	)
 	if err != nil {
 		return fmt.Errorf("cannot build AWS config: %w", err)

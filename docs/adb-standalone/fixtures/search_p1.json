@@ -1,144 +1,127 @@
 {
     "count": 2,
-    "next": "/scroll/4xnz5i6wlmt7ju6q587n",
+    "next": "/scroll/deterministic-test-scroll-id",
     "results": [
         {
             "_extra": {
-                "$schema": "exohub-commit/v1.json",
-                "artipack": {
-                    "coordinates": [
-                        92,
-                        490
-                    ],
-                    "member": "commits/8c014bcb6e6cba9167f233f038335580083f955f.json",
-                    "path": "perturbation-maps/dld1-nf-v26/_catalog/v0.0.3/.exohub-bundle/0.artipack"
-                },
-                "file_size": 842,
-                "gprn": "gprn:wip:adb::artifact:dld1-nf-v26:8c014bcb6e6cba9167f233f038335580083f955f.json@v0.0.3",
-                "id": "dld1-nf-v26:8c014bcb6e6cba9167f233f038335580083f955f.json@v0.0.3",
-                "index_name": "adb-standalone-v1-exohub-20260415",
-                "latest": true,
-                "location": {
-                    "s3": {
-                        "bucket": "example-bucket"
-                    },
-                    "type": "s3"
-                },
-                "meta_indexed": "2026-07-17T00:52:15.720574+00:00",
-                "meta_uploaded": "2026-07-17T00:52:10+00:00",
-                "metapath": "8c014bcb6e6cba9167f233f038335580083f955f.json",
-                "permissions": {
-                    "owners": [
-                        "aboyounp"
-                    ],
-                    "read_access": "public",
-                    "scope": "project",
-                    "write_access": "owners"
-                },
-                "project_id": "dld1-nf-v26",
-                "tenant": {
-                    "alias": "exohub",
-                    "path": "/exohub"
-                },
-                "type": "exohub commit",
-                "uploaded": "2026-07-17T00:52:10+00:00",
-                "version": "v0.0.3"
-            },
-            "author_date": "2026-07-17T00:36:39+00:00",
-            "author_email": "patrickaboyoun@example.com",
-            "author_name": "Patrick Aboyoun",
-            "body": "",
-            "committer_date": "2026-07-17T00:36:39+00:00",
-            "committer_email": "patrickaboyoun@example.com",
-            "committer_name": "Patrick Aboyoun",
-            "git_files": [
-                ".exohub/bundles/main/0.artipack",
-                ".exohub/bundles/main/bundle.json",
-                ".exohub/bundles/v0.0.2/0.artipack",
-                ".exohub/bundles/v0.0.2/bundle.json"
-            ],
-            "hash": "8c014bcb6e6cba9167f233f038335580083f955f",
-            "id": {
-                "ID": "dld1-nf-v26:8c014bcb6e6cba9167f233f038335580083f955f.json@v0.0.3",
-                "Table": "document"
-            },
-            "parents": [
-                "ec05fab08a35bfd86bda4a46114b82f5c6f2d773"
-            ],
-            "path": "8c014bcb6e6cba9167f233f038335580083f955f.json",
-            "ref": "8c014bcb6e6cba9167f233f038335580083f955f",
-            "repo_url": "git@github.com:example-org/dld1-nf-v26.git",
-            "subject": "trying publish a second time v0.0.2"
-        },
-        {
-            "_extra": {
                 "$schema": "exohub-artifact/v1.json",
-                "artipack": {
-                    "coordinates": [
-                        652,
-                        1169
-                    ],
-                    "member": "files/DS000020633/experiment_main/assay_counts/__sample__group__=1/__feature__group__=1/part-0.parquet.json",
-                    "path": "perturbation-maps/dld1-nf-v26/_catalog/v0.0.3/.exohub-bundle/0.artipack"
-                },
-                "file_size": 1167,
-                "gprn": "gprn:wip:adb::artifact:dld1-nf-v26:DS000020633/experiment_main/assay_counts/__sample__group__=1/__feature__group__=1/part-0.parquet@v0.0.3",
-                "id": "dld1-nf-v26:DS000020633/experiment_main/assay_counts/__sample__group__=1/__feature__group__=1/part-0.parquet@v0.0.3",
-                "index_name": "adb-standalone-v1-exohub-20260415",
-                "latest": true,
+                "file_size": null,
+                "gprn": "gprn:wip:adb::artifact:sample-app:assets/icons/logo.svg@v2.0.0",
+                "id": "sample-app:assets/icons/logo.svg@v2.0.0",
+                "index_name": "adb-standalone-genfixtures-v1",
+                "latest": false,
                 "location": {
                     "s3": {
                         "bucket": "example-bucket"
                     },
                     "type": "s3"
                 },
-                "meta_indexed": "2026-07-17T00:52:15.667142+00:00",
-                "meta_uploaded": "2026-07-17T00:52:10+00:00",
-                "metapath": "part-0.parquet.json",
+                "meta_indexed": "2026-01-27T01:47:59Z",
+                "meta_uploaded": "2026-01-27T01:47:59Z",
+                "metapath": "files/assets/icons/logo.svg.json",
                 "permissions": {
                     "owners": [
-                        "aboyounp"
+                        "example-user"
                     ],
                     "read_access": "public",
                     "scope": "project",
                     "write_access": "owners"
                 },
-                "project_id": "dld1-nf-v26",
+                "project_id": "sample-app",
                 "tenant": {
                     "alias": "exohub",
                     "path": "/exohub"
                 },
                 "type": "exohub artifact",
-                "uploaded": "2026-07-17T00:52:10+00:00",
-                "version": "v0.0.3"
+                "version": "v2.0.0"
             },
             "backend": "SHA256E",
             "id": {
-                "ID": "dld1-nf-v26:DS000020633/experiment_main/assay_counts/__sample__group__=1/__feature__group__=1/part-0.parquet@v0.0.3",
+                "ID": "sample-app:assets/icons/logo.svg@v2.0.0",
                 "Table": "document"
             },
-            "key": "SHA256E-s126333352--256110b5ae38853576f95b07ea5b1f6020f17d9f27820e6df2882cd33e879e49",
+            "key": "SHA256E-s27715--40401b83c1e947738136c237a93f72fd9c960fb7",
             "locations": [
                 {
                     "chunks": [
                         {
-                            "chunk_key": "SHA256E-s126333352-S1073741824-C1--256110b5ae38853576f95b07ea5b1f6020f17d9f27820e6df2882cd33e879e49",
+                            "chunk_key": "SHA256E-s27715-S1073741824-C1--6e7832440ef66d1e2ffccb2257dd9634e1abac05",
                             "chunk_number": 1,
-                            "chunk_size": 126333350,
-                            "s3_path": "s3://genomicsplatform-datasetdb-usw2-prd-1256/modl/perturbation-maps/dld1-nf-v26/_annex/SHA256E-s126333352-S1073741824-C1--256110b5ae38853576f95b07ea5b1f6020f17d9f27820e6df2882cd33e879e49"
+                            "chunk_size": 27715,
+                            "s3_path": "s3://example-bucket/annex/sample-app/SHA256E-s27715-S1073741824-C1--6e7832440ef66d1e2ffccb2257dd9634e1abac05"
                         }
                     ],
                     "remote": "s3-annex",
-                    "s3url": "s3://genomicsplatform-datasetdb-usw2-prd-1256/modl/perturbation-maps/dld1-nf-v26/_annex",
+                    "s3url": "s3://example-bucket/annex/sample-app",
                     "type": "annex",
-                    "uuid": "5211f49c-e9ec-4b78-b90c-6d4b5b0daba2"
+                    "uuid": "479bb60d-6667-f1c8-ff09-956f5d082507"
                 }
             ],
-            "path": "DS000020633/experiment_main/assay_counts/__sample__group__=1/__feature__group__=1/part-0.parquet",
-            "ref": "8c014bcb6e6cba9167f233f038335580083f955f",
-            "repo_url": "git@github.com:example-org/dld1-nf-v26.git",
-            "size": 126333350
+            "path": "assets/icons/logo.svg",
+            "ref": "3a0073922db0cc96d584530b83a715c7bd90c0af",
+            "repo_url": "git@github.com:example-org/sample-app.git",
+            "size": 27715
+        },
+        {
+            "_extra": {
+                "$schema": "exohub-artifact/v1.json",
+                "file_size": null,
+                "gprn": "gprn:wip:adb::artifact:sample-app:assets/icons/logo.svg@v2.0.1",
+                "id": "sample-app:assets/icons/logo.svg@v2.0.1",
+                "index_name": "adb-standalone-genfixtures-v1",
+                "latest": false,
+                "location": {
+                    "s3": {
+                        "bucket": "example-bucket"
+                    },
+                    "type": "s3"
+                },
+                "meta_indexed": "2026-09-08T00:15:57Z",
+                "meta_uploaded": "2026-09-08T00:15:57Z",
+                "metapath": "files/assets/icons/logo.svg.json",
+                "permissions": {
+                    "owners": [
+                        "example-user"
+                    ],
+                    "read_access": "public",
+                    "scope": "project",
+                    "write_access": "owners"
+                },
+                "project_id": "sample-app",
+                "tenant": {
+                    "alias": "exohub",
+                    "path": "/exohub"
+                },
+                "type": "exohub artifact",
+                "version": "v2.0.1"
+            },
+            "backend": "SHA256E",
+            "id": {
+                "ID": "sample-app:assets/icons/logo.svg@v2.0.1",
+                "Table": "document"
+            },
+            "key": "SHA256E-s28263--3d1d874cf8c3e582ad884099d63f1ac5819d88af",
+            "locations": [
+                {
+                    "chunks": [
+                        {
+                            "chunk_key": "SHA256E-s28263-S1073741824-C1--d8132986b8fac5e067f271ae0bb15fae403b87d8",
+                            "chunk_number": 1,
+                            "chunk_size": 28263,
+                            "s3_path": "s3://example-bucket/annex/sample-app/SHA256E-s28263-S1073741824-C1--d8132986b8fac5e067f271ae0bb15fae403b87d8"
+                        }
+                    ],
+                    "remote": "s3-annex",
+                    "s3url": "s3://example-bucket/annex/sample-app",
+                    "type": "annex",
+                    "uuid": "1ff07b9e-ebbc-fb6f-1a03-dfb92f13b497"
+                }
+            ],
+            "path": "assets/icons/logo.svg",
+            "ref": "cbed293e03dd2294ffaa4d6c71e6e132f9a8a629",
+            "repo_url": "git@github.com:example-org/sample-app.git",
+            "size": 28263
         }
     ],
-    "total": 600
+    "total": 90
 }

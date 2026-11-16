@@ -70,7 +70,11 @@ type Record struct {
 	GeneratedAtTime string            `json:"generatedAtTime"`
 	Evidence        string            `json:"exo:evidence,omitempty"`
 	Supersedes      []string          `json:"exo:supersedes,omitempty"`
-	Graph           []Node            `json:"@graph"`
+	// MinVersion is exo:minVersion (design D1): the minimum exo version that
+	// understands every term this record uses. Empty when the record uses
+	// only original v1 terms.
+	MinVersion string `json:"exo:minVersion,omitempty"`
+	Graph      []Node `json:"@graph"`
 }
 
 // recordWire mirrors Record but keeps @context, exo:assertedBy and
@@ -87,6 +91,7 @@ type recordWire struct {
 	GeneratedAtTime string            `json:"generatedAtTime"`
 	Evidence        string            `json:"exo:evidence,omitempty"`
 	Supersedes      []json.RawMessage `json:"exo:supersedes,omitempty"`
+	MinVersion      string            `json:"exo:minVersion,omitempty"`
 	Graph           []Node            `json:"@graph"`
 }
 
@@ -181,6 +186,7 @@ func Parse(data []byte) (*Record, error) {
 		GeneratedAtTime: wire.GeneratedAtTime,
 		Evidence:        wire.Evidence,
 		Supersedes:      supersedes,
+		MinVersion:      wire.MinVersion,
 		Graph:           wire.Graph,
 	}
 	if err := r.validateEnvelope(); err != nil {
@@ -275,6 +281,7 @@ func Serialize(r *Record) ([]byte, error) {
 		GeneratedAtTime string    `json:"generatedAtTime"`
 		Evidence        string    `json:"exo:evidence,omitempty"`
 		Supersedes      []string  `json:"exo:supersedes,omitempty"`
+		MinVersion      string    `json:"exo:minVersion,omitempty"`
 		Graph           []Node    `json:"@graph"`
 	}{
 		Context:         context,
@@ -284,6 +291,7 @@ func Serialize(r *Record) ([]byte, error) {
 		GeneratedAtTime: r.GeneratedAtTime,
 		Evidence:        r.Evidence,
 		Supersedes:      append([]string(nil), r.Supersedes...),
+		MinVersion:      r.MinVersion,
 		Graph:           graph,
 	}
 	sort.Strings(out.Supersedes)

@@ -10,6 +10,8 @@ DOCKER_REPOSITORY = 347633553755.dkr.ecr.us-west-2.amazonaws.com
 DOCKER_LOCAL_REPOSITORY = localhost:5000
 ATLAS_IMAGE = gp/exohub-atlas
 
+GO_TEST_TIMEOUT ?= 20m
+
 .PHONY: exocli exocli-version exo-serve-assets image push dev-push git-annex-remote-s5cmd git-annex-remote-artifactdb-export git-annex-remote-drive exo-credential-helper adb-capture adb-standalone binaries build test test-integration test-integration-coverage test-all test-all-coverage test-coverage-html test-all-coverage-html leak-scan oss-export oss-export-skip-verify oss-sync oss-sync-dry-run
 exocli:
 	@mkdir -p bin .gocache
@@ -99,11 +101,11 @@ test:
 	@bash scripts/test-install-version-normalization.sh
 	@mkdir -p .gocache .coverage
 	@printf "go 1.24.0\n\nuse (\n\t../go/exo\n\t../go/git-annex-remote-s5cmd\n\t../go/git-annex-remote-artifactdb-export\n\t../go/exo-credential-helper\n)\n" > .coverage/go.work
-	(cd go/exo && GOCACHE=$(CURDIR)/.gocache go test -coverprofile=../../.coverage/exo.out ./...)
-	(cd go/exo && GOCACHE=$(CURDIR)/.gocache go test -tags artifactdb -coverprofile=../../.coverage/exo-artifactdb.out ./...)
-	(cd go/git-annex-remote-s5cmd && GOCACHE=$(CURDIR)/.gocache go test -coverprofile=../../.coverage/s5cmd.out ./...)
-	(cd go/git-annex-remote-artifactdb-export && GOCACHE=$(CURDIR)/.gocache go test -tags artifactdb -coverprofile=../../.coverage/artifactdb-export.out ./...)
-	(cd go/exo-credential-helper && GOCACHE=$(CURDIR)/.gocache go test -coverprofile=../../.coverage/credential-helper.out ./...)
+	(cd go/exo && GOCACHE=$(CURDIR)/.gocache go test -timeout $(GO_TEST_TIMEOUT) -coverprofile=../../.coverage/exo.out ./...)
+	(cd go/exo && GOCACHE=$(CURDIR)/.gocache go test -timeout $(GO_TEST_TIMEOUT) -tags artifactdb -coverprofile=../../.coverage/exo-artifactdb.out ./...)
+	(cd go/git-annex-remote-s5cmd && GOCACHE=$(CURDIR)/.gocache go test -timeout $(GO_TEST_TIMEOUT) -coverprofile=../../.coverage/s5cmd.out ./...)
+	(cd go/git-annex-remote-artifactdb-export && GOCACHE=$(CURDIR)/.gocache go test -timeout $(GO_TEST_TIMEOUT) -tags artifactdb -coverprofile=../../.coverage/artifactdb-export.out ./...)
+	(cd go/exo-credential-helper && GOCACHE=$(CURDIR)/.gocache go test -timeout $(GO_TEST_TIMEOUT) -coverprofile=../../.coverage/credential-helper.out ./...)
 	@printf "mode: set\n" > coverage.out
 	@tail -n +2 .coverage/exo.out >> coverage.out
 	@tail -n +2 .coverage/exo-artifactdb.out >> coverage.out
@@ -160,6 +162,7 @@ test-integration:
 	@scripts/integration/info_display.sh
 	@scripts/integration/context_management.sh
 	@scripts/integration/broadcast_message.sh
+	@scripts/integration/broadcast_unpushed.sh
 	@scripts/integration/pull_content.sh
 	@scripts/integration/copy_remotes.sh
 	@scripts/integration/sync_import_dryrun.sh

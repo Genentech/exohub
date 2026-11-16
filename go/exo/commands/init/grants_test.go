@@ -335,12 +335,20 @@ write_access: owners
 		[]byte(`{"access_token":"`+fakeJWT+`","token_type":"Bearer"}`), 0600)
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
-	err := syncGrantsForRemote("s3://bucket/prefix/")
+	var err error
+	output := captureStdout(t, func() {
+		err = syncGrantsForRemote("s3://bucket/prefix/")
+	})
 	if err != nil {
 		t.Fatalf("expected nil for non-owner with read_access:public, got: %v", err)
 	}
 	if apiCalled {
 		t.Error("grants API must not be called when non-owner reads a public dataset")
+	}
+	// exo-cli#197: a skipped grants sync is never silent — it names
+	// --force-grants-sync as the override that would sync it.
+	if !strings.Contains(output, "WARNING") || !strings.Contains(output, "--force-grants-sync") {
+		t.Errorf("expected an explicit WARNING naming --force-grants-sync, got: %q", output)
 	}
 }
 
@@ -833,7 +841,7 @@ func TestHasGrantsWriteAccess_PassesVerifyAndNoCache(t *testing.T) {
 	}
 	t.Setenv("EXO_CREDENTIAL_HELPER_BIN", script)
 
-	got := hasGrantsWriteAccess("s3://bucket/prefix/")
+	got := hasGrantsWriteAccess("s3://bucket/prefix/", "", "")
 	if !got {
 		t.Error("expected true when helper exits 0")
 	}
@@ -851,6 +859,78 @@ func TestHasGrantsWriteAccess_PassesVerifyAndNoCache(t *testing.T) {
 	}
 }
 
+// TestHasGrantsWriteAccess_PassesAccountID verifies that hasGrantsWriteAccess
+// passes --account-id to the credential helper when the remote has a
+// grants_account_id set, and omits it otherwise.
+func TestHasGrantsWriteAccess_PassesAccountID(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fake-cred-helper")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"$@\" > \""+dir+"/args.txt\"\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("EXO_CREDENTIAL_HELPER_BIN", script)
+
+	if !hasGrantsWriteAccess("s3://bucket/prefix/", "111122223333", "") {
+		t.Error("expected true when helper exits 0")
+	}
+	argsData, err := os.ReadFile(filepath.Join(dir, "args.txt"))
+	if err != nil {
+		t.Fatalf("helper was not called: %v", err)
+	}
+	args := strings.TrimSpace(string(argsData))
+	if !strings.Contains(args, "--account-id 111122223333") {
+		t.Errorf("expected --account-id 111122223333 in helper args, got: %q", args)
+	}
+
+	if !hasGrantsWriteAccess("s3://bucket/prefix/", "", "") {
+		t.Error("expected true when helper exits 0")
+	}
+	argsData, err = os.ReadFile(filepath.Join(dir, "args.txt"))
+	if err != nil {
+		t.Fatalf("helper was not called: %v", err)
+	}
+	args = strings.TrimSpace(string(argsData))
+	if strings.Contains(args, "--account-id") {
+		t.Errorf("expected no --account-id when grants_account_id is unset, got: %q", args)
+	}
+}
+
+// TestHasGrantsWriteAccess_PassesSourceS3URL verifies that hasGrantsWriteAccess
+// passes --source-s3url to the credential helper when set, and omits it
+// otherwise.
+func TestHasGrantsWriteAccess_PassesSourceS3URL(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "fake-cred-helper")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"$@\" > \""+dir+"/args.txt\"\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("EXO_CREDENTIAL_HELPER_BIN", script)
+
+	if !hasGrantsWriteAccess("s3://instance-bucket/proj", "", "s3://atlas-bucket/prefix/") {
+		t.Error("expected true when helper exits 0")
+	}
+	argsData, err := os.ReadFile(filepath.Join(dir, "args.txt"))
+	if err != nil {
+		t.Fatalf("helper was not called: %v", err)
+	}
+	args := strings.TrimSpace(string(argsData))
+	if !strings.Contains(args, "--source-s3url s3://atlas-bucket/prefix/") {
+		t.Errorf("expected --source-s3url s3://atlas-bucket/prefix/ in helper args, got: %q", args)
+	}
+
+	if !hasGrantsWriteAccess("s3://atlas-bucket/prefix/", "", "") {
+		t.Error("expected true when helper exits 0")
+	}
+	argsData, err = os.ReadFile(filepath.Join(dir, "args.txt"))
+	if err != nil {
+		t.Fatalf("helper was not called: %v", err)
+	}
+	args = strings.TrimSpace(string(argsData))
+	if strings.Contains(args, "--source-s3url") {
+		t.Errorf("expected no --source-s3url when unset, got: %q", args)
+	}
+}
+
 // TestHasGrantsWriteAccess_ReturnsFalseOnWriteProbeFailure verifies that
 // hasGrantsWriteAccess returns false when the credential helper exits non-zero
 // (as it will when --verify detects that the vended creds are read-only).
@@ -862,7 +942,7 @@ func TestHasGrantsWriteAccess_ReturnsFalseOnWriteProbeFailure(t *testing.T) {
 	}
 	t.Setenv("EXO_CREDENTIAL_HELPER_BIN", script)
 
-	got := hasGrantsWriteAccess("s3://bucket/prefix/")
+	got := hasGrantsWriteAccess("s3://bucket/prefix/", "", "")
 	if got {
 		t.Error("expected false when helper exits 1 (write probe failure)")
 	}

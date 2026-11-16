@@ -169,3 +169,43 @@ func TestDocsURL_Builtin(t *testing.T) {
 		t.Errorf("DocsURL() = %q, want builtin %q", got, builtinDocsURL)
 	}
 }
+
+func TestManPageBaseURL_DerivedFromDocsURL(t *testing.T) {
+	t.Setenv("EXOHUB_DOCS_URL", "https://docs.example.com/llms.txt")
+	got := ManPageBaseURL()
+	if got != "https://docs.example.com" {
+		t.Errorf("ManPageBaseURL() = %q, want %q", got, "https://docs.example.com")
+	}
+}
+
+// TestEXOHUBDocsURL_OverrideFlowsIntoBothFooters is the single knob
+// guarantee: setting EXOHUB_DOCS_URL must move both the agent llms.txt
+// footer (DocsURL) and the man-page base (ManPageBaseURL) together, so they
+// can never drift apart.
+func TestEXOHUBDocsURL_OverrideFlowsIntoBothFooters(t *testing.T) {
+	t.Setenv("EXOHUB_DOCS_URL", "https://internal.example.com/docs/llms.txt")
+
+	if got := DocsURL(); got != "https://internal.example.com/docs/llms.txt" {
+		t.Errorf("DocsURL() = %q, want %q", got, "https://internal.example.com/docs/llms.txt")
+	}
+	if got := ManPageBaseURL(); got != "https://internal.example.com/docs" {
+		t.Errorf("ManPageBaseURL() = %q, want %q", got, "https://internal.example.com/docs")
+	}
+}
+
+func TestManPageBaseURL_DerivedFromDocsURL_NoLlmsTxtSuffix(t *testing.T) {
+	t.Setenv("EXOHUB_DOCS_URL", "https://docs.example.com/some/dir/index.txt")
+	got := ManPageBaseURL()
+	if got != "https://docs.example.com/some/dir" {
+		t.Errorf("ManPageBaseURL() = %q, want %q", got, "https://docs.example.com/some/dir")
+	}
+}
+
+func TestManPageBaseURL_Builtin(t *testing.T) {
+	t.Setenv("EXOHUB_DOCS_URL", "")
+	got := ManPageBaseURL()
+	want := strings.TrimSuffix(builtinDocsURL, "/llms.txt")
+	if got != want {
+		t.Errorf("ManPageBaseURL() = %q, want builtin-derived %q", got, want)
+	}
+}

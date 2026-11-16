@@ -17,6 +17,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 
 	"golang.org/x/oauth2"
+
+	"github.com/Genentech/exohub/go/useragent"
 )
 
 // oidcProvider implements Provider using the OIDC device flow + STS.
@@ -114,6 +116,7 @@ func (p *oidcProvider) Refresh(ctx context.Context, refreshToken string) (Tokens
 func (p *oidcProvider) FetchAWSCredentials(ctx context.Context, idToken string) (AWSCredentials, error) {
 	cfg, err := awsconfig.LoadDefaultConfig(ctx,
 		awsconfig.WithRegion(p.cfg.AWS.Region),
+		awsconfig.WithAppID(useragent.AppID()),
 	)
 	if err != nil {
 		return AWSCredentials{}, fmt.Errorf("failed to load AWS config: %w", err)

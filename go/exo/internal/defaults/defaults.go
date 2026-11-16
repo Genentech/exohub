@@ -132,3 +132,21 @@ func DocsURL() string {
 	}
 	return builtinDocsURL
 }
+
+// ManPageBaseURL returns the site root under which generated CLI man pages
+// live, used to compute per-command manual URLs (<base>/docs/reference/cli/<cmd>/).
+// Derived from DocsURL() (EXOHUB_DOCS_URL env → built-in) by dropping the
+// trailing "/llms.txt" index file, so there is a single knob for both the
+// agent docs footer and the man-page URLs.
+func ManPageBaseURL() string {
+	docs := strings.TrimRight(DocsURL(), "/")
+	if base := strings.TrimSuffix(docs, "/llms.txt"); base != docs {
+		return base
+	}
+	// DocsURL doesn't end in /llms.txt (e.g. a custom override): fall back to
+	// the directory containing it.
+	if i := strings.LastIndex(docs, "/"); i > 0 {
+		return docs[:i]
+	}
+	return docs
+}
