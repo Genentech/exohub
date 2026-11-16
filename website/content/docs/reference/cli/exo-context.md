@@ -3,7 +3,7 @@ title: "exo context"
 description: "Manage git host configurations"
 ---
 
-Full `exo context --help` output, generated from exo-cli v0.140.2.
+Full `exo context --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Manage context configurations for git hosts and organizations used by exo init

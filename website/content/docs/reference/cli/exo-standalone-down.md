@@ -3,7 +3,7 @@ title: "exo standalone down"
 description: "Stop the adb-standalone stack"
 ---
 
-Full `exo standalone down --help` output, generated from exo-cli v0.140.2.
+Full `exo standalone down --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Stop the adb-standalone stack

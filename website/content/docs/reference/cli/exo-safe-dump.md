@@ -3,7 +3,7 @@ title: "exo safe dump"
 description: "Dump all credentials to a file"
 ---
 
-Full `exo safe dump --help` output, generated from exo-cli v0.140.2.
+Full `exo safe dump --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Export all ExoSafe credentials to a JSON file for backup or migration.

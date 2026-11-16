@@ -3,7 +3,7 @@ title: "exo whoami"
 description: "Show who you're logged in as, session info, and AWS credentials"
 ---
 
-Full `exo whoami --help` output, generated from exo-cli v0.140.2.
+Full `exo whoami --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Show identity, session, organisation, and AWS credential info from the

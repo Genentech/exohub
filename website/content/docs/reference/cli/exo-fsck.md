@@ -3,7 +3,7 @@ title: "exo fsck"
 description: "Inspect annex logs and repair bad files"
 ---
 
-Full `exo fsck --help` output, generated from exo-cli v0.140.2.
+Full `exo fsck --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Inspect annex logs and repair bad files.

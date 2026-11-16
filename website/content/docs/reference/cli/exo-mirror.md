@@ -3,7 +3,7 @@ title: "exo mirror"
 description: "Resolve annex keys and mirror them from S3"
 ---
 
-Full `exo mirror --help` output, generated from exo-cli v0.140.2.
+Full `exo mirror --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Resolve annex keys under repo paths and fetch them from S3 via s5cmd.

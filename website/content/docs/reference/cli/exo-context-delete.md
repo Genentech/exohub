@@ -3,7 +3,7 @@ title: "exo context delete"
 description: "Delete a context"
 ---
 
-Full `exo context delete --help` output, generated from exo-cli v0.140.2.
+Full `exo context delete --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Delete a context

@@ -3,7 +3,7 @@ title: "exo heartbeat"
 description: "Record and show heartbeat metrics"
 ---
 
-Full `exo heartbeat --help` output, generated from exo-cli v0.140.2.
+Full `exo heartbeat --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Record and show heartbeat metrics.

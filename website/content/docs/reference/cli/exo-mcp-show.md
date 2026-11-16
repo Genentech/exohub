@@ -3,7 +3,7 @@ title: "exo mcp show"
 description: "Show full details for a tool"
 ---
 
-Full `exo mcp show --help` output, generated from exo-cli v0.140.2.
+Full `exo mcp show --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Show full details for a tool

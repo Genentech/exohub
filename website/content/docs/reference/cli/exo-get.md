@@ -3,7 +3,7 @@ title: "exo get"
 description: "Get annexed content (wrapper around git-annex get with sensible defaults)"
 ---
 
-Full `exo get --help` output, generated from exo-cli v0.140.2.
+Full `exo get --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Get annexed content from remotes into the local repository.

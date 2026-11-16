@@ -3,7 +3,7 @@ title: "exo provenance"
 description: "Record and inspect data lineage"
 ---
 
-Full `exo provenance --help` output, generated from exo-cli v0.140.2.
+Full `exo provenance --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Record and inspect data lineage as W3C PROV records.
@@ -31,6 +31,7 @@ Workflow for AI agents and scripts:
 
 Subcommands:
   add          Create a new provenance record
+  import       Import provenance a workflow engine already recorded
   validate     Validate provenance records
   show         Show an artifact's provenance lineage
   install-hook Install a pre-commit hook that runs validate --staged
@@ -41,6 +42,7 @@ Usage:
 
 Available Commands:
   add          Create a new provenance record
+  import       Import provenance a workflow engine already recorded
   install-hook Install a pre-commit hook that runs exo provenance validate --staged
   show         Show an artifact's provenance lineage
   validate     Validate provenance records

@@ -26,41 +26,52 @@ remotes:
     s3url: s3://bucket/dataset/_annex
 
   - name: my-catalog
-    type: artifactdb                    # ← catalog remote
-    mode: export                        # required: determines binary (git-annex-remote-artifactdb-export)
+    type: artifactdb                    # ← catalog remote (role: atlas, the default)
+    mode: export                        # required for role: atlas: determines binary (git-annex-remote-artifactdb-export)
     s3url: s3://bucket/dataset/_catalog
-    instance_url: {{< exohub "catalogURL" >}}
     grants: true
     publish_on: tag
+
+  - name: my-catalog-instance
+    type: artifactdb
+    role: instance                      # ← publishes .artifactdb/ to an ArtifactDB instance instead
+    url: {{< exohub "catalogURL" >}}
+    s3url: s3://bucket/dataset-project-id
 ```
 
-The `type` and `mode` fields together determine which binary handles the publishing. For `type: artifactdb` with `mode: export`, the CLI delegates to `git-annex-remote-artifactdb-export`. A future `mode: import` would use `git-annex-remote-artifactdb-import`.
+Each catalog remote has a **role**: `role: atlas` (the default) publishes the bundle (`.exohub-bundle/`) to an Atlas; `role: instance` publishes the git-tracked `.artifactdb/` directory to its own bucket and asks the ExoHub API to forward the ingest to an ArtifactDB instance. The two roles are separate remotes, never combined on one entry — see [Catalog Remote Publishing]({{< ref "syncing#catalog-remote-publishing" >}}) in the user guide for the full model, including the `data_from` delegation field, required fields per role, and migrating a pre-v0.141.0 single-remote config (`atlas_url`/`instance_url`) to this role-split one.
+
+The `type` and `mode` fields together determine which binary handles the publishing for a `role: atlas` remote. For `type: artifactdb` with `mode: export`, the CLI delegates to `git-annex-remote-artifactdb-export`. A future `mode: import` would use `git-annex-remote-artifactdb-import`. A `role: instance` remote takes no `mode` and is never a git-annex special remote — the ExoHub API forwards its ingest directly.
 
 ### The Publish Flow
 
-Publishing is triggered by `exo sync --with <catalog-remote>` and follows this chain:
+Publishing is triggered by `exo sync --with <catalog-remote>`. Every `role: atlas` remote publishes first; only once its delegation Atlas has been accepted does any `role: instance` remote publish (skipped, with a clear message, if the Atlas publish failed):
 
 ```
-exo sync --with my-catalog
+exo sync --with my-catalog --with my-catalog-instance
   │
-  └→ git-annex-remote-artifactdb-export publish
+  ├→ role: atlas remote "my-catalog" (git-annex-remote-artifactdb-export publish)
+  │    │
+  │    ├─ 📊 Read bundle metadata from .exohub/bundles/<ref>/
+  │    ├─ ☁️  Upload to S3 (s3url/<ref_name>/.exohub-bundle/)
+  │    ├─ 🔒 Upload permissions.json
+  │    ├─ 📡 Notify ExoHub API (POST /api/publish)
+  │    │     └→ ExoHub forwards to the Atlas (default, or this remote's `url`)
+  │    └─ ⚙️  Atlas triggers IngestWorkflow
+  │           ├─ Read metadata from S3
+  │           ├─ Index into search engine
+  │           └─ Store pointer for re-indexing
+  │
+  └→ role: instance remote "my-catalog-instance" (only if the Atlas above succeeded)
        │
-       ├─ 📊 Read bundle metadata from .exohub/bundles/<ref>/
-       ├─ ☁️  Upload to S3 (s3url/<ref_name>/)
-       │     ├─ .exohub-bundle/    (generic metadata: bundle.json, commits/, files/)
-       │     └─ .artifactdb/       (business metadata, if present)
+       ├─ ☁️  git-archive .artifactdb/ from the ref, upload to this remote's own S3 bucket
+       │       (s3url/<ref_name>/<meta_folder>/, per the instance's tenant config)
        ├─ 🔒 Upload permissions.json
-       ├─ 📡 Notify ExoHub API (POST /api/publish)
-       │     │
-       │     └→ ExoHub forwards to catalog targets:
-       │          ├─ Default: /exohub tenant (generic metadata)
-       │          └─ instance_url tenant (business metadata)
-       │
-       └─ ⚙️  Catalog triggers IngestWorkflow
-              ├─ Read metadata from S3
-              ├─ Index into search engine
-              └─ Store pointer for re-indexing
+       └─ 📡 Notify ExoHub API, which forwards the ingest to the instance's `url`
+              (`POST <url>/project/ingest`)
 ```
+
+Tag immutability and the source-repo guard apply to both roles: publishing a **tag** is refused if a remote already has a record naming a different commit (no flag, not even `--force`, bypasses this), and publishing the same project/version from a different repository than it was first published from is refused unless `--force`. See [Catalog Remote Publishing]({{< ref "syncing#catalog-remote-publishing" >}}) for the full guard semantics.
 
 ### Pluggable Protocol
 
@@ -165,10 +176,10 @@ ExoHub API                                    → track indexing progress
 
 {{< exohub "catalogName" >}} is a multi-tenant ArtifactDB instance. Each tenant manages a separate set of projects with its own storage and search index:
 
-- **`/exohub` tenant** — indexes generic bundle metadata (commits, files, locations). Always receives publications.
-- **Custom tenant** (e.g. `/cancerdb`) — indexes business metadata from `.artifactdb/`. Only receives publications when `instance_url` is configured on the remote.
+- **`/exohub` tenant (Atlas)** — indexes generic bundle metadata (commits, files, locations), fed by a `role: atlas` remote's `.exohub-bundle/`. Always receives publications from a `role: atlas` remote.
+- **Custom tenant** (e.g. `/cancerdb`) — an ArtifactDB instance that indexes business metadata from `.artifactdb/`, fed by a separate `role: instance` remote whose `url` points at that instance.
 
-The ExoHub API routes each publish notification to the appropriate tenants, appending the correct S3 subdirectory (`.exohub-bundle/` or `.artifactdb/`) per target.
+The ExoHub API routes each role's publish notification to its own target: a `role: atlas` remote's bundle to the Atlas, a `role: instance` remote's `.artifactdb/` upload to that instance's `/project/ingest` endpoint.
 
 ### Project Ownership
 

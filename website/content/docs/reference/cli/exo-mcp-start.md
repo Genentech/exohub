@@ -3,7 +3,7 @@ title: "exo mcp start"
 description: "Start the MCP server over stdio"
 ---
 
-Full `exo mcp start --help` output, generated from exo-cli v0.140.2.
+Full `exo mcp start --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Start a Model Context Protocol (MCP) server over stdio.

@@ -3,7 +3,7 @@ title: "exo context update"
 description: "Update an existing context"
 ---
 
-Full `exo context update --help` output, generated from exo-cli v0.140.2.
+Full `exo context update --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Update an existing context

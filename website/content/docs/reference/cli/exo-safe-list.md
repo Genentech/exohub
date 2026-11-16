@@ -3,7 +3,7 @@ title: "exo safe list"
 description: "List credentials in ExoSafe"
 ---
 
-Full `exo safe list --help` output, generated from exo-cli v0.140.2.
+Full `exo safe list --help` output, generated from exo-cli v0.145.1.
 
 ```text
 List credentials in ExoSafe

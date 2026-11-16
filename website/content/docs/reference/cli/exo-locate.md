@@ -3,7 +3,7 @@ title: "exo locate"
 description: "Show where files are stored (git, annex, remotes)"
 ---
 
-Full `exo locate --help` output, generated from exo-cli v0.140.2.
+Full `exo locate --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Show storage location and metadata for files.

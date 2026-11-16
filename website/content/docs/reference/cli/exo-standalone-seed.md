@@ -3,7 +3,7 @@ title: "exo standalone seed"
 description: "Bulk-load ADB documents from an NDJSON file"
 ---
 
-Full `exo standalone seed --help` output, generated from exo-cli v0.140.2.
+Full `exo standalone seed --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Bulk-load finished ADB documents into the running adb-standalone instance.

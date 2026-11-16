@@ -3,7 +3,7 @@ title: "exo init"
 description: "Initialize repository and remotes"
 ---
 
-Full `exo init --help` output, generated from exo-cli v0.140.2.
+Full `exo init --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Initialize repository and remotes.

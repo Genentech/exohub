@@ -3,7 +3,7 @@ title: "exo standalone up"
 description: "Bring up the full adb-standalone stack (foreground, supervised)"
 ---
 
-Full `exo standalone up --help` output, generated from exo-cli v0.140.2.
+Full `exo standalone up --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Launch and supervise the three-process adb-standalone stack:

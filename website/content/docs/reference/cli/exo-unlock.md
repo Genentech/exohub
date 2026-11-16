@@ -3,7 +3,7 @@ title: "exo unlock"
 description: "Unlock annexed files (make them writable)"
 ---
 
-Full `exo unlock --help` output, generated from exo-cli v0.140.2.
+Full `exo unlock --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Unlock annexed files, replacing read-only symlinks with writable copies.

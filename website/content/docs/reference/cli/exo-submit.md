@@ -3,7 +3,7 @@ title: "exo submit"
 description: "Submit a manifest to the ExoHub API"
 ---
 
-Full `exo submit --help` output, generated from exo-cli v0.140.2.
+Full `exo submit --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Submit a manifest to the ExoHub API.

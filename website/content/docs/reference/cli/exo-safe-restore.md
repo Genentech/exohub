@@ -3,7 +3,7 @@ title: "exo safe restore"
 description: "Restore credentials from a dump file"
 ---
 
-Full `exo safe restore --help` output, generated from exo-cli v0.140.2.
+Full `exo safe restore --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Import ExoSafe credentials from a JSON dump file.

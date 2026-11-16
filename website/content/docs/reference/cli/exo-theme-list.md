@@ -3,7 +3,7 @@ title: "exo theme list"
 description: "List available themes"
 ---
 
-Full `exo theme list --help` output, generated from exo-cli v0.140.2.
+Full `exo theme list --help` output, generated from exo-cli v0.145.1.
 
 ```text
 List available themes

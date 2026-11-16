@@ -3,7 +3,7 @@ title: "exo mcp list"
 description: "List available MCP tools"
 ---
 
-Full `exo mcp list --help` output, generated from exo-cli v0.140.2.
+Full `exo mcp list --help` output, generated from exo-cli v0.145.1.
 
 ```text
 List available MCP tools

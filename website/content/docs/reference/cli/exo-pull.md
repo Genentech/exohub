@@ -3,7 +3,7 @@ title: "exo pull"
 description: "Clone or update a repo at a ref"
 ---
 
-Full `exo pull --help` output, generated from exo-cli v0.140.2.
+Full `exo pull --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Clone or update a git repository at a specific ref.

@@ -195,9 +195,35 @@ Add `--json` for machine-readable output:
 exo sync --dry-run --json
 ```
 
+## Default Incremental History Upload
+
+A plain `exo sync` (no flags) doesn't just upload the current checkout's content anymore. For the current branch, it also uploads the content of every commit since the last successful upload to each remote — so a tag or commit whose content was replaced before it was ever synced doesn't get silently left behind, without you having to remember `exo sync --all`.
+
+Progress is tracked per remote and branch with a local-only marker ref, `refs/exo/content-synced/<remote>/<branch>`. This marker is never a branch or tag, and is never pushed, fetched, or cloned. It advances only after that remote's upload succeeds, one commit at a time, so a failure partway through a long catch-up leaves already-uploaded commits marked and retries just the remainder next time. It also re-points itself at the new tip after a rebase or force-push, and falls back to the upstream tracking branch's tip (or full history, if there's no upstream either) the first time it runs.
+
+This default pass only runs for a plain, unfiltered `exo sync`: it's skipped when `--path`, `--include`, `--exclude`, or `--bundle-dir` narrow what the invocation syncs, when `--no-content` is set, or when you pass `--skip-history-upload` to disable it for one run. A failure uploading history to one remote is reported as a warning and does not fail the overall `exo sync` — the current checkout's content already synced normally, and the incremental catch-up is retried next time.
+
+### Previewing the Pending Catch-Up
+
+`exo sync --dry-run` (and `--dry-run --json`) report what the default incremental pass *would* upload — per remote, the commit range and the file count of each pending commit — without uploading anything or touching the marker:
+
+```
+$ exo sync --dry-run
+...
+Dry-run plan for remote 'my-remote'
+  ...
+  pending history catch-up: 2 commit(s), 3 file(s) total
+    3f1a9c2e1b7a: 1 file(s)
+    9b7e2a0c44de: 2 file(s)
+```
+
+`pending_history_upload` is included in `--dry-run --json` output only when at least one remote has something pending.
+
+> **A remote's markers reset when its location moves.** If `exo init` detects a real `s3url` change on a remote (see [s3url Changes Are Never Silent]({{< ref "repositories#s3url-changes-are-never-silent" >}})), its `refs/exo/content-synced/*` markers are pruned, since they claimed "uploaded through commit X" against a location the new one knows nothing about — the next `exo sync` re-baselines instead of trusting stale markers. The one exception is a verified `exo init --migrate-content` move: migration already copied and verified everything, so the markers are left alone.
+
 ## Checking Completeness Across History
 
-A plain `exo sync` only uploads the annexed content of the **current checkout**. If a repository's history replaces an annexed file commit after commit (e.g. importing several versions of a dataset chronologically and tagging each one), the content an **older** tag or commit points at can end up on no remote at all, unless it was synced while that version was checked out. Nothing about a normal `exo sync` tells you this happened. After importing several versions this way (one commit or tag per version), run `exo sync --all` (then `exo sync --check` to confirm) instead of a plain `exo sync` — the default `exo sync` never uploads older commits' content.
+Besides the current branch's incremental catch-up (above), a repository's full history across **every** branch and tag can still end up with annexed content on no remote at all — for example, importing several versions of a dataset chronologically on different branches, each tagged once. After importing several versions this way, run `exo sync --all` (then `exo sync --check` to confirm) instead of relying on the default incremental pass, which only follows the current branch.
 
 ### `exo sync --check`
 
@@ -233,14 +259,14 @@ exo sync --check --verify
 
 ### Previewing a Ref's Catalog Target
 
-`exo sync --dry-run --json --ref <ref>` previews, for a catalog remote, the routing (`s3url`, `atlas_url`, `instance_url`) that publishing `<ref>` would use right now — read fresh from the **current** `.exohub/remotes`, never from `<ref>`'s own checked-out copy — alongside `<ref>`'s own identity (`ref`, `ref_commit`):
+`exo sync --dry-run --json --ref <ref>` previews, for a catalog remote, the routing (`s3url`, `role`, `url`, `data_from`) that publishing `<ref>` would use right now — read fresh from the **current** `.exohub/remotes`, never from `<ref>`'s own checked-out copy — alongside `<ref>`'s own identity (`ref`, `ref_commit`). Each entry also carries `url_source`: `"explicit"` when the remote sets its own `url`, `"default"` when it doesn't (so a `role: atlas` remote correctly falling back to the deployment's default Atlas is distinguishable from one whose live lookup simply failed); `url_source` is always `null` for a `role: instance` remote, whose `url` is always explicit:
 
 ```bash
 exo sync --dry-run --json --ref v1.0.0
 exo sync --dry-run --json --ref v1.0.0 --ref v1.1.0
 ```
 
-This requires at least one catalog remote (via `--with` or auto-discovery), and is how a guard can verify the publish target before `exo publish --ref` actually runs — a ref that predates a routing change (a bucket/prefix move, a new `atlas_url`) still resolves to the current catalog, not a stale or missing one.
+This requires at least one catalog remote (via `--with` or auto-discovery), and is how a guard can verify the publish target before `exo publish --ref` actually runs — a ref that predates a routing change (a bucket/prefix move, a new `role: atlas` url) still resolves to the current catalog, not a stale or missing one.
 
 ### `exo sync --all`
 
@@ -377,7 +403,12 @@ exo broadcast --with s3-archive --with backup-remote
 
 ## Catalog Remote Publishing
 
-When your repository has catalog remotes (e.g., `artifactdb` type), `exo sync` automatically handles publishing to the catalog. The sync command:
+When your repository has catalog remotes (type `artifactdb`), `exo sync` automatically handles publishing to the catalog. Each catalog remote has a **role**, and each role publishes one thing to one destination:
+
+- `role: atlas` (the default when `role` is absent): publishes the bundle (`.exohub-bundle/`) to an **Atlas** (search catalog). This is the familiar git-annex export special remote (`mode: export`).
+- `role: instance`: publishes the git-tracked `.artifactdb/` directory to its own bucket, then asks the ExoHub API to forward the ingest to an ArtifactDB instance. It is **not** a git-annex special remote — `exo init` never runs `initremote` for it.
+
+For a `role: atlas` remote, the sync command:
 
 1. Generates metadata bundles (equivalent to running `exo bundle`)
 2. Uploads bundle files to the remote's S3 location under `.exohub-bundle/`
@@ -387,21 +418,20 @@ When your repository has catalog remotes (e.g., `artifactdb` type), `exo sync` a
 
 ### Choosing the Target Atlas
 
-By default, a catalog remote's bundle goes to the ExoHub deployment's **default Atlas**. Set `atlas_url` on the remote in `.exohub/remotes` to publish to a specific, non-default Atlas instead — only Atlas URLs the deployment has allowlisted are accepted.
+By default, a `role: atlas` remote's bundle goes to the ExoHub deployment's **default Atlas**. Set `url` on the remote in `.exohub/remotes` to publish to a specific, non-default Atlas instead — only Atlas URLs the deployment has allowlisted are accepted. A `role: atlas` remote never uploads `.artifactdb/`, regardless of whether one exists in the repo.
 
-`exo` always shows, per catalog remote, where the bundle will go before anything is published — in `exo sync --dry-run` and again right before the real publish:
+`exo` always shows, per catalog remote, where it will publish before anything happens — in `exo sync --dry-run` and again right before the real publish:
 
 ```
 $ exo sync --with atlas --dry-run
 Would publish to catalog remote 'atlas' via git-annex-remote-artifactdb-export
   api-url:      https://api.exohub.example.com
   s3url:        s3://my-bucket/my-prefix
-  bundle → https://atlas.example.com/v1/sandbox1 (atlas_url)
-  .artifactdb/ → https://artifactdb.example.com/v1/myproject
+  bundle → https://atlas.example.com/v1/main (url)
   grants:       false
 ```
 
-When no `atlas_url` is configured, exo asks the API for the deployment's default Atlas and visually flags the line, since publishing to the default Atlas without an explicit `atlas_url` is the case most likely to surprise someone expecting a specific destination:
+When no `url` is configured, exo asks the API for the deployment's default Atlas and visually flags the line, since publishing to the default Atlas without an explicit `url` is the case most likely to surprise someone expecting a specific destination:
 
 ```
   bundle → ⚠ default Atlas https://atlas.example.com/v1/default
@@ -409,7 +439,83 @@ When no `atlas_url` is configured, exo asks the API for the deployment's default
 
 If the API can't be reached or doesn't expose the default Atlas URL (older deployment), the line falls back to `bundle → ⚠ default Atlas (server-chosen)`. Once a real publish succeeds, exo also prints which Atlas actually received the bundle.
 
-If `atlas_url` or `instance_url` isn't on the deployment's allowlist, the publish is refused (HTTP 422) with a clear, non-zero-exit error naming the fix and the allowlisted values. The bundle's files are still uploaded to S3 at that point, but nothing is indexed. To fix it, update `atlas_url`/`instance_url` in `.exohub/remotes` to an allowlisted value (or remove `atlas_url` to use the default Atlas), run `exo init`, and re-run `exo sync`/`exo publish`.
+If a remote's `url` isn't on the deployment's allowlist, the publish is refused (HTTP 422) with a clear, non-zero-exit error naming the fix and the allowlisted values. The bundle's files are still uploaded to S3 at that point, but nothing is indexed. To fix it, update the remote's `url` in `.exohub/remotes` to an allowlisted value (or remove it, on a `role: atlas` remote, to use the default Atlas), run `exo init`, and re-run `exo sync`/`exo publish`.
+
+### Publishing to an ArtifactDB Instance (`role: instance`)
+
+A `role: instance` remote publishes **only** the git-tracked `.artifactdb/` directory of the published ref (read with `git archive`, never the working tree directly) into its own bucket, then asks the ExoHub API to forward the ingest to the instance:
+
+```yaml
+remotes:
+  - name: atlas
+    type: artifactdb
+    url: https://atlas.example.com/v1/main   # optional; absent = deployment default Atlas
+
+  - name: instance
+    type: artifactdb
+    role: instance
+    url: https://artifactdb.example.com/v1/myproject
+    s3url: s3://my-instance-bucket/my-project-id
+    data_from: atlas                         # optional; inferred when there's exactly one role: atlas remote
+```
+
+Required fields on a `role: instance` remote:
+
+- `url` — the ArtifactDB instance's HTTPS endpoint.
+- `s3url` — must be exactly `s3://<bucket>/<project_id>` (one path segment, equal to the remote's project id).
+
+An instance remote delegates to one **Atlas** remote for the actual data: `data_from: <name>` names it explicitly, or, when omitted, exo infers it as the single `role: atlas` remote in `.exohub/remotes`. It takes no `mode` — it is refused if one is set, and it is never a git-annex special remote, so `exo init` doesn't run `initremote` for it.
+
+`exo sync --dry-run`/`--with` also previews a `role: instance` remote's target:
+
+```
+$ exo sync --with instance --dry-run
+Would publish to catalog remote 'instance' via git-annex-remote-artifactdb-export
+  api-url:      https://api.exohub.example.com
+  s3url:        s3://my-instance-bucket/my-project-id
+  role:         instance
+  .artifactdb/ → https://artifactdb.example.com/v1/myproject
+  grants:       false
+```
+
+**Publish order:** every `role: atlas` remote publishes first; only once its delegation Atlas has been accepted does a ref's `role: instance` remote(s) publish. If the Atlas publish fails, the instance is **skipped** with a clear message and the command exits non-zero.
+
+#### Excluding Files From the Instance Upload
+
+Add `exclude: [<glob>...]` to a `role: instance` remote to keep matching `.artifactdb/` files out of that instance's upload — an Atlas remote's own upload is unaffected by another remote's `exclude`:
+
+```yaml
+  - name: instance
+    type: artifactdb
+    role: instance
+    url: https://artifactdb.example.com/v1/myproject
+    s3url: s3://example-bucket/DS1
+    exclude:
+      - "dataset_merged.json*"
+```
+
+Globs are matched against each file's path relative to the `.artifactdb/` root, using the same matcher as the `exclude:` on import/annex remotes: a single `*`/`?` stays within one path segment, `**` crosses segments, and a pattern with no `**` is also tried against the file's basename alone (so `dataset_merged.json*` matches `sub/dataset_merged.json.bak` without needing a leading `**/`).
+
+A file kept off the upload this way never appears in that publish's `..complete` marker. If a file was uploaded by an earlier publish — before `exclude` was added, or before the glob matched it — the next instance publish **self-heals** by deleting the matching key(s) from the instance's version prefix, for both branch and tag publishes.
+
+### Tag Immutability and the Source-Repo Guard
+
+Two guards apply to publishing a catalog remote, regardless of role:
+
+- **Tag immutability:** publishing a **tag** (not a branch) is refused when the remote already has a record naming a different commit than the tag now resolves to (a moved tag). The same commit is a safe retry. Branches are overwritten freely. There is no flag to bypass this — not even `--force`.
+- **Source-repo guard:** publishing the same project/version from a different repository than the one it was first published from is refused before any upload, with a fix message naming the old and new repository. Pass `exo publish --force` (or `exo sync --force`) to bypass this guard — but never tag immutability.
+
+### Migrating from `atlas_url` / `instance_url`
+
+**Breaking change:** `atlas_url` and `instance_url` are no longer accepted in the **current** `.exohub/remotes` — exo refuses to run any command against the checked-out remotes file if it still has either key, before any upload or API call, and prints the role-split YAML to replace the old entry with (the repo's actual profile-rendered remotes when `.exohub/profile.lock` names a reachable profile, otherwise a generic example). To migrate:
+
+1. **Upgrade exo first** on every machine/CI runner that publishes this repo — older exo versions don't understand role-split remotes.
+2. Update the server profile to declare two remotes instead of one: `role: atlas` with the old `atlas_url` as `url`, and `role: instance` with the old `instance_url` as `url` and a project-scoped `s3url`.
+3. Run `exo init --profile <profile> --remote <remote>` on the repo. This now performs the legacy→role-split conversion directly: it loads the legacy `.exohub/remotes` leniently, renders the profile's role-split remotes, shows the diff, and rewrites the file on confirmation (`--yes` to skip) — keeping the atlas remote's git-annex UUID (same special remote) and never running `initremote` for the new instance entry. If the rendered `s3url` also moves prefix/bucket, add `--allow-move` to confirm the move is intentional; grants are synced automatically for a `grants: true` remote, with a warning if a sync has to be skipped (e.g. not an owner — rerun as one, or with `--force-grants-sync`). Add `--dry-run` (optionally `--json`) to preview the plan without changing anything. Hand-editing `.exohub/remotes` remains an option too.
+4. Re-publish.
+5. **Old tags remain publishable** after the migration: `exo publish --ref <old tag>` reads the ref's own, pre-migration `.exohub/remotes` **leniently** — a tag whose committed file still has `atlas_url`/`instance_url` is not refused. That file is only used to check the ref's catalog remotes still have a home in the **current**, migrated config (matched by name or git-annex UUID); routing always comes from the current config, never the ref's. Run `exo publish --ref <tag>` from the migrated checkout to re-publish a pre-migration tag.
+
+There is no compatibility layer and no override flag for the legacy-key refusal itself — every other command still refuses outright. The `--profile` migration path above is the only way to convert a legacy file, and it is a one-time rewrite, not a deployment setting.
 
 ### Publish Constraints
 
@@ -486,7 +592,7 @@ exo publish --sync s3-archive --sync backup-remote
 
 ### Publishing an Older Ref (`--ref`)
 
-Use `--ref` to publish an older tag or commit's content and metadata while keeping **current** routing — the remotes, `s3url`, `atlas_url`, and `instance_url` come from whatever is checked out right now, never from the ref's own, possibly stale, copy of `.exohub/remotes`. This is what makes it safe to publish a tag made before a routing change (a bucket/prefix move, a new `atlas_url`): it always lands on the current catalog instead of silently falling back to a default because the old tag's routing is incomplete.
+Use `--ref` to publish an older tag or commit's content and metadata while keeping **current** routing — the remotes, `s3url`, `role`, `url`, and `data_from` come from whatever is checked out right now, never from the ref's own, possibly stale, copy of `.exohub/remotes`. This is what makes it safe to publish a tag made before a routing change (a bucket/prefix move, a new `role: atlas` url): it always lands on the current catalog instead of silently falling back to a default because the old tag's routing is incomplete.
 
 ```bash
 exo publish --ref v1.2.0
@@ -495,12 +601,12 @@ exo publish --ref v1.2.0
 exo publish --ref v1.2.0 --ref v1.3.0
 ```
 
-For each ref, `exo publish` builds its bundle and `.artifactdb/` (read from the ref's own tree, not the working tree) into a temporary directory, publishes that directory to the **current** catalog remotes, then removes the temporary directory. Two guards run first, per ref:
+For each ref, `exo publish` builds its bundle and `.artifactdb/` (read from the ref's own tree, not the working tree) into a temporary directory, publishes that directory to the **current** catalog remotes, then removes the temporary directory. Two guards run first, per ref, unless `--force`:
 
 1. Every catalog remote the ref's own `.exohub/remotes` references must still exist in the current config (matched by name or git-annex UUID) — otherwise publish refuses rather than silently drop it.
 2. The ref's annexed content must already be present on the current annex remote(s) (checked via `exo sync --check --ref <ref> --verify`) — otherwise publish refuses with a hint to run `exo sync --all`, or `exo init --allow-move --migrate-content` if a remote's storage moved (see [Migrating Content on a Move]({{< ref "repositories#migrating-content-on-a-move---migrate-content" >}})).
 
-Pass `--force` to skip the content-availability check and publish anyway:
+Every publish (with or without `--ref`) also enforces a **source-repo guard**: publishing the same project/version from a different repository than the one it was first published from is refused before any upload. Pass `--force` to bypass the ref-to-remotes check, the content-availability check, and the source-repo guard — it never bypasses tag immutability (see [Tag Immutability and the Source-Repo Guard]({{< ref "#tag-immutability-and-the-source-repo-guard" >}})):
 
 ```bash
 exo publish --ref v1.2.0 --force
@@ -511,7 +617,7 @@ exo publish --ref v1.2.0 --force
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--ref <tag\|commit>` | Publish this ref's content+metadata with the current routing; repeatable | _(none — publishes HEAD)_ |
-| `--force` | With `--ref`, publish even if the content-availability check finds fixable/lost content on the current remote(s) | `false` |
+| `--force` | Bypass the ref-to-remotes check and the source-repo guard (with `--ref`, also skip the content-availability check); never bypasses tag immutability | `false` |
 
 ### When to Use Publish vs. Manual Steps
 

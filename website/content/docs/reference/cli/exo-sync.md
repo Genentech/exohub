@@ -3,7 +3,7 @@ title: "exo sync"
 description: "Sync git-annex content and record bad files"
 ---
 
-Full `exo sync --help` output, generated from exo-cli v0.140.2.
+Full `exo sync --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Sync git-annex content and record bad files.
@@ -66,13 +66,13 @@ Full-history sweep (--all):
 
 Previewing a ref's catalog target (--dry-run --json --ref):
   exo sync --dry-run --json --ref <ref> [--ref <ref>...] previews, for a
-  catalog remote, the routing (s3url, atlas_url, instance_url) that
+  catalog remote, the routing (s3url, role, url, data_from) that
   publishing <ref> would use right now — read fresh from the CURRENT
   .exohub/remotes, never from <ref>'s own checked-out copy — alongside
   <ref>'s own identity (ref, ref_commit). This is how a guard (e.g. a
   catalog service's automation) verifies the target before 'exo publish
   --ref' actually runs: a ref that predates a routing change (a
-  bucket/prefix move, a new atlas_url) still resolves to the current
+  bucket/prefix move, a new url) still resolves to the current
   catalog, not a stale or missing one. Requires at least one catalog remote
   (via --with or auto-discovery).
 
@@ -104,6 +104,23 @@ Handling a force-pushed (rewritten) remote main (--reset-synced):
   touches main or any other branch. Affects exo sync, exo broadcast, and exo
   publish (step 1 and step 4, which call them).
 
+Default incremental history upload:
+  A plain 'exo sync' uploads not just the current checkout's content, but
+  also the content of every commit on the current branch since the last
+  successful upload to each remote, so a tag or commit whose content was
+  replaced before it was ever synced no longer gets silently left behind
+  (see --check above). Progress is tracked per remote and branch with a
+  local-only marker (never a branch or tag, never pushed or fetched); the
+  first run falls back to the upstream tip, or full history with no
+  upstream. This is routing-aware like --all, and failures are reported
+  as warnings without failing the sync (the current checkout's content
+  already synced normally). Use --skip-history-upload, or --no-content
+  (which also disables it, since it means "don't move content"), to
+  disable it for a single invocation, or --all for the full, explicit
+  sweep across every branch and tag instead of just the current one.
+  --dry-run / --json preview the pending catch-up (commit range, file
+  counts per commit) without uploading anything or touching the marker.
+
 Usage:
   exo sync [flags]
 
@@ -114,6 +131,7 @@ Flags:
       --check                 Check that annexed content referenced by branches/tags is present on configured remotes (no sync performed; see exit codes in the sync reference docs)
       --dry-run               Report planned sync actions without executing git-annex sync
       --exclude stringArray   Exclude files matching glob pattern (repeatable, for import/annex remotes)
+      --force                 With a catalog remote (--with <artifactdb remote>): bypass the source-repo guard, passed to the catalog binary as --force; never bypasses tag immutability
   -h, --help                  help for sync
       --import-dir string     Directory to place imported files (for import remotes, e.g. 'input/')
       --include stringArray   Include files matching glob pattern (repeatable, for import/annex remotes)
@@ -121,10 +139,11 @@ Flags:
       --json                  Emit a single JSON dry-run report to stdout
       --log-prefix string     Prefix for log filenames (useful for Temporal workflows)
       --manifest string       Manifest YAML file
-      --no-content            Import metadata only without storing content locally (import remotes only)
+      --no-content            Import metadata only without storing content locally (import remotes only); also disables the default incremental history upload
       --path stringArray      Path to limit sync (repeatable)
       --ref stringArray       Limit --check to this ref (repeatable; default checks all local branches and tags), or with --dry-run --json preview a catalog publish of this ref's content+version under the current routing
       --reset-synced string   Reset local synced/main for this remote after it force-pushed (rewrote) main (see exo-cli#178); refuses if local main has commits not on the remote
+      --skip-history-upload   Disable the default incremental upload of content from commits since the last sync (see the sync reference docs)
       --verify                With --check, also verify presence on remotes (checkpresentkey) instead of trusting the location log
       --with stringArray      Annex remote to sync
       --yes                   With --reset-synced, perform the reset instead of only previewing it

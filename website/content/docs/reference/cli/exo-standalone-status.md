@@ -3,7 +3,7 @@ title: "exo standalone status"
 description: "Show health of the adb-standalone stack"
 ---
 
-Full `exo standalone status --help` output, generated from exo-cli v0.140.2.
+Full `exo standalone status --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Show health of the adb-standalone stack
