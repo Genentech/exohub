@@ -42,12 +42,23 @@ type grantsSyncRequest struct {
 //   - stale read-only cached credentials are not mistakenly accepted, and
 //   - the helper performs a real PutObject+DeleteObject write probe (not just
 //     confirming that credentials were vended).
-func hasGrantsWriteAccess(s3url string) bool {
+//
+// sourceS3URL, when non-empty (role: instance remotes only), is passed as
+// --source-s3url so the helper's server fallback authorizes against the
+// source Atlas project instead of the instance bucket.
+func hasGrantsWriteAccess(s3url, accountID, sourceS3URL string) bool {
 	credHelper := os.Getenv("EXO_CREDENTIAL_HELPER_BIN")
 	if credHelper == "" {
 		credHelper = "exo-credential-helper"
 	}
-	cmd := command(credHelper, "--s3url", s3url, "--permission", "READWRITE", "--verify", "--no-cache")
+	args := []string{"--s3url", s3url, "--permission", "READWRITE", "--verify", "--no-cache"}
+	if accountID != "" {
+		args = append(args, "--account-id", accountID)
+	}
+	if sourceS3URL != "" {
+		args = append(args, "--source-s3url", sourceS3URL)
+	}
+	cmd := command(credHelper, args...)
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	if err := cmd.Run(); err != nil {
@@ -95,11 +106,11 @@ func syncGrantsForRemote(s3url string) error {
 			// viewer when read_access: viewers) already get credentials on demand
 			// from the server (POST /api/grants/credentials). Provisioning grants
 			// (POST /api/grants) is owner-only, so a reader should never attempt
-			// it — skip silently and let init continue configuring remotes. This
-			// applies regardless of --yes, since --yes is not an ownership override.
-			if commandutil.IsDebug() {
-				fmt.Fprintf(os.Stderr, "DEBUG: skipping grants sync for %s (read_access: %s, not an owner)\n", s3url, perms.ReadAccess)
-			}
+			// it — skip, but never silently (exo-cli#197): print an explicit
+			// WARNING naming --force-grants-sync, the override an owner/admin
+			// would use to sync it. This applies regardless of --yes, since
+			// --yes is not an ownership override.
+			fmt.Printf("⚠️  WARNING: skipping grants sync for %s (read_access: %s, %s is not an owner); an owner can sync it by running exo init, or an admin can force it with --force-grants-sync\n", s3url, perms.ReadAccess, username)
 			return nil
 		} else {
 			// Not an owner and not a reader per .exohub/permissions: don't
@@ -107,8 +118,8 @@ func syncGrantsForRemote(s3url string) error {
 			// don't abort init — just let the user know who to ask. Again,
 			// this applies regardless of --yes.
 			orangeStyle := lipgloss.NewStyle().Foreground(palette.Current().Label.Adaptive()).Bold(true)
-			fmt.Printf("ℹ️  You (%s) are not listed as a reader in .exohub/permissions.\n", orangeStyle.Render(username))
-			fmt.Printf("   Ask an existing owner (%s) for access if you need it.\n", strings.Join(perms.Owners, ", "))
+			fmt.Printf("⚠️  WARNING: skipping grants sync for %s; you (%s) are not listed as a reader in .exohub/permissions.\n", s3url, orangeStyle.Render(username))
+			fmt.Printf("   Ask an existing owner (%s) for access, or have an owner run with --force-grants-sync.\n", strings.Join(perms.Owners, ", "))
 			return nil
 		}
 	}

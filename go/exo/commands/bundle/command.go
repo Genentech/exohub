@@ -78,6 +78,19 @@ Output consists of bundle.json (bundle manifest), per-commit JSONs under commits
 Output is written to .git/exohub/bundle/<scope>/ where <scope> is derived
 from the current ref context (tag, branch, or commit hash).
 
+The --ref contract: content and keys come from the ref, never the worktree.
+  --ref <tag|commit> builds the bundle entirely from that ref's own git
+  tree: the file list (paths), the annex key of every annexed file, and
+  every file's git blob hash/size are all resolved by reading the ref's
+  tree directly (git ls-tree, git cat-file, and the ref tree's own symlink
+  targets / unlocked pointer file content for annex keys) — never from the
+  current working tree or index. A file added after the ref is absent from
+  the bundle; a file removed after the ref is present; a file modified
+  after the ref is bundled with the REF's content and the REF's annex key,
+  not whatever is currently checked out. This holds even when the worktree
+  has since diverged (different branch, newer commits, or an annexed
+  file's content/key changed).
+
 Examples:
   exo bundle                          # generate bundle with default preset
   exo bundle --preset parquet-only    # use a named preset
@@ -85,7 +98,7 @@ Examples:
   exo bundle --scope annex            # annexed file artifacts + markdown artifacts
   exo bundle --output /tmp/bundle     # custom output directory
   exo bundle --dry-run                # preview what the bundle would do
-  exo bundle --ref v5.3.0             # build bundle for a specific tag
+  exo bundle --ref v5.3.0             # build bundle for a specific tag (that tag's tree, not the worktree)
   exo bundle --ref v5.3.0 --dry-run   # preview bundle for a specific tag`
 
 // Commit represents a git commit in the bundle.
@@ -277,8 +290,9 @@ type annexMetadataLookup struct {
 	ByKey  map[string]map[string][]string
 }
 
-// blobInfo holds the git blob hash and size for a tracked file.
+// blobInfo holds the git blob mode, hash and size for a tracked file.
 type blobInfo struct {
+	Mode string
 	Hash string
 	Size int64
 }
@@ -313,7 +327,7 @@ func NewCommand(version string) *cobra.Command {
 	cmd.Flags().StringVar(&flagFromRef, "from-ref", "", "Start of commit range (ref or regex)")
 	cmd.Flags().StringVar(&flagPreset, "preset", "default", "Bundle manifest preset name")
 	cmd.Flags().StringVar(&flagOutput, "output", "", "Custom output directory")
-	cmd.Flags().StringVar(&flagRef, "ref", "", "Commit hash or tag to build the bundle for (default: HEAD)")
+	cmd.Flags().StringVar(&flagRef, "ref", "", "Commit hash or tag to build the bundle for — content and keys come from the ref's own tree, never the worktree (default: HEAD)")
 	cmd.Flags().BoolVar(&flagIncludeHidden, "include-hidden", false, "Include files in hidden directories (default: skip)")
 	cmd.Flags().BoolVar(&flagIncremental, "incremental", false, "Only generate file artifacts for files modified in the commit range")
 	cmd.Flags().BoolVarP(&flagYes, "yes", "y", false, "Skip confirmation prompts (remove and regenerate)")
@@ -435,7 +449,7 @@ func runBundle(scope, fromRef, presetName, outputDir, targetRef string, includeH
 			return fmt.Errorf("failed to check provenance.require: %w", err)
 		}
 		if !noProvenance {
-			provResult, provReport, err = provenance.CompileBundleWithVerify(provReader, selectedPaths, verifyCollectionLocks)
+			provResult, provReport, err = provenance.CompileBundleForVersion(provReader, selectedPaths, verifyCollectionLocks, version)
 			if err != nil {
 				return fmt.Errorf("failed to compile provenance: %w", err)
 			}
@@ -635,38 +649,59 @@ func runBundle(scope, fromRef, presetName, outputDir, targetRef string, includeH
 		commitMap[c.Hash] = c
 	}
 
+	// Build blob info map for git-tracked files (single git ls-tree call,
+	// at targetRef when given, HEAD otherwise). Built before the annexed-file
+	// pre-pass below: for a --ref bundle it is both the file-list source of
+	// truth and, via resolveRefAnnexKeys, the key source of truth — neither
+	// ever comes from `git ls-files`/`git annex find` against the
+	// worktree/index (exo-cli#203).
+	blobInfoMap, err := buildBlobInfoMap(targetRef, pathFilters)
+	if err != nil {
+		return fmt.Errorf("failed to build blob info map: %w", err)
+	}
+
 	logStatus("Identifying annexed files...")
 	// Build set of annexed files for classifying commit files.
 	// In incremental mode, use --batch to avoid CLI arg overflow.
 	annexedFileSet := make(map[string]bool)
-	{
-		if incremental {
-			// Batch mode: feed paths via stdin
-			var paths []string
-			for path := range pathCommits {
-				paths = append(paths, path)
-			}
-			cmd := commandutil.Command("git", "annex", "find", "--anything", "--batch", "--format=${file}\\n")
-			cmd.Stdin = strings.NewReader(strings.Join(paths, "\n") + "\n")
-			if out, err := cmd.Output(); err == nil {
-				for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-					if line != "" {
-						annexedFileSet[line] = true
-					}
+	switch {
+	case targetRef != "":
+		// --ref: annexed files are resolved from the ref's own tree content
+		// (symlink targets / unlocked pointer files), never from `git annex
+		// find`, which reports the worktree/index's current annexed files.
+		refAnnexKeys, err := resolveRefAnnexKeys(blobInfoMap)
+		if err != nil {
+			return fmt.Errorf("resolving annex keys at ref %q: %w", targetRef, err)
+		}
+		for path := range refAnnexKeys {
+			annexedFileSet[path] = true
+		}
+	case incremental:
+		// Batch mode: feed paths via stdin
+		var paths []string
+		for path := range pathCommits {
+			paths = append(paths, path)
+		}
+		cmd := commandutil.Command("git", "annex", "find", "--anything", "--batch", "--format=${file}\\n")
+		cmd.Stdin = strings.NewReader(strings.Join(paths, "\n") + "\n")
+		if out, err := cmd.Output(); err == nil {
+			for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+				if line != "" {
+					annexedFileSet[line] = true
 				}
 			}
-		} else {
-			args := []string{"annex", "find", "--anything", "--format=${file}\\n"}
-			if len(pathFilters) > 0 {
-				args = append(args, "--")
-				args = append(args, pathFilters...)
-			}
-			cmd := commandutil.Command("git", args...)
-			if out, err := cmd.Output(); err == nil {
-				for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-					if line != "" {
-						annexedFileSet[line] = true
-					}
+		}
+	default:
+		args := []string{"annex", "find", "--anything", "--format=${file}\\n"}
+		if len(pathFilters) > 0 {
+			args = append(args, "--")
+			args = append(args, pathFilters...)
+		}
+		cmd := commandutil.Command("git", args...)
+		if out, err := cmd.Output(); err == nil {
+			for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+				if line != "" {
+					annexedFileSet[line] = true
 				}
 			}
 		}
@@ -682,15 +717,6 @@ func runBundle(scope, fromRef, presetName, outputDir, targetRef string, includeH
 	fmt.Fprintf(os.Stderr, "Wrote %d commit artifacts to %s\n", commitCount, commitsDir)
 
 	filesDir := filepath.Join(outputDir, "files")
-
-	// Build blob info map for git-tracked files (single git ls-tree call).
-	// Always built because generateMarkdownArtifacts needs blob hashes/sizes
-	// regardless of scope.
-	var blobInfoMap map[string]blobInfo
-	blobInfoMap, err = buildBlobInfoMap(targetRef, pathFilters)
-	if err != nil {
-		return fmt.Errorf("failed to build blob info map: %w", err)
-	}
 
 	logStatus("Generating file artifacts...")
 	// Generate per-file artifacts based on scope
@@ -724,7 +750,7 @@ func runBundle(scope, fromRef, presetName, outputDir, targetRef string, includeH
 		progress := &progressTracker{label: "file artifacts", total: 0}
 
 		if effectiveScope == "all" || effectiveScope == "annex" {
-			n, sz, noloc, processedAnnex, err := generateAnnexArtifacts(filesDir, headHash, repoURL, preset, pathCommits, commitMap, remoteConfigs, incremental, pathFilters, resume, annexedFileSet, lineage, lineageChanged, progress)
+			n, sz, noloc, processedAnnex, err := generateAnnexArtifacts(filesDir, headHash, repoURL, preset, pathCommits, commitMap, remoteConfigs, incremental, pathFilters, resume, annexedFileSet, lineage, lineageChanged, progress, targetRef, blobInfoMap)
 			if err != nil {
 				return fmt.Errorf("failed to generate annex artifacts: %w", err)
 			}
@@ -749,7 +775,7 @@ func runBundle(scope, fromRef, presetName, outputDir, targetRef string, includeH
 		var g errgroup.Group
 		if effectiveScope == "all" || effectiveScope == "annex" {
 			g.Go(func() error {
-				n, sz, noloc, _, err := generateAnnexArtifacts(filesDir, headHash, repoURL, preset, pathCommits, commitMap, remoteConfigs, incremental, pathFilters, resume, annexedFileSet, lineage, lineageChanged, nil)
+				n, sz, noloc, _, err := generateAnnexArtifacts(filesDir, headHash, repoURL, preset, pathCommits, commitMap, remoteConfigs, incremental, pathFilters, resume, annexedFileSet, lineage, lineageChanged, nil, targetRef, blobInfoMap)
 				if err != nil {
 					return fmt.Errorf("failed to generate annex artifacts: %w", err)
 				}
@@ -1423,10 +1449,34 @@ func loadRemoteConfigs() (map[string]RemoteConfig, error) {
 // generateAnnexArtifacts generates per-file artifact JSONs for annexed files.
 // Returns (count, totalSize, noLocations, processedFiles, error).
 // processedFiles contains paths of files that were identified as annexed.
-func generateAnnexArtifacts(filesDir, headHash, repoURL string, preset Preset, pathCommits map[string][]string, commitMap map[string]Commit, remoteConfigs map[string]RemoteConfig, incremental bool, pathFilters []string, resume bool, annexedFileSet map[string]bool, lineage map[string]*provenance.ArtifactLineage, lineageChanged map[string]bool, progress *progressTracker) (int, int64, []string, map[string]bool, error) {
+func generateAnnexArtifacts(filesDir, headHash, repoURL string, preset Preset, pathCommits map[string][]string, commitMap map[string]Commit, remoteConfigs map[string]RemoteConfig, incremental bool, pathFilters []string, resume bool, annexedFileSet map[string]bool, lineage map[string]*provenance.ArtifactLineage, lineageChanged map[string]bool, progress *progressTracker, targetRef string, blobInfoMap map[string]blobInfo) (int, int64, []string, map[string]bool, error) {
+	// refAnnexKeys is non-nil only for a --ref bundle: path -> the ref
+	// tree's own annex key, resolved from the ref's symlink targets/pointer
+	// file content (never from the worktree/index) so a path's key always
+	// matches the ref it was committed at, not whatever is checked out
+	// (exo-cli#203).
+	var refAnnexKeys map[string]string
+	if targetRef != "" {
+		var err error
+		refAnnexKeys, err = resolveRefAnnexKeys(blobInfoMap)
+		if err != nil {
+			return 0, 0, nil, nil, fmt.Errorf("resolving annex keys at ref %q: %w", targetRef, err)
+		}
+	}
+
 	// Build list of annexed files to process
 	var filePaths []string
-	if incremental {
+	switch {
+	case targetRef != "":
+		// --ref: the ref's tree (via blobInfoMap, built from `git ls-tree
+		// <ref>`) is the only source of truth for which paths exist, and
+		// refAnnexKeys (resolved from that same tree) for which of those are
+		// annexed. Never read from `git ls-files`/`git annex find`, which
+		// reflect the worktree/index, not the ref.
+		for path := range refAnnexKeys {
+			filePaths = append(filePaths, path)
+		}
+	case incremental:
 		// Incremental: modified files at HEAD, whereis determines which are annexed
 		lsCmd := commandutil.Command("git", "ls-files")
 		lsOut, err := lsCmd.Output()
@@ -1452,7 +1502,7 @@ func generateAnnexArtifacts(filesDir, headHash, repoURL string, preset Preset, p
 				filePaths = append(filePaths, path)
 			}
 		}
-	} else {
+	default:
 		// Full: scan all annexed files, filter to HEAD
 		args := []string{"annex", "find", "--anything", "--format=${file}\\n"}
 		if len(pathFilters) > 0 {
@@ -1521,6 +1571,10 @@ func generateAnnexArtifacts(filesDir, headHash, repoURL string, preset Preset, p
 
 	if len(filePaths) == 0 {
 		return 0, 0, nil, nil, nil
+	}
+
+	if targetRef != "" {
+		return generateRefAnnexArtifacts(filesDir, headHash, repoURL, filePaths, refAnnexKeys, pathCommits, commitMap, remoteConfigs, lineage, progress)
 	}
 
 	// Fetch metadata concurrently while setting up whereis streaming
@@ -1690,6 +1744,108 @@ func generateAnnexArtifacts(filesDir, headHash, repoURL string, preset Preset, p
 	return count, totalSize, noLocations, processed, nil
 }
 
+// generateRefAnnexArtifacts is generateAnnexArtifacts' --ref path: filePaths
+// and refAnnexKeys both come from the ref's own tree (never the
+// worktree/index — exo-cli#203), so every lookup that depends on "what key
+// does this annexed file have" is done by KEY (git annex whereis
+// --batch-keys, git annex metadata --key), never by path: a path's key in
+// the current worktree/index can differ from its key at an older ref, but a
+// key's location/metadata in the git-annex branch is the same regardless of
+// which ref references it.
+func generateRefAnnexArtifacts(filesDir, headHash, repoURL string, filePaths []string, refAnnexKeys map[string]string, pathCommits map[string][]string, commitMap map[string]Commit, remoteConfigs map[string]RemoteConfig, lineage map[string]*provenance.ArtifactLineage, progress *progressTracker) (int, int64, []string, map[string]bool, error) {
+	keySet := make(map[string]bool)
+	for _, p := range filePaths {
+		keySet[refAnnexKeys[p]] = true
+	}
+	keys := make([]string, 0, len(keySet))
+	for k := range keySet {
+		keys = append(keys, k)
+	}
+
+	var (
+		metadataByKey map[string]map[string][]string
+		metaErr       error
+	)
+	metaDone := make(chan struct{})
+	go func() {
+		defer close(metaDone)
+		metadataByKey, metaErr = getAnnexMetadataByKey(keys)
+	}()
+
+	locationsByKey, whereisErr := getAnnexWhereisByKey(keys)
+	<-metaDone
+	if metaErr != nil {
+		if commandutil.IsDebug() {
+			fmt.Fprintf(os.Stderr, "DEBUG: annex metadata --key: %v\n", metaErr)
+		}
+		metadataByKey = map[string]map[string][]string{}
+	}
+	if whereisErr != nil {
+		return 0, 0, nil, nil, fmt.Errorf("git annex whereis --batch-keys: %w", whereisErr)
+	}
+
+	if progress != nil {
+		progress.total = len(filePaths)
+		logStatus(fmt.Sprintf("Processing %d files...", progress.total))
+	} else {
+		logStatus(fmt.Sprintf("Processing %d annexed files...", len(filePaths)))
+	}
+
+	sort.Strings(filePaths)
+	count := 0
+	var totalSize int64
+	var noLocations []string
+	processed := make(map[string]bool, len(filePaths))
+	for _, path := range filePaths {
+		key := refAnnexKeys[path]
+		processed[path] = true
+		backend, size := parseAnnexKey(key)
+
+		meta := metadataByKey[key]
+		if meta == nil {
+			meta = make(map[string][]string)
+		}
+
+		fileCommits := expandCommits(pathCommits[path], commitMap)
+		whereis := locationsByKey[key]
+		locations := buildLocations(path, key, size, whereis, remoteConfigs)
+		if len(locations) == 0 {
+			noLocations = append(noLocations, path)
+		}
+
+		artifact := Artifact{
+			Schema:    "exohub-artifact/v1.json",
+			RepoURL:   repoURL,
+			Ref:       headHash,
+			Path:      path,
+			Key:       key,
+			Backend:   backend,
+			Size:      size,
+			Metadata:  meta,
+			Commits:   fileCommits,
+			Locations: locations,
+			Lineage:   lineage[path],
+		}
+
+		artifactPath := filepath.Join(filesDir, path+".json")
+		if err := writeJSON(artifactPath, artifact); err != nil {
+			return count, totalSize, noLocations, processed, fmt.Errorf("failed to write artifact for %s: %w", path, err)
+		}
+		count++
+		totalSize += size
+		if progress != nil {
+			progress.inc()
+		} else {
+			printProgress("annex artifacts", count, len(filePaths))
+		}
+	}
+	if progress == nil && count > 0 && count < len(filePaths) {
+		fmt.Fprintf(os.Stderr, "\n")
+	}
+
+	return count, totalSize, noLocations, processed, nil
+}
+
 // isMarkdownFile returns true if the path has a .md extension.
 func isMarkdownFile(path string) bool {
 	return strings.EqualFold(filepath.Ext(path), ".md")
@@ -1836,22 +1992,20 @@ func readGitBlobsBatch(hashes []string) (map[string][]byte, error) {
 // When preset.MarkdownRecursive is false, only root-level *.md files are processed.
 // Returns (count, totalSize, markdownFiles set, error).
 func generateMarkdownArtifacts(filesDir, headHash, repoURL string, preset Preset, pathCommits map[string][]string, commitMap map[string]Commit, blobInfoMap map[string]blobInfo, incremental bool, pathFilters []string, resume bool, annexedFiles map[string]bool, lineage map[string]*provenance.ArtifactLineage, lineageChanged map[string]bool, progress *progressTracker) (int, int64, map[string]bool, error) {
-	// Get all tracked files via git ls-files
-	lsArgs := []string{"ls-files"}
-	if len(pathFilters) > 0 {
-		lsArgs = append(lsArgs, "--")
-		lsArgs = append(lsArgs, pathFilters...)
+	// The tracked file set comes from blobInfoMap (built from `git ls-tree
+	// <ref>`, HEAD when no --ref), never a second `git ls-files` call
+	// against the worktree/index: for a --ref bundle, a file added or
+	// removed since the ref must not leak in or out (exo-cli#203).
+	trackedPaths := make([]string, 0, len(blobInfoMap))
+	for path := range blobInfoMap {
+		trackedPaths = append(trackedPaths, path)
 	}
-	cmd := commandutil.Command("git", lsArgs...)
-	out, err := cmd.Output()
-	if err != nil {
-		return 0, 0, nil, fmt.Errorf("git ls-files failed: %w", err)
-	}
+	sort.Strings(trackedPaths)
 
 	markdownFiles := make(map[string]bool)
 	var eligible []string
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if line == "" || annexedFiles[line] {
+	for _, line := range trackedPaths {
+		if annexedFiles[line] {
 			continue
 		}
 		if !isMarkdownFile(line) {
@@ -1954,22 +2108,21 @@ func generateMarkdownArtifacts(filesDir, headHash, repoURL string, preset Preset
 // generateGitArtifacts generates per-file artifact JSONs for git-only tracked files.
 // Returns (count, totalSize, error).
 func generateGitArtifacts(filesDir, headHash, repoURL string, preset Preset, pathCommits map[string][]string, commitMap map[string]Commit, blobInfoMap map[string]blobInfo, incremental bool, pathFilters []string, resume bool, annexedFiles map[string]bool, markdownFiles map[string]bool, lineage map[string]*provenance.ArtifactLineage, lineageChanged map[string]bool, progress *progressTracker) (int, int64, error) {
-	// Get all tracked files via git ls-files
-	lsArgs := []string{"ls-files"}
-	if len(pathFilters) > 0 {
-		lsArgs = append(lsArgs, "--")
-		lsArgs = append(lsArgs, pathFilters...)
+	// The tracked file set comes from blobInfoMap (built from `git ls-tree
+	// <ref>`, HEAD when no --ref, already scoped to pathFilters), never a
+	// second `git ls-files` call against the worktree/index: for a --ref
+	// bundle, a file added or removed since the ref must not leak in or out
+	// (exo-cli#203).
+	trackedPaths := make([]string, 0, len(blobInfoMap))
+	for path := range blobInfoMap {
+		trackedPaths = append(trackedPaths, path)
 	}
-	cmd := commandutil.Command("git", lsArgs...)
-	out, err := cmd.Output()
-	if err != nil {
-		return 0, 0, fmt.Errorf("git ls-files failed: %w", err)
-	}
+	sort.Strings(trackedPaths)
 
 	// Pre-filter to eligible git-only files (annexed and markdown files excluded via passed-in sets)
 	var eligible []string
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if line == "" || annexedFiles[line] || markdownFiles[line] {
+	for _, line := range trackedPaths {
+		if annexedFiles[line] || markdownFiles[line] {
 			continue
 		}
 		if skip, reason := shouldSkipPath(line, preset); skip {
@@ -2373,6 +2526,85 @@ func getAnnexWhereis(files []string) (map[string]annexWhereisEntry, error) {
 	return result, nil
 }
 
+// getAnnexMetadataByKey retrieves metadata for a set of git-annex keys
+// (never paths), via `git annex metadata --batch --json` fed {"key": ...}
+// lines: metadata is recorded against a key in the git-annex branch, so
+// for a --ref bundle (where a path's key at the ref can differ from its
+// key in the worktree/index) only a key-keyed lookup is correct
+// (exo-cli#203).
+func getAnnexMetadataByKey(keys []string) (map[string]map[string][]string, error) {
+	result := make(map[string]map[string][]string, len(keys))
+	if len(keys) == 0 {
+		return result, nil
+	}
+
+	var input strings.Builder
+	for _, k := range keys {
+		fmt.Fprintf(&input, "{\"key\":%q}\n", k)
+	}
+
+	cmd := commandutil.Command("git", "annex", "metadata", "--batch", "--json")
+	cmd.Stdin = strings.NewReader(input.String())
+	out, err := cmd.Output()
+	if err != nil && len(out) == 0 {
+		return nil, err
+	}
+
+	lookup := parseAnnexMetadataOutput(out)
+	for key, fields := range lookup.ByKey {
+		result[key] = fields
+	}
+	return result, nil
+}
+
+// getAnnexWhereisByKey retrieves location data for a set of git-annex keys
+// (never paths) via a single `git annex whereis --batch-keys --json`
+// process: a key's location in the git-annex branch is the same regardless
+// of which path/ref references it, so this is correct for a --ref bundle
+// where whereis-by-path would report the wrong (worktree/index) key's
+// locations (exo-cli#203).
+func getAnnexWhereisByKey(keys []string) (map[string]annexWhereisEntry, error) {
+	result := make(map[string]annexWhereisEntry, len(keys))
+	if len(keys) == 0 {
+		return result, nil
+	}
+
+	cmd := commandutil.Command("git", "annex", "whereis", "--batch-keys", "--json")
+	cmd.Stdin = strings.NewReader(strings.Join(keys, "\n") + "\n")
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start git annex whereis --batch-keys: %w", err)
+	}
+
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+		var entry annexWhereisEntry
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			continue
+		}
+		result[entry.Key] = entry
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("reading whereis --batch-keys output: %w", err)
+	}
+
+	// git-annex exits non-zero from `whereis --batch-keys` when any key in
+	// the batch has zero copies, even though it already printed valid JSON
+	// for that key (with an empty "whereis" list). As long as every key got
+	// a response, a non-zero exit here is not itself an error.
+	_ = cmd.Wait()
+	return result, nil
+}
+
 // buildLocations constructs Location entries for an annexed file,
 // filtering out local remotes and enriching with .exohub/remotes config.
 func buildLocations(filePath, key string, fileSize int64, whereis annexWhereisEntry, remoteConfigs map[string]RemoteConfig) []Location {
@@ -2584,6 +2816,102 @@ func parseAnnexKey(key string) (backend string, size int64) {
 		size, _ = strconv.ParseInt(sizeStr, 10, 64)
 	}
 	return backend, size
+}
+
+// annexKeyPattern recognizes a git-annex key's basename: a backend name
+// made of letters/digits, then "--", then the rest of the key. It matches
+// both symlink targets and unlocked pointer file content, which share the
+// same "<path>/<key>" shape. Matching this alone is not enough to call
+// something an annex key (an ordinary git-tracked file can have a
+// "X--Y"-shaped name); annexKeyFromRefEntry additionally requires the annex
+// objects path segment git-annex always uses.
+var annexKeyPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]*(-[A-Za-z0-9]+)*--\S+$`)
+
+// annexObjectsMarker is the path segment every git-annex symlink target and
+// unlocked pointer file contains, distinguishing genuine annex references
+// from git-tracked content that merely looks like a key.
+const annexObjectsMarker = "/annex/objects/"
+
+// maxPointerFileSize bounds how large a regular-file blob can be before it
+// stops being considered a possible unlocked annex pointer file: an
+// unlocked pointer file is a single short line, so a blob larger than this
+// can never be one and its content is never read.
+const maxPointerFileSize = 4096
+
+// annexKeyFromRefEntry extracts the git-annex key referenced by a tree
+// entry's content, given its mode and blob content: for a symlink (mode
+// "120000") content is the link target; for a regular file, content is the
+// pointer file's content (only meaningful when the blob is small enough to
+// possibly be an unlocked pointer file — see maxPointerFileSize). A
+// directory (mode "040000") or any content that isn't a genuine git-annex
+// reference returns ok=false.
+func annexKeyFromRefEntry(mode string, content []byte) (key string, ok bool) {
+	if mode != "120000" && mode != "100644" && mode != "100755" {
+		return "", false
+	}
+	text := strings.TrimSpace(string(content))
+	if text == "" || strings.Contains(text, "\n") {
+		return "", false
+	}
+	text = filepath.ToSlash(text)
+	if !strings.Contains(text, annexObjectsMarker) {
+		return "", false
+	}
+	base := filepath.Base(text)
+	if !annexKeyPattern.MatchString(base) {
+		return "", false
+	}
+	return base, true
+}
+
+// resolveRefAnnexKeys resolves the git-annex key of every path in
+// blobInfoMap directly from the ref's tree content — a symlink target or
+// unlocked pointer file's content read via a single `git cat-file --batch`
+// call — rather than from `git annex whereis`/`git annex find`, which
+// report the key currently associated with a path in the worktree/index,
+// not the key the path had at an older ref (exo-cli#203). Returns a map
+// from path to annex key, containing only paths that are genuinely
+// annexed at the ref.
+func resolveRefAnnexKeys(blobInfoMap map[string]blobInfo) (map[string]string, error) {
+	candidates := make([]string, 0, len(blobInfoMap))
+	hashToPaths := make(map[string][]string, len(blobInfoMap))
+	for path, info := range blobInfoMap {
+		if info.Mode != "120000" && info.Size > maxPointerFileSize {
+			continue
+		}
+		if info.Mode != "120000" && info.Mode != "100644" && info.Mode != "100755" {
+			continue
+		}
+		candidates = append(candidates, path)
+		hashToPaths[info.Hash] = append(hashToPaths[info.Hash], path)
+	}
+	if len(candidates) == 0 {
+		return map[string]string{}, nil
+	}
+
+	hashes := make([]string, 0, len(hashToPaths))
+	for hash := range hashToPaths {
+		hashes = append(hashes, hash)
+	}
+	contents, err := readGitBlobsBatch(hashes)
+	if err != nil {
+		return nil, fmt.Errorf("reading candidate blob contents: %w", err)
+	}
+
+	keys := make(map[string]string, len(candidates))
+	for hash, paths := range hashToPaths {
+		content, ok := contents[hash]
+		if !ok {
+			continue
+		}
+		for _, path := range paths {
+			key, isKey := annexKeyFromRefEntry(blobInfoMap[path].Mode, content)
+			if isKey {
+				keys[path] = key
+			}
+		}
+	}
+	return keys, nil
 }
 
 // expandCommits converts a list of commit hashes to full Commit objects.
@@ -2806,9 +3134,10 @@ func buildBlobInfoMap(targetRef string, pathFilters []string) (map[string]blobIn
 		if len(fields) < 4 {
 			continue
 		}
+		mode := fields[0]
 		hash := fields[2]
 		size, _ := strconv.ParseInt(fields[3], 10, 64)
-		result[path] = blobInfo{Hash: hash, Size: size}
+		result[path] = blobInfo{Mode: mode, Hash: hash, Size: size}
 	}
 	return result, nil
 }

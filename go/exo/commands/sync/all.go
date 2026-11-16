@@ -57,7 +57,7 @@ func allTargetRemotes(names []string, remotesConfig *initcmd.RemotesConfig) ([]s
 		if isCatalogRemoteType(name, remotesConfig) || isImportRemote(name) || isExportRemote(name) {
 			continue
 		}
-		if isReadonlyRemote(name, remotesConfig) || (remoteHasGrantsConfig(name) && !hasGrantsWriteAccess(name)) {
+		if isReadonlyRemote(name, remotesConfig) || (remoteHasGrantsConfig(name) && !hasGrantsWriteAccess(name, remotesConfig)) {
 			continue
 		}
 		targets = append(targets, name)

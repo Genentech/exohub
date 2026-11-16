@@ -197,7 +197,6 @@ func parseTime(s string) time.Time {
 	return t
 }
 
-
 // makeFakeCredHelper writes a shell script that outputs JSON credentials with
 // the given expiration to a temp dir and returns its path.
 func makeFakeCredHelper(t *testing.T, expiration string) string {
@@ -228,6 +227,82 @@ func TestFetchBaseCredentialsSetsExpiration(t *testing.T) {
 	}
 	if !baseCredsExpiration.Equal(exp) {
 		t.Errorf("baseCredsExpiration = %v, want %v", baseCredsExpiration, exp)
+	}
+}
+
+func TestFetchGrantsCredentialsForwardsAccountID(t *testing.T) {
+	resetState()
+	exp := time.Now().Add(45 * time.Minute).UTC().Truncate(time.Second)
+	expStr := exp.Format(time.RFC3339)
+
+	dir := t.TempDir()
+	argsFile := dir + "/args"
+	path := dir + "/fake-cred-helper"
+	script := "#!/bin/sh\necho \"$@\" > " + argsFile + "\necho '{\"AccessKeyId\":\"FAKEKEY\",\"SecretAccessKey\":\"FAKESECRET\",\"SessionToken\":\"FAKETOKEN\",\"Expiration\":\"" + expStr + "\"}'\n"
+	os.WriteFile(path, []byte(script), 0755)
+
+	origBin := credHelperBin
+	defer func() { credHelperBin = origBin }()
+	credHelperBin = path
+
+	// Remote with a grants_account_id: --account-id must be forwarded.
+	config["grants_account_id"] = "111122223333"
+	if err := fetchGrantsCredentials("s3://instance-bucket/"); err != nil {
+		t.Fatalf("fetchGrantsCredentials error: %v", err)
+	}
+	got, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("could not read captured args: %v", err)
+	}
+	if !strings.Contains(string(got), "--account-id 111122223333") {
+		t.Errorf("expected --account-id 111122223333, got: %q", got)
+	}
+	if !strings.Contains(string(got), "--s3url s3://instance-bucket/") {
+		t.Errorf("expected --s3url s3://instance-bucket/, got: %q", got)
+	}
+
+	// A remote with no grants_account_id must not add an --account-id flag at all.
+	config["grants_account_id"] = ""
+	if err := fetchGrantsCredentials("s3://atlas-bucket/"); err != nil {
+		t.Fatalf("fetchGrantsCredentials error: %v", err)
+	}
+	got, err = os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("could not read captured args: %v", err)
+	}
+	if strings.Contains(string(got), "--account-id") {
+		t.Errorf("expected no --account-id flag with an empty grants_account_id, got: %q", got)
+	}
+	if !strings.Contains(string(got), "--s3url s3://atlas-bucket/") {
+		t.Errorf("expected --s3url s3://atlas-bucket/, got: %q", got)
+	}
+}
+
+func TestFetchBaseCredentialsForwardsAccountID(t *testing.T) {
+	resetState()
+	exp := time.Now().Add(45 * time.Minute).UTC().Truncate(time.Second)
+	expStr := exp.Format(time.RFC3339)
+
+	dir := t.TempDir()
+	argsFile := dir + "/args"
+	path := dir + "/fake-cred-helper"
+	script := "#!/bin/sh\necho \"$@\" > " + argsFile + "\necho '{\"AccessKeyId\":\"FAKEKEY\",\"SecretAccessKey\":\"FAKESECRET\",\"SessionToken\":\"FAKETOKEN\",\"Expiration\":\"" + expStr + "\"}'\n"
+	os.WriteFile(path, []byte(script), 0755)
+
+	origBin := credHelperBin
+	defer func() { credHelperBin = origBin }()
+	credHelperBin = path
+
+	config["grants_account_id"] = "111122223333"
+	if err := fetchBaseCredentials("s3://instance-bucket/", ""); err != nil {
+		t.Fatalf("fetchBaseCredentials error: %v", err)
+	}
+	got, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("could not read captured args: %v", err)
+	}
+	if !strings.Contains(string(got), "--account-id 111122223333") {
+		t.Errorf("expected --account-id 111122223333, got: %q", got)
 	}
 }
 

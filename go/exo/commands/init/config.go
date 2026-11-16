@@ -345,32 +345,34 @@ func sshHostToHTTPS(hostname string) string {
 
 // RemoteConfig represents a single remote configuration
 type RemoteConfig struct {
-	Name           string     `yaml:"name"`
-	Type           string     `yaml:"type"`           // annex, export, import, exospace, artifactdb, drive
-	UUID           string     `yaml:"uuid,omitempty"` // git-annex UUID (tracked for documentation)
-	S3URL          string     `yaml:"s3url,omitempty"`
-	Bucket         string     `yaml:"bucket,omitempty"`     // For S3 type remotes
-	Prefix         string     `yaml:"prefix,omitempty"`     // For S3 type remotes (fileprefix)
-	Datacenter     string     `yaml:"datacenter,omitempty"` // For S3 type remotes (AWS region)
-	RsyncURL       string     `yaml:"rsyncurl,omitempty"`
-	TrackingBranch string     `yaml:"tracking_branch,omitempty"`
-	Chunk          string     `yaml:"chunk,omitempty"`
-	Include        stringList `yaml:"include,omitempty"`       // Glob patterns for filtering (import/annex only)
-	Exclude        stringList `yaml:"exclude,omitempty"`       // Glob patterns for exclusion (import/annex only)
-	ImportDir      string     `yaml:"import_dir,omitempty"`    // Destination directory for imported files (import only)
-	Grants         bool       `yaml:"grants,omitempty"`        // Use S3 Access Grants for credentials (annex/export only)
-	Permissions    string     `yaml:"permissions,omitempty"`   // Permission preset for exospace: public, group, private
-	RsyncOptions   string     `yaml:"rsync_options,omitempty"` // Custom rsync options for exospace (advanced)
-	Host           string     `yaml:"host,omitempty"`          // Custom S3 host for import remotes (e.g., localhost:9000 for MinIO)
-	Port           string     `yaml:"port,omitempty"`          // Custom S3 port for import remotes
-	Protocol       string     `yaml:"protocol,omitempty"`      // S3 protocol for import remotes: http or https (default: https)
-	InstanceURL    string     `yaml:"instance_url,omitempty"`  // Custom ArtifactDB instance URL fed by .artifactdb/ (artifactdb remotes only)
-	AtlasURL       string     `yaml:"atlas_url,omitempty"`     // Alternate ExoHub Atlas fed by .exohub-bundle/, instead of the deployment's default Atlas (artifactdb remotes only)
-	PublishOn      string     `yaml:"publish_on,omitempty"`    // When to publish: "tag" (only on tags) or "always" (default)
-	ProjectID      string     `yaml:"project_id,omitempty"`    // Custom project ID override (defaults to repo name)
-	Mode           string     `yaml:"mode,omitempty"`          // Required for catalog remotes: "export" or "import"
-	DrivePath      string     `yaml:"drive_path,omitempty"`    // Drive folder path (drive remotes only)
-	Readonly       bool       `yaml:"readonly,omitempty"`      // Never write to this remote (get-only); set for remotes importing another project's storage (exo-cli#147)
+	Name            string     `yaml:"name"`
+	Type            string     `yaml:"type"`           // annex, export, import, exospace, artifactdb, drive
+	UUID            string     `yaml:"uuid,omitempty"` // git-annex UUID (tracked for documentation)
+	S3URL           string     `yaml:"s3url,omitempty"`
+	Bucket          string     `yaml:"bucket,omitempty"`     // For S3 type remotes
+	Prefix          string     `yaml:"prefix,omitempty"`     // For S3 type remotes (fileprefix)
+	Datacenter      string     `yaml:"datacenter,omitempty"` // For S3 type remotes (AWS region)
+	RsyncURL        string     `yaml:"rsyncurl,omitempty"`
+	TrackingBranch  string     `yaml:"tracking_branch,omitempty"`
+	Chunk           string     `yaml:"chunk,omitempty"`
+	Include         stringList `yaml:"include,omitempty"`           // Glob patterns for filtering (import/annex only)
+	Exclude         stringList `yaml:"exclude,omitempty"`           // Glob patterns for exclusion (import/annex only)
+	ImportDir       string     `yaml:"import_dir,omitempty"`        // Destination directory for imported files (import only)
+	Grants          bool       `yaml:"grants,omitempty"`            // Use S3 Access Grants for credentials (annex/export only)
+	Permissions     string     `yaml:"permissions,omitempty"`       // Permission preset for exospace: public, group, private
+	RsyncOptions    string     `yaml:"rsync_options,omitempty"`     // Custom rsync options for exospace (advanced)
+	Host            string     `yaml:"host,omitempty"`              // Custom S3 host for import remotes (e.g., localhost:9000 for MinIO)
+	Port            string     `yaml:"port,omitempty"`              // Custom S3 port for import remotes
+	Protocol        string     `yaml:"protocol,omitempty"`          // S3 protocol for import remotes: http or https (default: https)
+	Role            string     `yaml:"role,omitempty"`              // artifactdb remotes only: "atlas" (default) or "instance"
+	URL             string     `yaml:"url,omitempty"`               // artifactdb remotes only: the Atlas this remote's bundle publishes to (role: atlas) or the ArtifactDB instance endpoint fed by .artifactdb/ (role: instance)
+	GrantsAccountID string     `yaml:"grants_account_id,omitempty"` // Access Grants account id to request credentials from for this remote (falls back to the build default when unset)
+	DataFrom        string     `yaml:"data_from,omitempty"`         // role: instance only — names the role: atlas remote that holds the data this instance delegates to
+	PublishOn       string     `yaml:"publish_on,omitempty"`        // When to publish: "tag" (only on tags) or "always" (default)
+	ProjectID       string     `yaml:"project_id,omitempty"`        // Custom project ID override (defaults to repo name)
+	Mode            string     `yaml:"mode,omitempty"`              // Required for catalog remotes: "export" or "import" (artifactdb role: instance takes no mode)
+	DrivePath       string     `yaml:"drive_path,omitempty"`        // Drive folder path (drive remotes only)
+	Readonly        bool       `yaml:"readonly,omitempty"`          // Never write to this remote (get-only); set for remotes importing another project's storage (exo-cli#147)
 
 	// Credentials is an opaque provider->setting map (e.g. `credentials:
 	// {<provider>: {group: ...}}`) for remote-scoped credential settings that
@@ -380,6 +382,128 @@ type RemoteConfig struct {
 	// validation and wiring via validateRemoteCredentials/remoteCredentialGroup
 	// below (see config_internal.go for the internal build).
 	Credentials map[string]map[string]string `yaml:"credentials,omitempty"`
+
+	// legacyKeys records the raw value of any `atlas_url`/`instance_url` key
+	// found while decoding this remote, which no longer exist on this struct
+	// (replaced by role/url). Decoding never fails on them so the rest of
+	// .exohub/remotes can still be inspected; LoadRemotesConfig/
+	// LoadRemotesConfigFromRef and Validate turn a non-empty legacyKeys into
+	// a refusal before any command acts (see legacyKeyError).
+	legacyKeys map[string]string
+}
+
+// UnmarshalYAML decodes a remote and records any `atlas_url`/`instance_url`
+// keys found on it (see legacyKeys) without failing the decode itself.
+func (r *RemoteConfig) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("remote must be a mapping")
+	}
+	type remoteConfigAlias RemoteConfig
+	var raw remoteConfigAlias
+	if err := node.Decode(&raw); err != nil {
+		return err
+	}
+	*r = RemoteConfig(raw)
+
+	r.legacyKeys = nil
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		key := node.Content[i].Value
+		if key == "atlas_url" || key == "instance_url" {
+			if r.legacyKeys == nil {
+				r.legacyKeys = make(map[string]string)
+			}
+			r.legacyKeys[key] = node.Content[i+1].Value
+		}
+	}
+	return nil
+}
+
+// legacyRemoteKeysErr wraps the task 1.3 refusal text so callers (e.g.
+// runInit's --profile migration path, exo-cli#197) can tell via errors.Is
+// that a LoadRemotesConfig failure is specifically this refusal, not some
+// other parse/structural error.
+type legacyRemoteKeysErr struct{ msg string }
+
+func (e *legacyRemoteKeysErr) Error() string { return e.msg }
+
+// errLegacyRemoteKeys is the sentinel errors.Is target for
+// legacyRemoteKeysErr; it carries no message of its own.
+var errLegacyRemoteKeys = &legacyRemoteKeysErr{}
+
+func (e *legacyRemoteKeysErr) Is(target error) bool { return target == errLegacyRemoteKeys }
+
+// legacyKeyError returns the task 1.3 refusal for a remote carrying
+// atlas_url/instance_url, or nil if it carries neither: exo no longer
+// accepts those keys, and refuses before any upload or API call, showing
+// the equivalent role-split configuration and profileHint (the exo command
+// that rewrites .exohub/remotes). This is the generic, offline example
+// (used by Validate(); legacyRemoteKeysError below tries a profile-
+// rendered one first).
+func (r RemoteConfig) legacyKeyError(profileHint string) error {
+	if !r.hasLegacyKeys() {
+		return nil
+	}
+	return &legacyRemoteKeysErr{msg: legacyKeyErrorMessage(r, profileHint, r.genericLegacyExample())}
+}
+
+// genericLegacyExample renders the placeholder role-split YAML for a
+// legacy remote, offline: real atlas_url/instance_url values but a
+// placeholder instance bucket (the real one lives in the profile, not in
+// anything a legacy remote's own fields carry).
+func (r RemoteConfig) genericLegacyExample() string {
+	var b strings.Builder
+	if url, ok := r.legacyKeys["atlas_url"]; ok {
+		fmt.Fprintf(&b, "  - name: %s\n    type: artifactdb\n    role: atlas\n    url: %s\n    s3url: %s\n", r.Name, url, r.S3URL)
+	}
+	if url, ok := r.legacyKeys["instance_url"]; ok {
+		fmt.Fprintf(&b, "  - name: %s-instance\n    type: artifactdb\n    role: instance\n    url: %s\n    s3url: s3://<bucket>/<project_id>\n    data_from: %s\n", r.Name, url, r.Name)
+	}
+	return b.String()
+}
+
+// legacyKeyErrorMessage assembles the full refusal text for r, with
+// example as the role-split YAML block (either genericLegacyExample's
+// offline placeholder or legacyMigrationExampleFromProfile's real
+// profile-rendered one).
+func legacyKeyErrorMessage(r RemoteConfig, profileHint, example string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "remote %q: atlas_url/instance_url are no longer accepted in .exohub/remotes; exo refuses before any upload or API call.\n", r.Name)
+	b.WriteString("Rewrite it with the equivalent role-split configuration:\n")
+	b.WriteString(example)
+	fmt.Fprintf(&b, "Rewrite .exohub/remotes with: %s\n", profileHint)
+	return b.String()
+}
+
+// hasLegacyKeys reports whether r carries atlas_url or instance_url.
+func (r RemoteConfig) hasLegacyKeys() bool { return len(r.legacyKeys) > 0 }
+
+// legacyRemoteKeysError scans remotes for any carrying atlas_url/
+// instance_url and returns the first refusal found, or nil. The migration
+// hint names the repo's recorded profile (.exohub/profile.lock) when
+// present, falling back to a placeholder. When a profile lock exists, the
+// refusal's example YAML is the profile's own rendered role-split remotes
+// (real names, real instance bucket, real data_from) instead of the
+// generic placeholder — best-effort, so a fetch/render failure (offline,
+// server down) falls back to the generic example rather than failing the
+// refusal itself (exo-cli#197; see legacyRemoteKeysExampleFromProfile).
+func legacyRemoteKeysError(remotes []RemoteConfig) error {
+	profileHint := "exo init --profile <profile> --remote <remote>"
+	var profileExamples map[string]string
+	if lock, err := LoadProfileLock(); err == nil && lock != nil && lock.Profile != "" {
+		profileHint = fmt.Sprintf("exo init --profile %s --remote <remote>", lock.Profile)
+		profileExamples = legacyRemoteKeysExamplesFromProfile(lock.Profile, remotes)
+	}
+	for _, r := range remotes {
+		if !r.hasLegacyKeys() {
+			continue
+		}
+		example, ok := profileExamples[r.Name]
+		if !ok {
+			example = r.genericLegacyExample()
+		}
+		return &legacyRemoteKeysErr{msg: legacyKeyErrorMessage(r, profileHint, example)}
+	}
+	return nil
 }
 
 // stringList is a YAML type that accepts both single strings and string lists
@@ -422,6 +546,17 @@ var remoteCredentialGroup func(r RemoteConfig) string
 
 // Validate checks if the remote configuration is valid
 func (r *RemoteConfig) Validate() error {
+	if err := r.legacyKeyError("exo init --profile <profile> --remote <remote>"); err != nil {
+		return err
+	}
+	return r.validateFields()
+}
+
+// validateFields runs every structural check Validate does except the
+// legacy-key refusal, so the lenient profile-migration path (see
+// LoadRemotesConfigAllowLegacy) still catches an invalid role/mode/url on a
+// remote that also happens to carry atlas_url/instance_url.
+func (r *RemoteConfig) validateFields() error {
 	if r.Name == "" {
 		return fmt.Errorf("remote name is required")
 	}
@@ -537,6 +672,34 @@ func (r *RemoteConfig) Validate() error {
 		if r.Host != "" || r.Port != "" || r.Protocol != "" {
 			return fmt.Errorf("host/port/protocol are not allowed for drive remotes")
 		}
+	case "artifactdb":
+		switch r.Role {
+		case "", "atlas":
+			if r.Mode == "" {
+				return fmt.Errorf("mode is required for catalog remote type '%s' (e.g. mode: export)", r.Type)
+			}
+			if r.Mode != "export" && r.Mode != "import" {
+				return fmt.Errorf("invalid mode '%s' for remote type '%s' (must be: export or import)", r.Mode, r.Type)
+			}
+			if r.S3URL == "" {
+				return fmt.Errorf("s3url is required for %s remotes", r.Type)
+			}
+		case "instance":
+			if r.Mode != "" {
+				return fmt.Errorf("remote %q: instance remotes take no mode (got %q)", r.Name, r.Mode)
+			}
+			if r.URL == "" {
+				return fmt.Errorf("remote %q: url is required for role: instance remotes", r.Name)
+			}
+			if r.S3URL == "" {
+				return fmt.Errorf("remote %q: s3url is required for role: instance remotes", r.Name)
+			}
+		default:
+			return fmt.Errorf("remote %q: invalid role %q (must be: atlas or instance)", r.Name, r.Role)
+		}
+		if r.URL != "" && !strings.HasPrefix(r.URL, "https://") {
+			return fmt.Errorf("remote %q: url must be HTTPS, got %q", r.Name, r.URL)
+		}
 	default:
 		// Catalog remote — requires mode field to build binary name: git-annex-remote-<type>-<mode>
 		if r.Mode == "" {
@@ -586,6 +749,71 @@ func LoadRemotesConfig() (*RemotesConfig, error) {
 	if err := yaml.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("failed to parse .exohub/remotes: %w", err)
 	}
+	if err := legacyRemoteKeysError(config.Remotes); err != nil {
+		return nil, err
+	}
+	if err := validateRemotesConfig(config.Remotes); err != nil {
+		return nil, err
+	}
+
+	return &config, nil
+}
+
+// validateRemotesConfig runs Validate on every remote, so any exo command
+// that loads .exohub/remotes (not just exo init) catches an invalid
+// role/mode/url artifactdb config — or any other remote's invalid config —
+// before acting (split-remotes-by-role spec: role values, role↔mode rules,
+// instance's required url/s3url, HTTPS url, enforced on load).
+func validateRemotesConfig(remotes []RemoteConfig) error {
+	for _, r := range remotes {
+		if err := r.Validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateRemotesConfigFields runs validateFields (every structural check
+// except the legacy-key refusal) on every remote. Used by
+// LoadRemotesConfigAllowLegacy so a remote that's both legacy AND otherwise
+// malformed (e.g. an invalid role) still fails loudly instead of flowing
+// into the migration path.
+func validateRemotesConfigFields(remotes []RemoteConfig) error {
+	for _, r := range remotes {
+		if err := r.validateFields(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// LoadRemotesConfigAllowLegacy reads .exohub/remotes from the current
+// directory like LoadRemotesConfig, but never refuses on a remote carrying
+// atlas_url/instance_url (exo-cli#197): used only by the `exo init
+// --profile` migration path (runInit's profileRequested branch), which
+// needs to inspect a legacy remote's existing fields (uuid in particular)
+// in order to convert it into the profile's role-split shape. Every other
+// caller keeps using LoadRemotesConfig, so the refusal still applies
+// everywhere else (sync/publish/non-profile init). Every other structural
+// check (role/mode/url rules) still runs, so an otherwise-invalid remote
+// that also happens to be legacy still fails loudly.
+func LoadRemotesConfigAllowLegacy() (*RemotesConfig, error) {
+	path := filepath.Join(".exohub", "remotes")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &RemotesConfig{Remotes: []RemoteConfig{}}, nil
+		}
+		return nil, fmt.Errorf("failed to read .exohub/remotes: %w", err)
+	}
+
+	var config RemotesConfig
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("failed to parse .exohub/remotes: %w", err)
+	}
+	if err := validateRemotesConfigFields(config.Remotes); err != nil {
+		return nil, err
+	}
 
 	return &config, nil
 }
@@ -597,6 +825,36 @@ func LoadRemotesConfig() (*RemotesConfig, error) {
 // routing. A ref with no .exohub/remotes (predates its introduction) yields
 // an empty config, same as LoadRemotesConfig's missing-file case.
 func LoadRemotesConfigFromRef(ref string) (*RemotesConfig, error) {
+	out, err := exec.Command("git", "show", ref+":.exohub/remotes").Output()
+	if err != nil {
+		return &RemotesConfig{Remotes: []RemoteConfig{}}, nil
+	}
+
+	var config RemotesConfig
+	if err := yaml.Unmarshal(out, &config); err != nil {
+		return nil, fmt.Errorf("failed to parse %s:.exohub/remotes: %w", ref, err)
+	}
+	if err := legacyRemoteKeysError(config.Remotes); err != nil {
+		return nil, err
+	}
+	if err := validateRemotesConfig(config.Remotes); err != nil {
+		return nil, err
+	}
+	return &config, nil
+}
+
+// LoadRemotesConfigFromRefLenient reads .exohub/remotes as it was committed
+// at ref, like LoadRemotesConfigFromRef, but never refuses on a legacy
+// atlas_url/instance_url remote or any other Validate failure (exo-cli#196):
+// a ref made before the role-split migration necessarily carries legacy
+// keys, and per the --ref design (exo-cli#176) routing comes from the
+// CURRENT .exohub/remotes, not the ref's own copy — the ref's file is
+// consulted only to check that every catalog remote it referenced still has
+// a home in the current routing (by name or UUID, via FindRemoteConfig),
+// which only needs Name/Type/UUID, never url/s3url/role. A ref with no
+// .exohub/remotes (predates its introduction) yields an empty config, same
+// as LoadRemotesConfigFromRef's missing-file case.
+func LoadRemotesConfigFromRefLenient(ref string) (*RemotesConfig, error) {
 	out, err := exec.Command("git", "show", ref+":.exohub/remotes").Output()
 	if err != nil {
 		return &RemotesConfig{Remotes: []RemoteConfig{}}, nil
@@ -630,10 +888,10 @@ func ResolveDefaultRoutingRef() string {
 
 // RoutingFieldsDiffer reports whether two RemoteConfig values differ in any
 // field that determines where content/metadata gets published: type,
-// s3url, bucket/prefix/datacenter, instance_url, atlas_url, mode, grants,
-// project_id. Content-only fields (include/exclude, import_dir, chunk, ...)
-// are deliberately ignored. A nil on only one side counts as a difference
-// (the remote exists on one side's routing but not the other's).
+// s3url, bucket/prefix/datacenter, role, url, mode, grants, project_id.
+// Content-only fields (include/exclude, import_dir, chunk, ...) are
+// deliberately ignored. A nil on only one side counts as a difference (the
+// remote exists on one side's routing but not the other's).
 func RoutingFieldsDiffer(a, b *RemoteConfig) bool {
 	if (a == nil) != (b == nil) {
 		return true
@@ -646,8 +904,8 @@ func RoutingFieldsDiffer(a, b *RemoteConfig) bool {
 		a.Bucket != b.Bucket ||
 		a.Prefix != b.Prefix ||
 		a.Datacenter != b.Datacenter ||
-		a.InstanceURL != b.InstanceURL ||
-		a.AtlasURL != b.AtlasURL ||
+		a.Role != b.Role ||
+		a.URL != b.URL ||
 		a.Mode != b.Mode ||
 		a.Grants != b.Grants ||
 		a.ProjectID != b.ProjectID
@@ -674,6 +932,71 @@ func FindRemoteConfig(target RemoteConfig, config *RemotesConfig) *RemoteConfig 
 			cc := c
 			return &cc
 		}
+	}
+	return nil
+}
+
+// ResolveDelegationAtlas resolves a role: instance remote's delegation
+// Atlas (spec "Delegation Atlas resolution"): the remote named by
+// data_from when set (it must exist and be role: atlas), otherwise the
+// single role: atlas remote among all. With zero or several role: atlas
+// remotes and no data_from, it refuses, listing the candidates.
+func ResolveDelegationAtlas(instance RemoteConfig, all []RemoteConfig) (*RemoteConfig, error) {
+	if instance.DataFrom != "" {
+		for _, r := range all {
+			if r.Name == instance.DataFrom {
+				if r.Type != "artifactdb" || (r.Role != "" && r.Role != "atlas") {
+					return nil, fmt.Errorf("remote %q: data_from %q is not a role: atlas artifactdb remote", instance.Name, instance.DataFrom)
+				}
+				rr := r
+				return &rr, nil
+			}
+		}
+		return nil, fmt.Errorf("remote %q: data_from %q names no remote in .exohub/remotes", instance.Name, instance.DataFrom)
+	}
+
+	var atlases []RemoteConfig
+	for _, r := range all {
+		if r.Type == "artifactdb" && (r.Role == "" || r.Role == "atlas") {
+			atlases = append(atlases, r)
+		}
+	}
+	switch len(atlases) {
+	case 0:
+		return nil, fmt.Errorf("remote %q: no role: atlas remote found to delegate to (set data_from or add one)", instance.Name)
+	case 1:
+		return &atlases[0], nil
+	default:
+		names := make([]string, len(atlases))
+		for i, r := range atlases {
+			names[i] = r.Name
+		}
+		return nil, fmt.Errorf("remote %q: ambiguous delegation Atlas, candidates are %s (set data_from)", instance.Name, strings.Join(names, ", "))
+	}
+}
+
+// ValidateInstancePrefix enforces the spec "Instance prefix guard": a
+// role: instance remote's s3url must be exactly s3://<bucket>/<projectID>
+// (one path segment, equal to the remote's effective project id, not
+// starting with "_"). Shared by exo and the catalog binary so both refuse
+// the same way before credentials are requested.
+func ValidateInstancePrefix(s3url, projectID string) error {
+	const prefix = "s3://"
+	if !strings.HasPrefix(s3url, prefix) {
+		return fmt.Errorf("invalid s3url %q (must start with s3://)", s3url)
+	}
+	rest := strings.TrimPrefix(s3url, prefix)
+	parts := strings.SplitN(rest, "/", 2)
+	bucket := parts[0]
+	if bucket == "" {
+		return fmt.Errorf("invalid s3url %q (missing bucket)", s3url)
+	}
+	want := fmt.Sprintf("s3://%s/%s", bucket, projectID)
+	if s3url != want {
+		return fmt.Errorf("s3url %q is not allowed for an instance remote (expected %s)", s3url, want)
+	}
+	if strings.HasPrefix(projectID, "_") {
+		return fmt.Errorf("s3url %q is not allowed for an instance remote (project id %q must not start with '_')", s3url, projectID)
 	}
 	return nil
 }

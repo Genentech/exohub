@@ -3,6 +3,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -32,7 +33,7 @@ func TestGetCredsFromServer(t *testing.T) {
 	t.Setenv("EXOHUB_API_URL", ts.URL)
 	noop := func(string, ...any) {}
 
-	creds, err := getCredsFromServer("s3://bucket/prefix/", "READ", noop)
+	creds, err := getCredsFromServer("s3://bucket/prefix/", "READ", "", noop)
 	if err != nil {
 		t.Fatalf("getCredsFromServer error: %v", err)
 	}
@@ -47,6 +48,46 @@ func TestGetCredsFromServer(t *testing.T) {
 	}
 }
 
+func TestGetCredsFromServerSourceS3URL(t *testing.T) {
+	var gotBody map[string]string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"AccessKeyId":"ASIA","SecretAccessKey":"s","SessionToken":"t","Expiration":"2099-01-01T00:00:00Z"}`)
+	}))
+	defer ts.Close()
+
+	t.Setenv("EXOHUB_API_URL", ts.URL)
+	noop := func(string, ...any) {}
+
+	if _, err := getCredsFromServer("s3://instance-bucket/proj", "READ", "s3://atlas-bucket/prefix/", noop); err != nil {
+		t.Fatalf("getCredsFromServer error: %v", err)
+	}
+	if gotBody["source_s3url"] != "s3://atlas-bucket/prefix/" {
+		t.Errorf("source_s3url = %q, want s3://atlas-bucket/prefix/", gotBody["source_s3url"])
+	}
+}
+
+func TestGetCredsFromServerNoSourceS3URLOmitted(t *testing.T) {
+	var gotBody map[string]string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"AccessKeyId":"ASIA","SecretAccessKey":"s","SessionToken":"t","Expiration":"2099-01-01T00:00:00Z"}`)
+	}))
+	defer ts.Close()
+
+	t.Setenv("EXOHUB_API_URL", ts.URL)
+	noop := func(string, ...any) {}
+
+	if _, err := getCredsFromServer("s3://atlas-bucket/prefix/", "READ", "", noop); err != nil {
+		t.Fatalf("getCredsFromServer error: %v", err)
+	}
+	if _, ok := gotBody["source_s3url"]; ok {
+		t.Errorf("source_s3url should be omitted, got %q", gotBody["source_s3url"])
+	}
+}
+
 func TestGetCredsFromServerError(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -58,7 +99,7 @@ func TestGetCredsFromServerError(t *testing.T) {
 	t.Setenv("EXOHUB_API_URL", ts.URL)
 	noop := func(string, ...any) {}
 
-	_, err := getCredsFromServer("s3://bucket/prefix/", "READ", noop)
+	_, err := getCredsFromServer("s3://bucket/prefix/", "READ", "", noop)
 	if err == nil {
 		t.Fatal("expected error from server 403")
 	}
@@ -81,7 +122,7 @@ func TestGetCredsFromServer403(t *testing.T) {
 	t.Setenv("EXOHUB_API_URL", ts.URL)
 	noop := func(string, ...any) {}
 
-	_, err := getCredsFromServer("s3://bucket/prefix/", "READ", noop)
+	_, err := getCredsFromServer("s3://bucket/prefix/", "READ", "", noop)
 	if err == nil {
 		t.Fatal("expected error from server 403")
 	}
@@ -103,7 +144,7 @@ func TestGetCredsFromServer401(t *testing.T) {
 	t.Setenv("EXOHUB_API_URL", ts.URL)
 	noop := func(string, ...any) {}
 
-	_, err := getCredsFromServer("s3://bucket/prefix/", "READ", noop)
+	_, err := getCredsFromServer("s3://bucket/prefix/", "READ", "", noop)
 	if err == nil {
 		t.Fatal("expected error from server 401")
 	}
@@ -123,7 +164,7 @@ func TestGetCredsFromServer5xx(t *testing.T) {
 	t.Setenv("EXOHUB_API_URL", ts.URL)
 	noop := func(string, ...any) {}
 
-	_, err := getCredsFromServer("s3://bucket/prefix/", "READ", noop)
+	_, err := getCredsFromServer("s3://bucket/prefix/", "READ", "", noop)
 	if err == nil {
 		t.Fatal("expected error from server 502")
 	}
@@ -153,7 +194,7 @@ func TestGetCredsFromServerDetailParsed(t *testing.T) {
 	t.Setenv("EXOHUB_API_URL", ts.URL)
 	noop := func(string, ...any) {}
 
-	_, err := getCredsFromServer("s3://bucket/prefix/", "READ", noop)
+	_, err := getCredsFromServer("s3://bucket/prefix/", "READ", "", noop)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -166,6 +207,114 @@ func TestGetCredsFromServerDetailParsed(t *testing.T) {
 	}
 }
 
+
+// TestInstanceSourceRefusalHint_FirstClaim verifies the exact detail text
+// from the API's authorize_instance_project refusal (exohub-workers!651)
+// for a project with no recorded source yet is recognized — quoting the
+// server's own wording so a future change to it breaks this test, not
+// users.
+func TestInstanceSourceRefusalHint_FirstClaim(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, `{"detail":"instance project 'DS1' has no recorded source yet; a READWRITE request with write access on the source is required to claim it"}`)
+	}))
+	defer ts.Close()
+
+	t.Setenv("EXOHUB_API_URL", ts.URL)
+	noop := func(string, ...any) {}
+
+	_, err := getCredsFromServer("s3://instance-bucket/DS1", "READ", "s3://atlas-bucket/DS1", noop)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	hint, ok := instanceSourceRefusalHint(err)
+	if !ok {
+		t.Fatalf("expected instanceSourceRefusalHint to recognize the first-claim refusal, got err: %v", err)
+	}
+	if !strings.Contains(hint, "claim") {
+		t.Errorf("expected hint to mention claiming, got: %q", hint)
+	}
+}
+
+// TestInstanceSourceRefusalHint_BoundToDifferentSource verifies the exact
+// binding-mismatch detail text is recognized.
+func TestInstanceSourceRefusalHint_BoundToDifferentSource(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, `{"detail":"instance project 'DS1' is bound to a different source project"}`)
+	}))
+	defer ts.Close()
+
+	t.Setenv("EXOHUB_API_URL", ts.URL)
+	noop := func(string, ...any) {}
+
+	_, err := getCredsFromServer("s3://instance-bucket/DS1", "READ", "s3://atlas-bucket/DS1", noop)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	hint, ok := instanceSourceRefusalHint(err)
+	if !ok {
+		t.Fatalf("expected instanceSourceRefusalHint to recognize the binding mismatch, got err: %v", err)
+	}
+	if !strings.Contains(hint, "data_from") {
+		t.Errorf("expected hint to mention data_from, got: %q", hint)
+	}
+}
+
+// TestInstanceSourceRefusalHint_ProjectMismatch verifies the exact
+// source_s3url project-id mismatch detail text is recognized.
+func TestInstanceSourceRefusalHint_ProjectMismatch(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, `{"detail":"source_s3url project 'other-proj' does not match instance project_id 'DS1'"}`)
+	}))
+	defer ts.Close()
+
+	t.Setenv("EXOHUB_API_URL", ts.URL)
+	noop := func(string, ...any) {}
+
+	_, err := getCredsFromServer("s3://instance-bucket/DS1", "READ", "s3://atlas-bucket/other-proj", noop)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	hint, ok := instanceSourceRefusalHint(err)
+	if !ok {
+		t.Fatalf("expected instanceSourceRefusalHint to recognize the project-id mismatch, got err: %v", err)
+	}
+	if !strings.Contains(hint, "project_id") {
+		t.Errorf("expected hint to mention project_id, got: %q", hint)
+	}
+}
+
+// TestInstanceSourceRefusalHint_SourceS3URLRequired verifies the exact 400
+// "source_s3url is required" detail text (an old client that predates
+// source_s3url support) is recognized.
+func TestInstanceSourceRefusalHint_SourceS3URLRequired(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"detail":"source_s3url is required for instance project credential requests"}`)
+	}))
+	defer ts.Close()
+
+	t.Setenv("EXOHUB_API_URL", ts.URL)
+	noop := func(string, ...any) {}
+
+	_, err := getCredsFromServer("s3://instance-bucket/DS1", "READ", "", noop)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	hint, ok := instanceSourceRefusalHint(err)
+	if !ok {
+		t.Fatalf("expected instanceSourceRefusalHint to recognize the source_s3url-required refusal, got err: %v", err)
+	}
+	if !strings.Contains(hint, "upgrade") {
+		t.Errorf("expected hint to mention upgrading, got: %q", hint)
+	}
+}
 
 func TestFallbackToServerOnMissingProfile(t *testing.T) {
 	// Simulate a Model 2 worker: no local AWS profile, but token.json is present.
@@ -198,7 +347,7 @@ func TestFallbackToServerOnMissingProfile(t *testing.T) {
 	}
 
 	// Part 2: getCredsFromServer must return Model 2 credentials.
-	creds, err := getCredsFromServer("s3://bucket/prefix/", "READ", noop)
+	creds, err := getCredsFromServer("s3://bucket/prefix/", "READ", "", noop)
 	if err != nil {
 		t.Fatalf("getCredsFromServer error: %v", err)
 	}
@@ -262,7 +411,7 @@ func TestCacheLockConcurrency(t *testing.T) {
 			}
 
 			// Fetch from server and write cache.
-			creds, err := getCredsFromServer(s3URL, perm, noop)
+			creds, err := getCredsFromServer(s3URL, perm, "", noop)
 			if err != nil {
 				t.Errorf("getCredsFromServer error: %v", err)
 				return

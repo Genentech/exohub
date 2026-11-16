@@ -1289,7 +1289,7 @@ func TestRunProfileInitRefusesS3URLMoveWithoutAllowMove(t *testing.T) {
 	// sentinel reverse-match can't recover "DS000000001" from it (the
 	// literal prefix text no longer lines up) and falls through to origin.
 	cfg := &RemotesConfig{Remotes: []RemoteConfig{
-		{Name: "exohub-annex", Type: "annex", S3URL: "s3://exohub-sandbox-uat/sandbox/my-profile/DS000000001/_annex", Chunk: "1GiB"},
+		{Name: "exohub-annex", Type: "annex", S3URL: "s3://example-sandbox-bucket/sandbox/my-profile/DS000000001/_annex", Chunk: "1GiB"},
 	}}
 	if err := SaveRemotesConfig(cfg); err != nil {
 		t.Fatalf("SaveRemotesConfig: %v", err)
@@ -1304,7 +1304,7 @@ func TestRunProfileInitRefusesS3URLMoveWithoutAllowMove(t *testing.T) {
 		"vars": {},
 		"prompts": [],
 		"templates": {
-			"remotes": "remotes:\n  - name: exohub-annex\n    type: annex\n    s3url: s3://exohub-sandbox-uat/styx/my-profile/{{.Folder}}/_annex\n    chunk: 1GiB\n"
+			"remotes": "remotes:\n  - name: exohub-annex\n    type: annex\n    s3url: s3://example-sandbox-bucket/styx/my-profile/{{.Folder}}/_annex\n    chunk: 1GiB\n"
 		},
 		"actions": []
 	}`
@@ -1349,7 +1349,7 @@ func TestRunProfileInitAllowMoveAppliesS3URLMove(t *testing.T) {
 	})
 
 	cfg := &RemotesConfig{Remotes: []RemoteConfig{
-		{Name: "exohub-annex", Type: "annex", S3URL: "s3://exohub-sandbox-uat/sandbox/my-profile/DS000000001/_annex", Chunk: "1GiB"},
+		{Name: "exohub-annex", Type: "annex", S3URL: "s3://example-sandbox-bucket/sandbox/my-profile/DS000000001/_annex", Chunk: "1GiB"},
 	}}
 	if err := SaveRemotesConfig(cfg); err != nil {
 		t.Fatalf("SaveRemotesConfig: %v", err)
@@ -1360,7 +1360,7 @@ func TestRunProfileInitAllowMoveAppliesS3URLMove(t *testing.T) {
 		"vars": {},
 		"prompts": [],
 		"templates": {
-			"remotes": "remotes:\n  - name: exohub-annex\n    type: annex\n    s3url: s3://exohub-sandbox-uat/styx/my-profile/{{.Folder}}/_annex\n    chunk: 1GiB\n"
+			"remotes": "remotes:\n  - name: exohub-annex\n    type: annex\n    s3url: s3://example-sandbox-bucket/styx/my-profile/{{.Folder}}/_annex\n    chunk: 1GiB\n"
 		},
 		"actions": []
 	}`
@@ -1396,7 +1396,7 @@ func TestRunProfileInitAllowMoveAppliesS3URLMove(t *testing.T) {
 		t.Fatalf("LoadRemotesConfig: %v", err)
 	}
 	annex, ok := findRemoteConfig(after, "exohub-annex")
-	if !ok || annex.S3URL != "s3://exohub-sandbox-uat/styx/my-profile/DS000000001/_annex" {
+	if !ok || annex.S3URL != "s3://example-sandbox-bucket/styx/my-profile/DS000000001/_annex" {
 		t.Errorf("exohub-annex = %+v, want s3url styx/my-profile/DS000000001", annex)
 	}
 }

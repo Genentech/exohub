@@ -142,11 +142,96 @@ what a real `--all` would transfer — including remotes whose `wanted` is the
 literal `standard` (resolved from the remote's group, e.g. `archive`,
 `backup`, `manual`), not just explicit `include=`/`exclude=` expressions.
 
+## Default incremental history upload
+
+A plain `exo sync` (no flags) no longer uploads only the current checkout's
+content. For the current branch, it also uploads the content of every commit
+since the last successful upload to each remote — so a tag or commit whose
+content was replaced before it was ever synced doesn't get silently left
+behind, without you having to remember `exo sync --all`.
+
+Progress is tracked per remote and branch with a local-only marker ref,
+`refs/exo/content-synced/<remote>/<branch>`. This marker:
+
+- is never a branch or tag (`git branch`/`git tag` never list it);
+- is never pushed or fetched — plain `git push`, `git annex sync`, and clones
+  only ever transfer `refs/heads/*`, `refs/tags/*`, and git-annex's own refs;
+- advances **only** after that remote's upload succeeds, one commit at a
+  time, so a failure partway through a long catch-up leaves already-uploaded
+  commits marked and retries just the remainder on the next sync;
+- re-points itself at the new tip (via the commits' merge-base) after a
+  rebase or force-push, instead of pinning an abandoned commit forever;
+- falls back to the upstream tracking branch's tip when no marker exists yet
+  (printing a one-time hint to run `exo sync --check`), or to full history
+  when there is no marker and no upstream (the first upload of a repository).
+
+Each commit in the range is diffed for its added/modified entries only
+(`git diff-tree --diff-filter=AMT`), built into a throwaway synthetic tree,
+and uploaded with `git annex copy --branch=<tree> [--want-get-by=<remote>]`
+— the same routing-aware mechanism `exo sync --all` uses, so a remote's
+preferred content expression is respected for every intermediate version,
+not just the one currently checked out. The existing work-tree sync
+(`git annex sync --content`) is unaffected; this is purely additive.
+
+This default pass only runs for a plain, unfiltered `exo sync`: it is skipped
+when `--path`, `--include`, `--exclude`, or `--bundle-dir` narrow what this
+particular invocation syncs, when `--no-content` is set (it means "don't
+move content", so it disables the history pass the same way it keeps import
+remotes from storing content), and it can be disabled entirely for one
+invocation with `--skip-history-upload`. A failure uploading history to one
+remote is reported as a warning and does not fail the overall `exo sync` —
+the current checkout's content already synced normally; the incremental
+catch-up is retried on the next sync.
+
+### Previewing the pending catch-up (`--dry-run` / `--json`)
+
+`exo sync --dry-run` (and `--dry-run --json`) report what the default
+incremental pass *would* upload — per remote, the commit range and the
+file count of each pending commit — without uploading anything and without
+touching any marker:
+
+```
+$ exo sync --dry-run
+...
+Dry-run plan for remote 'my-remote'
+  ...
+  pending history catch-up: 2 commit(s), 3 file(s) total
+    3f1a9c2e1b7a: 1 file(s)
+    9b7e2a0c44de: 2 file(s)
+
+$ exo sync --dry-run --json
+{"$schema": ..., "remotes": [...], "pending_history_upload": [
+  {"remote": "my-remote", "branch": "main", "baseline": "<sha or omitted>",
+   "commits": [{"commit": "3f1a9c2e1b7a...", "files": 1}, {"commit": "9b7e2a0c44de...", "files": 2}],
+   "total_files": 3}
+]}
+```
+
+`pending_history_upload` is omitted entirely when no remote has anything
+pending (nothing left to catch up on, same convention as `catalog_remotes`).
+
+### A remote's markers are reset when its location moves
+
+If a remote's storage location changes (`exo init` detects a real s3url
+change, as opposed to first-time setup), its `refs/exo/content-synced/*`
+markers are pruned: they claimed "uploaded through commit X" against the
+*old* location, which the new location knows nothing about. The next
+`exo sync` re-baselines (upstream tip, or full history with no upstream)
+instead of trusting stale markers and skipping commits that were never
+actually uploaded to the new location.
+
+**Exception:** with a verified `exo init --migrate-content` move, the
+markers are left alone. Migration already copies (and verifies) everything
+from the old location to the new one, so the new location genuinely has the
+same history the markers claim — pruning them would only force a needless
+full re-baseline. A failed or incomplete migration leaves the s3url
+unchanged entirely, so this exception never applies to a half-finished move.
+
 ## Scope
 
-`exo sync --check` and `exo sync --all` are the first two consumers of one
-shared completeness engine (see issue #161 for the full design). Two more are
-planned: a time-budgeted warning at the end of a normal `exo sync` (with a
-default, incremental content upload across commit ranges), a refusal in
-`exo publish` when the published ref references missing content, and a full,
-unbudgeted check in `exo doctor`. Those are tracked separately.
+`exo sync --check`, `exo sync --all`, and the default incremental history
+upload are consumers of one shared completeness engine (see issue #161 for
+the full design). The engine's remaining consumers are a refusal in
+`exo publish` when the published ref references missing content, a
+time-budgeted end-of-sync warning built on incremental key verification, and
+a full, unbudgeted check in `exo doctor`. Those are tracked separately.

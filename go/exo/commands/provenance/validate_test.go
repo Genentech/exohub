@@ -3,13 +3,21 @@ package provenance
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
+
+	lib "github.com/Genentech/exohub/go/exo/internal/provenance"
 )
 
 func runValidateCmd(t *testing.T, args ...string) (stdout string, err error) {
 	t.Helper()
-	cmd := newValidateCommand()
+	return runValidateCmdVersion(t, "", args...)
+}
+
+func runValidateCmdVersion(t *testing.T, version string, args ...string) (stdout string, err error) {
+	t.Helper()
+	cmd := newValidateCommand(version)
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
 	cmd.SetErr(&buf)
@@ -23,7 +31,7 @@ func runValidateCmd(t *testing.T, args ...string) (stdout string, err error) {
 // cobra's OutOrStderr default).
 func runValidateCmdSeparated(t *testing.T, args ...string) (stdout, stderr string, err error) {
 	t.Helper()
-	cmd := newValidateCommand()
+	cmd := newValidateCommand("")
 	var outBuf, errBuf bytes.Buffer
 	cmd.SetOut(&outBuf)
 	cmd.SetErr(&errBuf)
@@ -230,5 +238,72 @@ func TestValidate_RequireViolationReportsError(t *testing.T) {
 	}
 	if !strings.Contains(out, "results/out.txt") {
 		t.Errorf("output = %q, want it to name results/out.txt", out)
+	}
+}
+
+// TestValidate_RefusesRecordNeedingNewerExo covers spec "Readers refuse
+// records that need a newer exo": exo provenance validate reports an error
+// naming the record and the upgrade message when a record's
+// exo:minVersion exceeds the running exo version.
+func TestValidate_RefusesRecordNeedingNewerExo(t *testing.T) {
+	root, run := addTestRepo(t, false)
+	chdir(t, root)
+	writeFile(t, root, "a.txt", "hello\n")
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+	blobOID := strings.TrimSpace(run("git", "rev-parse", "HEAD:a.txt"))
+
+	rec := fmt.Sprintf(`{
+  "@context": %q,
+  "@id": %q,
+  "exo:assertion": "recorded",
+  "exo:assertedBy": "urn:exohub:agent:person:alice",
+  "generatedAtTime": "2026-10-14T10:00:00Z",
+  "exo:minVersion": "0.999.0",
+  "@graph": [{"@id": "urn:exohub:git:blob:%s", "@type": "Entity"}]
+}`, lib.ContextIRI, lib.NewRecordID(), blobOID)
+	writeFile(t, root, ".exohub/provenance/a.jsonld", rec)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "add record")
+
+	out, err := runValidateCmdVersion(t, "0.140.0")
+	if err == nil {
+		t.Fatalf("validate error = nil, want non-nil; output: %s", out)
+	}
+	if !strings.Contains(out, "needs exo") || !strings.Contains(out, "0.999.0") || !strings.Contains(out, "exo upgrade") {
+		t.Errorf("output = %q, want the needs-upgrade message naming 0.999.0", out)
+	}
+}
+
+// TestValidate_DevBuildSkipsMinVersionCheck proves a development build
+// (empty version) reads every record regardless of exo:minVersion (design
+// D1: "Development builds (0.0.0-dev) read everything and warn").
+func TestValidate_DevBuildSkipsMinVersionCheck(t *testing.T) {
+	root, run := addTestRepo(t, false)
+	chdir(t, root)
+	writeFile(t, root, "a.txt", "hello\n")
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+	blobOID := strings.TrimSpace(run("git", "rev-parse", "HEAD:a.txt"))
+
+	rec := fmt.Sprintf(`{
+  "@context": %q,
+  "@id": %q,
+  "exo:assertion": "recorded",
+  "exo:assertedBy": "urn:exohub:agent:person:alice",
+  "generatedAtTime": "2026-10-14T10:00:00Z",
+  "exo:minVersion": "0.999.0",
+  "@graph": [{"@id": "urn:exohub:git:blob:%s", "@type": "Entity"}]
+}`, lib.ContextIRI, lib.NewRecordID(), blobOID)
+	writeFile(t, root, ".exohub/provenance/a.jsonld", rec)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "add record")
+
+	out, err := runValidateCmdVersion(t, "")
+	if err != nil {
+		t.Fatalf("validate error = %v, output: %s", err, out)
+	}
+	if strings.Contains(out, "needs exo") {
+		t.Errorf("output = %q, want no needs-upgrade message for a dev build", out)
 	}
 }

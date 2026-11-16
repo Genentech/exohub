@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/Genentech/exohub/go/useragent"
 )
 
 // External special-remote for git-annex that exports files as plain objects
@@ -182,8 +184,33 @@ func getConfigFromAnnex(key string) string {
 
 // --- Credential helpers ---
 
+// currentGrantsAccountID is the Access Grants account id (--account-id) to
+// request credentials from, sticky across the proactive/reactive refreshes
+// in refreshCredentialsIfNeeded/runS5cmd, which only know the s3url, not the
+// remote's grants_account_id. Set by fetchGrantsCredentialsForAccount.
+var currentGrantsAccountID string
+
 func fetchGrantsCredentials(s3url string) error {
-	cmd := exec.Command(credHelperBin, "--s3url", s3url)
+	return fetchGrantsCredentialsForAccount(s3url, currentGrantsAccountID, "")
+}
+
+// fetchGrantsCredentialsForAccount fetches S3 Access Grants credentials for
+// s3url, requesting them under accountID when set (per-remote
+// grants_account_id, passed as --account-id to the credential helper) and
+// falling back to the helper's own default resolution otherwise. sourceS3URL,
+// when non-empty (role: instance publish only), is passed as --source-s3url
+// so the helper's server fallback authorizes against the source Atlas
+// project instead of the instance bucket.
+func fetchGrantsCredentialsForAccount(s3url, accountID, sourceS3URL string) error {
+	currentGrantsAccountID = accountID
+	args := []string{"--s3url", s3url}
+	if accountID != "" {
+		args = append(args, "--account-id", accountID)
+	}
+	if sourceS3URL != "" {
+		args = append(args, "--source-s3url", sourceS3URL)
+	}
+	cmd := exec.Command(credHelperBin, args...)
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
@@ -214,6 +241,18 @@ func fetchGrantsCredentials(s3url string) error {
 
 	debugStderr("grants: credentials set (expires %s)", creds.Expiration)
 	return nil
+}
+
+// configuredGrantsAccountID returns the git-annex special remote's
+// grants_account_id config (the Access Grants account to request
+// credentials from for the PREPARE/export protocol path), falling back to
+// exo-credential-helper's own resolution (EXOHUB_GRANTS_ACCOUNT_ID, then the
+// build default) when unset.
+func configuredGrantsAccountID() string {
+	if v := config["grants_account_id"]; v != "" {
+		return v
+	}
+	return getConfigFromAnnex("grants_account_id")
 }
 
 func refreshCredentialsIfNeeded() {
@@ -262,11 +301,19 @@ func runS5cmd(args ...string) runResult {
 	return r
 }
 
-// runS5cmdSync runs s5cmd sync with progress counter on stderr.
+// runS5cmdSync runs s5cmd sync with progress counter on stderr. excludes are
+// passed through as repeated --exclude <pattern> flags (relative to src),
+// e.g. to keep a bundle upload from ever carrying a nested .artifactdb/
+// subtree regardless of how the bundle dir was built (exo-cli#177).
 // Returns the number of files synced.
-func runS5cmdSync(s5cmd, src, dst string) (int, error) {
+func runS5cmdSync(s5cmd, src, dst string, excludes ...string) (int, error) {
 	refreshCredentialsIfNeeded()
-	cmd := exec.Command(s5cmd, "sync", src, dst)
+	args := []string{"sync"}
+	for _, pattern := range excludes {
+		args = append(args, "--exclude", pattern)
+	}
+	args = append(args, src, dst)
+	cmd := exec.Command(s5cmd, args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return 0, err
@@ -289,6 +336,54 @@ func runS5cmdSync(s5cmd, src, dst string) (int, error) {
 	return count, nil
 }
 
+// cleanupStaleBundleArtifactDB removes a stray <s3Base>/.exohub-bundle/.artifactdb/
+// prefix, if any, left over from a publish made with a buggy exo-cli version
+// that nested a ref's .artifactdb/ inside the bundle dir (exo-cli#177).
+// s5cmd sync never deletes destination objects, so without this, re-running
+// a fixed publish would leave the stale nested objects in place forever,
+// still rejected by the Atlas as instance-typed documents it shouldn't have
+// received. Listing failures are treated as "nothing to clean up" rather
+// than fatal, since this is a best-effort self-heal, not a required step of
+// publishing.
+func cleanupStaleBundleArtifactDB(s5cmd, s3Base string) {
+	stalePrefix := strings.TrimRight(s3Base, "/") + "/.exohub-bundle/.artifactdb/"
+	lsResult := runS5cmd(s5cmd, "ls", stalePrefix+"*")
+	if lsResult.code != 0 || len(bytes.TrimSpace(lsResult.stdout)) == 0 {
+		return
+	}
+
+	fmt.Fprintf(os.Stderr, "\U0001f9f9  Removing stale nested %s (exo-cli#177 self-heal)\n", stalePrefix)
+	rmResult := runS5cmd(s5cmd, "rm", stalePrefix+"*")
+	if rmResult.code != 0 {
+		msg := sanitizeMsg(string(rmResult.stderr))
+		if msg == "" {
+			msg = fmt.Sprintf("s5cmd rm failed (exit %d)", rmResult.code)
+		}
+		fmt.Fprintf(os.Stderr, "⚠️  failed to remove stale %s: %s\n", stalePrefix, msg)
+	}
+}
+
+// runPublishBundleUpload is the testable core of the --role atlas (default)
+// bundle upload: sync bundleDir to <s3Base>/.exohub-bundle/ with the
+// .artifactdb/ subtree excluded (defense in depth: the bundle upload must
+// never carry a nested .artifactdb/ subtree, since the Atlas crawls
+// .exohub-bundle/ and rejects instance-typed documents it finds there,
+// regardless of whether bundleDir happens to contain one), then self-heal
+// any stray <s3Base>/.exohub-bundle/.artifactdb/ objects left over from a
+// publish made with a buggy exo-cli version that nested a ref's
+// .artifactdb/ inside the bundle dir (exo-cli#177).
+func runPublishBundleUpload(s5cmd, bundleDir, s3Base string) (int, error) {
+	bundleDst := s3Base + "/.exohub-bundle/"
+	// Progress counter shown during sync, no separate "Syncing to..." line
+	count, err := runS5cmdSync(s5cmd, bundleDir+"/", bundleDst, ".artifactdb/*")
+	if err != nil {
+		return count, err
+	}
+
+	cleanupStaleBundleArtifactDB(s5cmd, s3Base)
+	return count, nil
+}
+
 // --- Protocol handlers ---
 
 func handleInitRemote() {
@@ -303,6 +398,9 @@ func handleInitRemote() {
 	}
 	if v, ok := config["grants"]; ok && v != "" {
 		writeLine("CONFIG grants=" + v)
+	}
+	if v, ok := config["grants_account_id"]; ok && v != "" {
+		writeLine("CONFIG grants_account_id=" + v)
 	}
 	writeLine("INITREMOTE-SUCCESS")
 }
@@ -320,7 +418,7 @@ func handlePrepare() {
 	}
 	if grants == "true" {
 		debugStderr("grants: fetching credentials for %s", config["s3url"])
-		if err := fetchGrantsCredentials(config["s3url"]); err != nil {
+		if err := fetchGrantsCredentialsForAccount(config["s3url"], configuredGrantsAccountID(), ""); err != nil {
 			writeLine("PREPARE-FAILURE " + err.Error())
 			return
 		}
@@ -502,28 +600,110 @@ type publishEntry struct {
 	s3Key     string
 }
 
+// stringSliceFlag collects a repeatable flag's values in the order given,
+// e.g. --exclude a --exclude b.
+type stringSliceFlag []string
+
+func (s *stringSliceFlag) String() string {
+	return strings.Join(*s, ",")
+}
+
+func (s *stringSliceFlag) Set(value string) error {
+	*s = append(*s, value)
+	return nil
+}
+
+// runPublish dispatches the publish subcommand by --role: "atlas" (default,
+// bundle-only, runPublishAtlas) or "instance" (runPublishInstance). It also
+// enforces the removed flags (--instance-url always, --artifactdb-dir for
+// --role atlas, --bundle-dir for --role instance) before any upload or API
+// call, by checking which flags the caller actually passed (fs.Visit) rather
+// than their (possibly non-empty-by-default) values.
 func runPublish(args []string) {
 	fs := flag.NewFlagSet("publish", flag.ExitOnError)
 	s3url := fs.String("s3url", "", "S3 URL for upload")
-	bundleDir := fs.String("bundle-dir", "", "Path to bundle output directory")
-	artifactdbDir := fs.String("artifactdb-dir", "", "Path to .artifactdb/ directory (optional)")
+	bundleDir := fs.String("bundle-dir", "", "Path to bundle output directory (role: atlas only)")
+	artifactdbDir := fs.String("artifactdb-dir", "", "Path to .artifactdb/ directory (role: instance only)")
 	grants := fs.Bool("grants", false, "Use S3 Access Grants for credentials")
-	instanceURL := fs.String("instance-url", "", "ArtifactDB instance URL (optional)")
+	grantsAccountID := fs.String("grants-account-id", "", "Access Grants account id override for the credential helper")
+	sourceS3URL := fs.String("source-s3url", "", "s3url of the resolved data_from Atlas remote (role: instance only), so the credential helper's server fallback authorizes against the source project")
+	_ = fs.String("instance-url", "", "removed — use --role instance --url instead")
+	url := fs.String("url", "", "ArtifactDB instance URL (role: instance only)")
 	atlasURL := fs.String("atlas-url", "", "ExoHub Atlas URL (optional)")
 	projectIDFlag := fs.String("project-id", "", "Project ID override (defaults to repo name from bundle.json)")
+	refName := fs.String("ref-name", "", "Published ref name (role: instance only)")
 	apiURL := fs.String("api-url", resolveAPIBase(), "ExoHub API URL")
 	outputJSON := fs.Bool("json", false, "Print a single JSON publish result line to stdout")
+	role := fs.String("role", "atlas", "Publish role: atlas or instance")
+	refKind := fs.String("ref-kind", "", "Published ref kind: tag or branch (enables tag-immutability checks)")
+	commit := fs.String("commit", "", "Commit SHA the published ref resolves to")
+	repoURL := fs.String("repo-url", "", "Repository clone URL this publish comes from (role: instance only; role: atlas reads it from bundle.json)")
+	force := fs.Bool("force", false, "Bypass the source-repo guard (never bypasses tag immutability)")
+	var excludes stringSliceFlag
+	fs.Var(&excludes, "exclude", "Glob pattern (relative to .artifactdb/) to exclude from an instance publish (repeatable; role: instance only)")
 	fs.Parse(args)
 
-	debugStderr("publish: s3url=%s bundle-dir=%s api-url=%s instance-url=%s atlas-url=%s grants=%v", *s3url, *bundleDir, *apiURL, *instanceURL, *atlasURL, *grants)
+	visited := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { visited[f.Name] = true })
 
-	if *s3url == "" || *bundleDir == "" {
+	if visited["instance-url"] {
+		fmt.Fprintln(os.Stderr, "Error: --instance-url was removed; publish instances with: publish --role instance --url <instance> --s3url <s3url> --artifactdb-dir <dir>")
+		os.Exit(1)
+	}
+
+	debugStderr("publish: role=%s s3url=%s api-url=%s atlas-url=%s grants=%v", *role, *s3url, *apiURL, *atlasURL, *grants)
+
+	switch *role {
+	case "", "atlas":
+		if visited["artifactdb-dir"] {
+			fmt.Fprintln(os.Stderr, "Error: --artifactdb-dir was removed from --role atlas; publish .artifactdb/ with: publish --role instance")
+			os.Exit(1)
+		}
+		if visited["exclude"] {
+			fmt.Fprintln(os.Stderr, "Error: --exclude is not allowed for --role atlas")
+			os.Exit(1)
+		}
+		runPublishAtlas(*s3url, *bundleDir, *grants, *grantsAccountID, *atlasURL, *projectIDFlag, *apiURL, *outputJSON, *refKind, *commit, *force)
+	case "instance":
+		if visited["bundle-dir"] {
+			fmt.Fprintln(os.Stderr, "Error: --bundle-dir is not allowed for --role instance")
+			os.Exit(1)
+		}
+		runPublishInstance(instancePublishArgs{
+			s3url:           *s3url,
+			artifactdbDir:   *artifactdbDir,
+			instanceURL:     *url,
+			atlasURL:        *atlasURL,
+			sourceS3URL:     *sourceS3URL,
+			projectID:       *projectIDFlag,
+			refName:         *refName,
+			apiURL:          *apiURL,
+			grants:          *grants,
+			grantsAccountID: *grantsAccountID,
+			refKind:         *refKind,
+			commit:          *commit,
+			repoURL:         *repoURL,
+			force:           *force,
+			outputJSON:      *outputJSON,
+			excludes:        []string(excludes),
+		})
+	default:
+		fmt.Fprintf(os.Stderr, "Error: invalid --role %q (must be: atlas or instance)\n", *role)
+		os.Exit(1)
+	}
+}
+
+// runPublishAtlas implements --role atlas (the default): upload the bundle
+// directory to <s3url>/<ref_name>/.exohub-bundle/ and notify the ExoHub API
+// with targets: [] (instances are reached only via publish --role instance).
+func runPublishAtlas(s3url, bundleDir string, grants bool, grantsAccountID, atlasURL, projectIDFlag, apiURL string, outputJSON bool, refKind, commit string, force bool) {
+	if s3url == "" || bundleDir == "" {
 		fmt.Fprintln(os.Stderr, "Error: --s3url and --bundle-dir are required")
 		os.Exit(1)
 	}
 
 	// Read bundle.json for ref info
-	bundleJSON, err := os.ReadFile(filepath.Join(*bundleDir, "bundle.json"))
+	bundleJSON, err := os.ReadFile(filepath.Join(bundleDir, "bundle.json"))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: failed to read bundle.json: %v\n", err)
 		os.Exit(1)
@@ -538,71 +718,81 @@ func runPublish(args []string) {
 		os.Exit(1)
 	}
 
-	projectID := *projectIDFlag
+	projectID := projectIDFlag
 	if projectID == "" {
 		projectID = repoNameFromURL(info.RepoURL)
 	}
-	s3Base := strings.TrimRight(*s3url, "/") + "/" + info.RefName
+	s3Base := strings.TrimRight(s3url, "/") + "/" + info.RefName
 
 	fmt.Fprintf(os.Stderr, "📊  Project: %s, Version: %s\n", orange(projectID), orange(info.RefName))
 	fmt.Fprintf(os.Stderr, "☁️  Target: %s\n", yellow(s3Base+"/"))
-	printBundleTarget(*apiURL, *atlasURL, *instanceURL)
+	printBundleTarget(apiURL, atlasURL)
 
-	// Get credentials if grants enabled
-	if *grants {
+	s5 := envOr("S5CMD_BIN", "s5cmd")
+
+	// Get credentials if grants enabled, BEFORE the tag-immutability read
+	// below: that read uses s5cmd and must run with credentials in place,
+	// or a credentials/access failure would otherwise look just like "no
+	// record" and the check would silently never apply.
+	if grants {
 		fmt.Fprintln(os.Stderr, "🔑  Fetching S3 credentials via grants")
-		if err := fetchGrantsCredentials(*s3url); err != nil {
+		if err := fetchGrantsCredentialsForAccount(s3url, grantsAccountID, ""); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
 	}
 
-	s5 := envOr("S5CMD_BIN", "s5cmd")
-
-	// Sync bundle dir → .exohub-bundle/ on S3
-	bundleDst := s3Base + "/.exohub-bundle/"
-	// Progress counter shown during sync, no separate "Syncing to..." line
-	count, err := runS5cmdSync(s5, *bundleDir+"/", bundleDst)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "\n⚠️  bBndle sync failed: %v\n", err)
+	effectiveCommit := commit
+	if effectiveCommit == "" {
+		effectiveCommit = info.Ref
+	}
+	if err := checkTagImmutability(s5, refKind, info.RefName, effectiveCommit, s3Base+"/.exohub-bundle/bundle.json", extractBundleRef); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		if outputJSON {
+			printPublishJSON(publishJSONResult{Published: false, Error: &publishJSONError{Message: err.Error()}})
+		}
 		os.Exit(1)
 	}
 
-	// Sync .artifactdb/ if present
-	if *artifactdbDir != "" {
-		artifactdbDst := s3Base + "/.artifactdb/"
-		n, err := runS5cmdSync(s5, *artifactdbDir+"/", artifactdbDst)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "\n⚠️  .artifactdb sync failed: %v\n", err)
-			os.Exit(1)
+	if err := checkSourceRepoGuard(s5, info.RepoURL, s3Base+"/.exohub-bundle/bundle.json", extractBundleRepoURL, force); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		if outputJSON {
+			printPublishJSON(publishJSONResult{Published: false, Error: &publishJSONError{Message: err.Error()}})
 		}
-		count += n
+		os.Exit(1)
+	}
+
+	count, err := runPublishBundleUpload(s5, bundleDir, s3Base)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "\n⚠️  bundle sync failed: %v\n", err)
+		os.Exit(1)
 	}
 
 	fmt.Fprintf(os.Stderr, "\r🔄  Synced %d file(s)              \n", count)
 
 	// Upload permissions.json if .exohub/permissions exists
 	if err := uploadPermissions(s5, s3Base, "."); err != nil {
-		fmt.Fprintf(os.Stderr, "⚠️  pPrmissions upload failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "⚠️  permissions upload failed: %v\n", err)
 		// Non-fatal — continue with notification
 	}
 
-	// Notify ExoHub API
+	// Notify ExoHub API — targets is always empty: instances are reached by
+	// publish --role instance, never forwarded from here.
 	s3Location := s3Base + "/"
-	respBody, err := publishNotify(*apiURL, projectID, info.RepoURL, info.Ref, info.RefName, s3Location, *s3url, *instanceURL, *atlasURL)
+	respBody, err := publishNotify(apiURL, projectID, info.RepoURL, info.Ref, info.RefName, s3Location, s3url, "", atlasURL, force)
 	if err != nil {
 		var apiErr *apiError
 		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusUnprocessableEntity {
 			fmt.Fprintf(os.Stderr, "❌  %s\n", describePublishError(apiErr.Body))
 			fmt.Fprintf(os.Stderr, "⚠️  bundle uploaded to %s but NOT published: %v\n", s3Location, err)
-			if *outputJSON {
+			if outputJSON {
 				printPublishJSON(publishJSONResult{Published: false, Error: publishJSONErrorFromBody(apiErr.Body)})
 			}
 			os.Exit(1)
 		}
 		fmt.Fprintf(os.Stderr, "⚠️  ExoHub API notification failed: %v\n", err)
 		fmt.Fprintln(os.Stderr, "⚠️  Upload completed but indexing may not have been triggered.")
-		if *outputJSON {
+		if outputJSON {
 			printPublishJSON(publishJSONResult{Published: false, Error: &publishJSONError{Message: err.Error()}})
 		}
 	} else {
@@ -636,7 +826,7 @@ func runPublish(args []string) {
 		if resp.AtlasURLUsed != "" {
 			fmt.Fprintf(os.Stderr, "✅  Published to %s\n", orange(resp.AtlasURLUsed))
 		}
-		if *outputJSON {
+		if outputJSON {
 			var atlasURLUsed *string
 			if resp.AtlasURLUsed != "" {
 				v := resp.AtlasURLUsed
@@ -647,6 +837,202 @@ func runPublish(args []string) {
 	}
 }
 
+// checkTagImmutability enforces the spec "Published tags are immutable on
+// every role": when refKind is "tag", it reads the remote's existing record
+// of the version at recordURL (via s5cmd cat) and extracts the previously
+// published commit with extractCommit. No record (object absent, or the
+// field missing/empty) means a first or earlier-failed attempt and is
+// allowed to proceed; the same commit means an idempotent retry and is also
+// allowed; a different commit is refused before any upload. refKind
+// "branch", or empty (caller didn't opt in), never checks.
+func checkTagImmutability(s5cmd, refKind, refName, commit, recordURL string, extractCommit func([]byte) (string, bool)) error {
+	if refKind != "tag" {
+		return nil
+	}
+	if commit == "" {
+		return fmt.Errorf("--commit is required with --ref-kind tag")
+	}
+	r := runS5cmd(s5cmd, "cat", recordURL)
+	if r.code != 0 {
+		msg := sanitizeMsg(string(r.stderr))
+		if isNotFoundS5cmdError(msg) {
+			return nil // no record: first publish, or an earlier attempt that never completed
+		}
+		// Any other failure (access denied, bad/expired credentials, network)
+		// must NOT be treated as "no record" — that would let tag immutability
+		// fail open. Refuse instead of guessing.
+		return fmt.Errorf("could not read the existing record for tag %q at %s: %s", refName, recordURL, msg)
+	}
+	prevCommit, ok := extractCommit(r.stdout)
+	if !ok {
+		// The record exists but doesn't parse (corrupted/unexpected content)
+		// — anomalous, not "no record". Treating it as "proceed" would let a
+		// tag overwrite a version exo can't actually verify. Refuse.
+		return fmt.Errorf("refusing to publish tag %q: the existing record at %s could not be parsed", refName, recordURL)
+	}
+	if prevCommit == commit {
+		return nil // retry of the same tag
+	}
+	return fmt.Errorf("refusing to publish tag %q: already published from commit %s, but it now resolves to %s — publish a new tag instead", refName, prevCommit, commit)
+}
+
+// isNotFoundS5cmdError reports whether an s5cmd `cat`/`ls` failure's stderr
+// looks like "no such object" (safe to treat as "no record exists" in
+// checkTagImmutability) rather than a credentials, access, or network
+// problem, which must be surfaced as a refusal instead of silently treated
+// as "no record" (tag immutability must fail closed, not open).
+func isNotFoundS5cmdError(stderr string) bool {
+	lower := strings.ToLower(stderr)
+	patterns := []string{"nosuchkey", "no such key", "key not found", "not found", "404", "no object found", "does not exist"}
+	for _, p := range patterns {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// extractBundleRef extracts the previously published commit from an Atlas
+// bundle.json body (its "ref" field), for checkTagImmutability.
+func extractBundleRef(body []byte) (string, bool) {
+	var v struct {
+		Ref string `json:"ref"`
+	}
+	if err := json.Unmarshal(body, &v); err != nil {
+		return "", false
+	}
+	return v.Ref, v.Ref != ""
+}
+
+// extractMarkerCommit extracts the previously published commit from an
+// instance's ..complete marker body (its "commit" field), for
+// checkTagImmutability.
+func extractMarkerCommit(body []byte) (string, bool) {
+	var v struct {
+		Commit string `json:"commit"`
+	}
+	if err := json.Unmarshal(body, &v); err != nil {
+		return "", false
+	}
+	return v.Commit, v.Commit != ""
+}
+
+// extractBundleRepoURL extracts the source repository from an Atlas
+// bundle.json body (its "repo_url" field), for checkSourceRepoGuard.
+func extractBundleRepoURL(body []byte) (string, bool) {
+	var v struct {
+		RepoURL string `json:"repo_url"`
+	}
+	if err := json.Unmarshal(body, &v); err != nil {
+		return "", false
+	}
+	return v.RepoURL, v.RepoURL != ""
+}
+
+// extractMarkerSourceRepo extracts the source repository from an instance's
+// ..complete marker body (its "source_repo" field), for
+// checkSourceRepoGuard.
+func extractMarkerSourceRepo(body []byte) (string, bool) {
+	var v struct {
+		SourceRepo string `json:"source_repo"`
+	}
+	if err := json.Unmarshal(body, &v); err != nil {
+		return "", false
+	}
+	return v.SourceRepo, v.SourceRepo != ""
+}
+
+// normalizeRepoURL normalises a repository clone URL for the source-repo
+// guard (spec "Source-repo guard on every role"): scheme and userinfo
+// (credentials) stripped, host lowercased, a trailing ".git" and/or "/"
+// removed. Two clone URLs that normalise to the same value identify the
+// same source repository, regardless of scheme (https vs ssh/scp-like
+// user@host:path), credentials, host case, or a trailing slash/".git".
+func normalizeRepoURL(repoURL string) string {
+	s := strings.TrimSpace(repoURL)
+	if s == "" {
+		return ""
+	}
+	// scp-like syntax (user@host:path, no scheme) becomes host/path before
+	// the generic scheme/userinfo handling below.
+	if !strings.Contains(s, "://") {
+		if at := strings.Index(s, "@"); at >= 0 {
+			rest := s[at+1:]
+			if colon := strings.Index(rest, ":"); colon >= 0 && !strings.Contains(rest[:colon], "/") {
+				s = rest[:colon] + "/" + rest[colon+1:]
+			}
+		}
+	}
+	if idx := strings.Index(s, "://"); idx >= 0 {
+		s = s[idx+3:]
+	}
+	if at := strings.LastIndex(s, "@"); at >= 0 {
+		if slash := strings.Index(s, "/"); slash < 0 || at < slash {
+			s = s[at+1:]
+		}
+	}
+	host, path := s, ""
+	if idx := strings.Index(s, "/"); idx >= 0 {
+		host, path = s[:idx], s[idx:]
+	}
+	s = strings.ToLower(host) + path
+	s = strings.TrimSuffix(s, "/")
+	s = strings.TrimSuffix(s, ".git")
+	s = strings.TrimSuffix(s, "/")
+	return s
+}
+
+// readSourceRepoRecord reads recordURL and extracts its source repository
+// with extractSourceRepo. found=false with a nil error covers both "no
+// record" (object absent: first publish, or an earlier attempt that never
+// completed) and "a record exists but carries no source repository" (a
+// legacy record) — both are unknown and don't block a source-repo guard.
+// Any other read failure (access denied, bad/expired credentials, network)
+// is returned as an error: it must NOT be treated as "no record", or a
+// guard built on this would fail open.
+func readSourceRepoRecord(s5cmd, recordURL string, extractSourceRepo func([]byte) (string, bool)) (repo string, found bool, err error) {
+	r := runS5cmd(s5cmd, "cat", recordURL)
+	if r.code != 0 {
+		msg := sanitizeMsg(string(r.stderr))
+		if isNotFoundS5cmdError(msg) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("could not read the existing record at %s: %s", recordURL, msg)
+	}
+	prevRepo, ok := extractSourceRepo(r.stdout)
+	if !ok {
+		return "", false, nil
+	}
+	return prevRepo, true, nil
+}
+
+// checkSourceRepoGuard enforces the spec "Source-repo guard on every
+// role": before any upload, on both roles and for branches as well as
+// tags, exo compares the current source repository (currentRepoURL) with
+// the remote's existing record of the version at recordURL (the instance's
+// ..complete "source_repo", or the Atlas's bundle.json "repo_url"),
+// extracted by extractSourceRepo, both normalised with normalizeRepoURL.
+// No record (object absent), or a record without a source repository (a
+// legacy record), is unknown and does not block. A different source
+// repository is refused, naming both, unless force is true — force never
+// bypasses tag immutability (checkTagImmutability, a separate check).
+func checkSourceRepoGuard(s5cmd, currentRepoURL, recordURL string, extractSourceRepo func([]byte) (string, bool), force bool) error {
+	prevRepo, found, err := readSourceRepoRecord(s5cmd, recordURL, extractSourceRepo)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return nil
+	}
+	if normalizeRepoURL(prevRepo) == normalizeRepoURL(currentRepoURL) {
+		return nil // same source repository
+	}
+	if force {
+		return nil
+	}
+	return fmt.Errorf("refusing to publish: this version was already published from %q, but this is %q — pass --force to publish anyway", normalizeRepoURL(prevRepo), normalizeRepoURL(currentRepoURL))
+}
+
 // printBundleTarget prints, before publishing, where the bundle will be sent:
 // the configured atlas_url, or the deployment's default Atlas (read from the
 // API when available). The default case is visually flagged with ⚠ — it's
@@ -654,16 +1040,13 @@ func runPublish(args []string) {
 // the wrong Atlas — while an explicit atlas_url is not flagged. Falls back
 // to a generic "server-chosen" marker for older servers that don't expose
 // default_atlas_url.
-func printBundleTarget(apiBase, atlasURL, instanceURL string) {
+func printBundleTarget(apiBase, atlasURL string) {
 	if atlasURL != "" {
 		fmt.Fprintf(os.Stderr, "📍  bundle → %s (atlas_url)\n", atlasURL)
 	} else if defaultURL, ok := getServiceInfo(apiBase); ok {
 		fmt.Fprintf(os.Stderr, "📍  bundle → ⚠ default Atlas %s\n", defaultURL)
 	} else {
 		fmt.Fprintln(os.Stderr, "📍  bundle → ⚠ default Atlas (server-chosen)")
-	}
-	if instanceURL != "" {
-		fmt.Fprintf(os.Stderr, "📍  .artifactdb/ → %s\n", instanceURL)
 	}
 }
 
@@ -864,36 +1247,40 @@ type permissionsYAML struct {
 	WriteAccess string   `yaml:"write_access"`
 }
 
-// uploadPermissions reads <rootDir>/.exohub/permissions, converts to ArtifactDB
-// format, and uploads as permissions.json to the version root on S3.
-// rootDir is the directory that contains .exohub/ (usually ".").
-func uploadPermissions(s5cmd, s3Base, rootDir string) error {
+// loadPermissionsDocument reads <rootDir>/.exohub/permissions and converts
+// it to the ArtifactDB permissions document (scope: "project", owners,
+// read_access, write_access, optional viewers), validating required fields.
+// Returns (nil, nil) when the file does not exist (nothing to upload). This
+// is split from the upload itself so a caller can validate everything
+// up front, before any upload (spec, instance role: "An invalid permissions
+// file SHALL stop the publish before any upload").
+func loadPermissionsDocument(rootDir string) (map[string]interface{}, error) {
 	permFile := filepath.Join(rootDir, ".exohub", "permissions")
 	data, err := os.ReadFile(permFile)
 	if os.IsNotExist(err) {
-		return nil // no permissions file, skip
+		return nil, nil // no permissions file, nothing to upload
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	// Parse YAML using a proper parser so quoted values ("public", "aboyounp")
+	// Parse YAML using a proper parser so quoted values ("public", "example-user")
 	// are stripped of their surrounding quotes before being uploaded.
 	var perm permissionsYAML
 	if err := yaml.Unmarshal(data, &perm); err != nil {
-		return fmt.Errorf("parse .exohub/permissions: %w", err)
+		return nil, fmt.Errorf("parse .exohub/permissions: %w", err)
 	}
 
 	// Validate required fields before uploading — ArtifactDB rejects zero-values
 	// with confusing enum/validation errors.
 	if len(perm.Owners) == 0 {
-		return fmt.Errorf(".exohub/permissions: owners must be non-empty")
+		return nil, fmt.Errorf(".exohub/permissions: owners must be non-empty")
 	}
 	if perm.ReadAccess == "" {
-		return fmt.Errorf(".exohub/permissions: read_access must be set")
+		return nil, fmt.Errorf(".exohub/permissions: read_access must be set")
 	}
 	if perm.WriteAccess == "" {
-		return fmt.Errorf(".exohub/permissions: write_access must be set")
+		return nil, fmt.Errorf(".exohub/permissions: write_access must be set")
 	}
 
 	// Convert to ArtifactDB format.
@@ -906,27 +1293,56 @@ func uploadPermissions(s5cmd, s3Base, rootDir string) error {
 	if len(perm.Viewers) > 0 {
 		adbPerm["viewers"] = perm.Viewers
 	}
+	return adbPerm, nil
+}
 
-	// Write to temp file and upload
+// uploadPermissionsDocument uploads doc (from loadPermissionsDocument) as
+// JSON to dst (an exact S3 object key). A nil doc is a no-op.
+func uploadPermissionsDocument(s5cmd, dst string, doc map[string]interface{}) error {
+	if doc == nil {
+		return nil
+	}
+
 	tmpFile, err := os.CreateTemp("", "permissions-*.json")
 	if err != nil {
 		return err
 	}
 	defer os.Remove(tmpFile.Name())
 
-	body, _ := json.MarshalIndent(adbPerm, "", "  ")
+	body, _ := json.MarshalIndent(doc, "", "  ")
 	if _, err := tmpFile.Write(body); err != nil {
 		return err
 	}
 	tmpFile.Close()
 
-	dst := s3Base + "/permissions.json"
 	r := runS5cmd(s5cmd, "cp", tmpFile.Name(), dst)
 	if r.code != 0 {
 		return fmt.Errorf("s5cmd cp failed: %s", sanitizeMsg(string(r.stderr)))
 	}
 	fmt.Fprintf(os.Stderr, "🔒  Permissions uploaded\n")
 	return nil
+}
+
+// uploadPermissionsTo loads and uploads <rootDir>/.exohub/permissions in
+// one step, to dst (an exact S3 object key). Used by the Atlas role
+// (version-root permissions.json via uploadPermissions below), which has no
+// "validate everything up front" requirement. The instance role instead
+// calls loadPermissionsDocument early (with the rest of its pre-upload
+// validation) and uploadPermissionsDocument later, so an invalid file is
+// caught before any upload (see doPublishInstance in publish_instance.go).
+func uploadPermissionsTo(s5cmd, dst, rootDir string) error {
+	doc, err := loadPermissionsDocument(rootDir)
+	if err != nil {
+		return err
+	}
+	return uploadPermissionsDocument(s5cmd, dst, doc)
+}
+
+// uploadPermissions uploads <rootDir>/.exohub/permissions, converted, to
+// <s3Base>/permissions.json (the Atlas destination: the version root).
+// rootDir is the directory that contains .exohub/ (usually ".").
+func uploadPermissions(s5cmd, s3Base, rootDir string) error {
+	return uploadPermissionsTo(s5cmd, s3Base+"/permissions.json", rootDir)
 }
 
 func repoNameFromURL(repoURL string) string {
@@ -981,7 +1397,7 @@ func createPublishArtipack(archivePath string, uploads []publishEntry, s3Base st
 	return nil
 }
 
-func publishNotify(apiBase, projectID, repoURL, ref, refName, s3Location, s3url, instanceURL, atlasURL string) ([]byte, error) {
+func publishNotify(apiBase, projectID, repoURL, ref, refName, s3Location, s3url, instanceURL, atlasURL string, force bool) ([]byte, error) {
 	endpoint := strings.TrimRight(apiBase, "/") + "/publish"
 
 	// Build targets: only include instance_url if set.
@@ -1008,6 +1424,12 @@ func publishNotify(apiBase, projectID, repoURL, ref, refName, s3Location, s3url,
 	// that predates atlas_url support may reject unknown keys).
 	if atlasURL != "" {
 		payload["atlas_url"] = atlasURL
+	}
+	// force is only added when true, so the payload stays byte-identical to
+	// pre-source-repo-guard requests for a non-forced publish (an older API
+	// may reject an unknown key).
+	if force {
+		payload["force"] = true
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -1129,6 +1551,8 @@ func envInt(key string, def int) int {
 // --- Main protocol loop ---
 
 func main() {
+	useragent.Install(appVersion)
+
 	if len(os.Args) > 1 && (os.Args[1] == "--version" || os.Args[1] == "-version") {
 		full := len(os.Args) > 2 && os.Args[2] == "--full"
 		if full {
@@ -1175,6 +1599,7 @@ func main() {
 			writeLine("CONFIG instance_url")
 			writeLine("CONFIG atlas_url")
 			writeLine("CONFIG grants")
+			writeLine("CONFIG grants_account_id")
 			writeLine("CONFIGEND")
 			continue
 		case line == "GETINFO" || line == "INFO":

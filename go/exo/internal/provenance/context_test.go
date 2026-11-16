@@ -63,6 +63,16 @@ func TestExpandTermKnownAliases(t *testing.T) {
 		{"label", RDFSNamespace + "label"},
 		{"exo:path", ExoNamespace + "path"},
 		{"exo:fromRecord", ExoNamespace + "fromRecord"},
+		{"qualifiedUsage", ProvNamespace + "qualifiedUsage"},
+		{"Usage", ProvNamespace + "Usage"},
+		{"qualifiedGeneration", ProvNamespace + "qualifiedGeneration"},
+		{"Generation", ProvNamespace + "Generation"},
+		{"entity", ProvNamespace + "entity"},
+		{"activity", ProvNamespace + "activity"},
+		{"hadRole", ProvNamespace + "hadRole"},
+		{"value", ProvNamespace + "value"},
+		{"exo:checksum", ExoNamespace + "checksum"},
+		{"exo:minVersion", ExoNamespace + "minVersion"},
 	}
 	for _, tt := range tests {
 		got, ok := ExpandTerm(tt.term)

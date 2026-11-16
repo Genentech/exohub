@@ -68,26 +68,34 @@ var nodeTypes = map[string]string{
 	"Person":        ProvNamespace + "Person",
 	"SoftwareAgent": ProvNamespace + "SoftwareAgent",
 	"Organization":  ProvNamespace + "Organization",
+	"Usage":         ProvNamespace + "Usage",
+	"Generation":    ProvNamespace + "Generation",
 }
 
 // properties maps the unprefixed property aliases declared in the context
 // to the IRIs they expand to (design D1): PROV-O properties, plus "label"
 // which aliases rdfs:label.
 var properties = map[string]string{
-	"used":              ProvNamespace + "used",
-	"wasGeneratedBy":    ProvNamespace + "wasGeneratedBy",
-	"wasDerivedFrom":    ProvNamespace + "wasDerivedFrom",
-	"wasRevisionOf":     ProvNamespace + "wasRevisionOf",
-	"wasAssociatedWith": ProvNamespace + "wasAssociatedWith",
-	"wasAttributedTo":   ProvNamespace + "wasAttributedTo",
-	"actedOnBehalfOf":   ProvNamespace + "actedOnBehalfOf",
-	"hadPlan":           ProvNamespace + "hadPlan",
-	"hadMember":         ProvNamespace + "hadMember",
-	"hadPrimarySource":  ProvNamespace + "hadPrimarySource",
-	"startedAtTime":     ProvNamespace + "startedAtTime",
-	"endedAtTime":       ProvNamespace + "endedAtTime",
-	"generatedAtTime":   ProvNamespace + "generatedAtTime",
-	"label":             RDFSNamespace + "label",
+	"used":                ProvNamespace + "used",
+	"wasGeneratedBy":      ProvNamespace + "wasGeneratedBy",
+	"wasDerivedFrom":      ProvNamespace + "wasDerivedFrom",
+	"wasRevisionOf":       ProvNamespace + "wasRevisionOf",
+	"wasAssociatedWith":   ProvNamespace + "wasAssociatedWith",
+	"wasAttributedTo":     ProvNamespace + "wasAttributedTo",
+	"actedOnBehalfOf":     ProvNamespace + "actedOnBehalfOf",
+	"hadPlan":             ProvNamespace + "hadPlan",
+	"hadMember":           ProvNamespace + "hadMember",
+	"hadPrimarySource":    ProvNamespace + "hadPrimarySource",
+	"qualifiedUsage":      ProvNamespace + "qualifiedUsage",
+	"qualifiedGeneration": ProvNamespace + "qualifiedGeneration",
+	"entity":              ProvNamespace + "entity",
+	"activity":            ProvNamespace + "activity",
+	"hadRole":             ProvNamespace + "hadRole",
+	"value":               ProvNamespace + "value",
+	"startedAtTime":       ProvNamespace + "startedAtTime",
+	"endedAtTime":         ProvNamespace + "endedAtTime",
+	"generatedAtTime":     ProvNamespace + "generatedAtTime",
+	"label":               RDFSNamespace + "label",
 }
 
 // exoTerms lists the local names of the exo: prefixed terms declared in the
@@ -104,6 +112,8 @@ var exoTerms = map[string]bool{
 	"version":    true,
 	"fromRecord": true,
 	"records":    true,
+	"checksum":   true,
+	"minVersion": true,
 }
 
 // NodeTypeIRI returns the PROV-O IRI an unprefixed node type alias (for

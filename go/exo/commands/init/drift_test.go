@@ -10,11 +10,11 @@ func TestComputeDriftEntriesAddedAndLocalOnly(t *testing.T) {
 		Name:    "my-profile",
 		Prompts: []PromptSpec{},
 		Templates: map[string]string{
-			"remotes": "remotes:\n  - name: exohub-atlas\n    type: artifactdb\n    mode: export\n    s3url: s3://bucket/_catalog\n    atlas_url: https://atlas.example.com\n",
+			"remotes": "remotes:\n  - name: exohub-atlas\n    type: artifactdb\n    mode: export\n    s3url: s3://bucket/_catalog\n    url: https://atlas.example.com\n",
 		},
 	}
 	remotesConfig := &RemotesConfig{Remotes: []RemoteConfig{
-		{Name: "exohub-atlas", Type: "artifactdb", Mode: "export", S3URL: "s3://bucket/_catalog", InstanceURL: "https://local-only.example.com"},
+		{Name: "exohub-atlas", Type: "artifactdb", Mode: "export", S3URL: "s3://bucket/_catalog", ProjectID: "local-only-project"},
 	}}
 
 	entries, err := computeDriftEntries(spec, remotesConfig, "")
@@ -28,23 +28,23 @@ func TestComputeDriftEntriesAddedAndLocalOnly(t *testing.T) {
 			t.Errorf("unexpected remote in entry: %+v", e)
 		}
 		switch e.Field {
-		case "atlas_url":
+		case "url":
 			if e.Status != "added" || e.Profile != "https://atlas.example.com" {
-				t.Errorf("atlas_url entry = %+v", e)
+				t.Errorf("url entry = %+v", e)
 			}
 			sawAdded = true
-		case "instance_url":
-			if e.Status != "local-only" || e.Current != "https://local-only.example.com" {
-				t.Errorf("instance_url entry = %+v", e)
+		case "project_id":
+			if e.Status != "local-only" || e.Current != "local-only-project" {
+				t.Errorf("project_id entry = %+v", e)
 			}
 			sawLocalOnly = true
 		}
 	}
 	if !sawAdded {
-		t.Error("expected an added atlas_url entry")
+		t.Error("expected an added url entry")
 	}
 	if !sawLocalOnly {
-		t.Error("expected a local-only instance_url entry")
+		t.Error("expected a local-only project_id entry")
 	}
 	if !hasActionableDrift(entries) {
 		t.Error("expected hasActionableDrift to be true")
@@ -110,7 +110,7 @@ func TestComputeDriftEntriesRemoteFilterScopesResults(t *testing.T) {
 		Name: "my-profile",
 		Templates: map[string]string{
 			"remotes": "remotes:\n" +
-				"  - name: exohub-atlas\n    type: artifactdb\n    mode: export\n    s3url: s3://bucket/_catalog\n    atlas_url: https://atlas.example.com\n" +
+				"  - name: exohub-atlas\n    type: artifactdb\n    mode: export\n    s3url: s3://bucket/_catalog\n    url: https://atlas.example.com\n" +
 				"  - name: exohub-annex\n    type: annex\n    s3url: s3://bucket/_annex\n    chunk: 2GiB\n",
 		},
 	}

@@ -1,0 +1,33 @@
+{
+  "@context": "https://genentech.github.io/exohub/ns/provenance/v1.jsonld",
+  "@id": "urn:exohub:record:01928c9e-0000-7000-8000-000000000040",
+  "exo:assertion": "asserted",
+  "exo:assertedBy": "urn:exohub:agent:person:alice",
+  "generatedAtTime": "2026-11-09T10:00:00Z",
+  "exo:minVersion": "0.138.0",
+  "@graph": [
+    {
+      "@id": "urn:exohub:activity:01928c9e-0000-7000-8000-000000000041",
+      "@type": "Activity",
+      "used": ["urn:exohub:value:sha256:b85496f56c91343d2377a091769ba1baa99b1b094a568d3a0e1d602c2da4af9f"],
+      "qualifiedUsage": "urn:exohub:usage:01928c9e-0000-7000-8000-000000000042",
+      "wasAssociatedWith": "urn:exohub:agent:person:alice"
+    },
+    {
+      "@id": "urn:exohub:usage:01928c9e-0000-7000-8000-000000000042",
+      "@type": "Usage",
+      "entity": "urn:exohub:value:sha256:b85496f56c91343d2377a091769ba1baa99b1b094a568d3a0e1d602c2da4af9f",
+      "hadRole": "alpha"
+    },
+    {
+      "@id": "urn:exohub:value:sha256:b85496f56c91343d2377a091769ba1baa99b1b094a568d3a0e1d602c2da4af9f",
+      "@type": "Entity",
+      "value": 0.05
+    },
+    {
+      "@id": "urn:exohub:agent:person:alice",
+      "@type": "Person",
+      "label": "Alice"
+    }
+  ]
+}

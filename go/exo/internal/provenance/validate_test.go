@@ -760,3 +760,258 @@ func TestBatchGitObjectsExist(t *testing.T) {
 		t.Error("batchGitObjectsExist() reported a never-written oid as existing")
 	}
 }
+
+// minVersionRecordJSON is minimalRecordJSON with an exo:minVersion field,
+// for tests of checkMinVersionDeclared and checkQualifiedNodes (task 2.4):
+// those tests use terms added after v1's first release, which require
+// exo:minVersion to avoid an unrelated missing-minversion finding.
+func minVersionRecordJSON(id, assertion, assertedBy, minVersion, graph string) string {
+	return fmt.Sprintf(`{
+  "@context": %q,
+  "@id": %q,
+  "exo:assertion": %q,
+  "exo:assertedBy": %q,
+  "generatedAtTime": "2026-10-14T10:00:00Z",
+  "exo:minVersion": %q,
+  "@graph": [%s]
+}`, ContextIRI, id, assertion, assertedBy, minVersion, graph)
+}
+
+func TestValidate_MissingMinVersion(t *testing.T) {
+	root, run := stateTestRepo(t, false)
+	graph := fmt.Sprintf(`{"@id": %q, "@type": "Activity", "qualifiedUsage": "urn:exohub:usage:nope"}`, NewActivityID())
+	rec := minimalRecordJSON(NewRecordID(), "recorded", "urn:exohub:agent:person:alice", graph)
+	writeRepoFile(t, root, RecordDir+"/a.jsonld", rec)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	report, err := Validate(NewWorktreeReader(root))
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if !hasFinding(report, "missing-minversion", RecordDir+"/a.jsonld") {
+		t.Errorf("findings = %+v, want missing-minversion", report.Findings)
+	}
+}
+
+func TestValidate_MinVersionTooLow(t *testing.T) {
+	root, run := stateTestRepo(t, false)
+	graph := fmt.Sprintf(`{"@id": %q, "@type": "Activity", "qualifiedUsage": "urn:exohub:usage:nope"}`, NewActivityID())
+	rec := minVersionRecordJSON(NewRecordID(), "recorded", "urn:exohub:agent:person:alice", "0.1.0", graph)
+	writeRepoFile(t, root, RecordDir+"/a.jsonld", rec)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	report, err := Validate(NewWorktreeReader(root))
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if !hasFinding(report, "minversion-too-low", RecordDir+"/a.jsonld") {
+		t.Errorf("findings = %+v, want minversion-too-low", report.Findings)
+	}
+}
+
+func TestValidate_OriginalTermsNeedNoMinVersion(t *testing.T) {
+	root, run := stateTestRepo(t, false)
+	graph := `{"@id": "urn:exohub:git:blob:4b825dc642cb6eb9a060e54bf8d69288fbee4904", "@type": "Entity"}`
+	rec := minimalRecordJSON(NewRecordID(), "recorded", "urn:exohub:agent:person:alice", graph)
+	writeRepoFile(t, root, RecordDir+"/a.jsonld", rec)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	report, err := Validate(NewWorktreeReader(root))
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if hasFinding(report, "missing-minversion", RecordDir+"/a.jsonld") {
+		t.Errorf("findings = %+v, want no missing-minversion for a record using only original v1 terms", report.Findings)
+	}
+}
+
+func TestValidate_QualifiedUsageWithShortcut(t *testing.T) {
+	root, run := stateTestRepo(t, false)
+	actID, usageID := NewActivityID(), NewUsageID()
+	entityID := "urn:exohub:git:blob:4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+	graph := fmt.Sprintf(`
+		{"@id": %q, "@type": "Activity", "used": [%q], "qualifiedUsage": %q},
+		{"@id": %q, "@type": "Usage", "entity": %q, "hadRole": "reference"},
+		{"@id": %q, "@type": "Entity"}`, actID, entityID, usageID, usageID, entityID, entityID)
+	rec := minVersionRecordJSON(NewRecordID(), "recorded", "urn:exohub:agent:person:alice", firstMinVersionRelease, graph)
+	writeRepoFile(t, root, RecordDir+"/a.jsonld", rec)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	report, err := Validate(NewWorktreeReader(root))
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if report.HasErrors() {
+		t.Errorf("HasErrors() = true, want false: %+v", report.Findings)
+	}
+}
+
+func TestValidate_QualifiedUsageMissingShortcut(t *testing.T) {
+	root, run := stateTestRepo(t, false)
+	actID, usageID := NewActivityID(), NewUsageID()
+	entityID := "urn:exohub:git:blob:4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+	graph := fmt.Sprintf(`
+		{"@id": %q, "@type": "Activity", "qualifiedUsage": %q},
+		{"@id": %q, "@type": "Usage", "entity": %q, "hadRole": "reference"},
+		{"@id": %q, "@type": "Entity"}`, actID, usageID, usageID, entityID, entityID)
+	rec := minVersionRecordJSON(NewRecordID(), "recorded", "urn:exohub:agent:person:alice", firstMinVersionRelease, graph)
+	writeRepoFile(t, root, RecordDir+"/a.jsonld", rec)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	report, err := Validate(NewWorktreeReader(root))
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if !hasFinding(report, "missing-usage-shortcut", RecordDir+"/a.jsonld") {
+		t.Errorf("findings = %+v, want missing-usage-shortcut", report.Findings)
+	}
+}
+
+func TestValidate_ValueEntityCorrectID(t *testing.T) {
+	root, run := stateTestRepo(t, false)
+	actID, usageID := NewActivityID(), NewUsageID()
+	valueID, err := ValueEntityID("alpha", 0.05)
+	if err != nil {
+		t.Fatalf("ValueEntityID() error = %v", err)
+	}
+	graph := fmt.Sprintf(`
+		{"@id": %q, "@type": "Activity", "used": [%q], "qualifiedUsage": %q},
+		{"@id": %q, "@type": "Usage", "entity": %q, "hadRole": "alpha"},
+		{"@id": %q, "@type": "Entity", "value": 0.05}`, actID, valueID, usageID, usageID, valueID, valueID)
+	rec := minVersionRecordJSON(NewRecordID(), "recorded", "urn:exohub:agent:person:alice", firstMinVersionRelease, graph)
+	writeRepoFile(t, root, RecordDir+"/a.jsonld", rec)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	report, err := Validate(NewWorktreeReader(root))
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if report.HasErrors() {
+		t.Errorf("HasErrors() = true, want false: %+v", report.Findings)
+	}
+}
+
+func TestValidate_ValueEntityWrongID(t *testing.T) {
+	root, run := stateTestRepo(t, false)
+	actID, usageID := NewActivityID(), NewUsageID()
+	wrongID, err := ValueEntityID("alpha", 0.5)
+	if err != nil {
+		t.Fatalf("ValueEntityID() error = %v", err)
+	}
+	graph := fmt.Sprintf(`
+		{"@id": %q, "@type": "Activity", "used": [%q], "qualifiedUsage": %q},
+		{"@id": %q, "@type": "Usage", "entity": %q, "hadRole": "alpha"},
+		{"@id": %q, "@type": "Entity", "value": 0.05}`, actID, wrongID, usageID, usageID, wrongID, wrongID)
+	rec := minVersionRecordJSON(NewRecordID(), "recorded", "urn:exohub:agent:person:alice", firstMinVersionRelease, graph)
+	writeRepoFile(t, root, RecordDir+"/a.jsonld", rec)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	report, err := Validate(NewWorktreeReader(root))
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if !hasFinding(report, "value-entity-id-mismatch", RecordDir+"/a.jsonld") {
+		t.Errorf("findings = %+v, want value-entity-id-mismatch", report.Findings)
+	}
+}
+
+func TestValidate_EnvironmentDigestNoWarning(t *testing.T) {
+	root, run := stateTestRepo(t, false)
+	actID, usageID := NewActivityID(), NewUsageID()
+	envID := "docker://ghcr.io/org/tool@sha256:" + strings.Repeat("ab", 32)
+	graph := fmt.Sprintf(`
+		{"@id": %q, "@type": "Activity", "used": [%q], "qualifiedUsage": %q},
+		{"@id": %q, "@type": "Usage", "entity": %q, "hadRole": "environment"},
+		{"@id": %q, "@type": "Entity", "label": "tool"}`, actID, envID, usageID, usageID, envID, envID)
+	rec := minVersionRecordJSON(NewRecordID(), "recorded", "urn:exohub:agent:person:alice", firstMinVersionRelease, graph)
+	writeRepoFile(t, root, RecordDir+"/a.jsonld", rec)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	report, err := Validate(NewWorktreeReader(root))
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if hasFinding(report, "environment-tag-only", RecordDir+"/a.jsonld") {
+		t.Errorf("findings = %+v, want no environment-tag-only warning for a digest reference", report.Findings)
+	}
+}
+
+func TestValidate_EnvironmentTagOnlyWarns(t *testing.T) {
+	root, run := stateTestRepo(t, false)
+	actID, usageID := NewActivityID(), NewUsageID()
+	envID := "docker://ghcr.io/org/tool:latest"
+	graph := fmt.Sprintf(`
+		{"@id": %q, "@type": "Activity", "used": [%q], "qualifiedUsage": %q},
+		{"@id": %q, "@type": "Usage", "entity": %q, "hadRole": "environment"},
+		{"@id": %q, "@type": "Entity", "label": "tool"}`, actID, envID, usageID, usageID, envID, envID)
+	rec := minVersionRecordJSON(NewRecordID(), "recorded", "urn:exohub:agent:person:alice", firstMinVersionRelease, graph)
+	writeRepoFile(t, root, RecordDir+"/a.jsonld", rec)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	report, err := Validate(NewWorktreeReader(root))
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if !hasFinding(report, "environment-tag-only", RecordDir+"/a.jsonld") {
+		t.Errorf("findings = %+v, want environment-tag-only warning", report.Findings)
+	}
+	for _, f := range report.Findings {
+		if f.Code == "environment-tag-only" && f.Severity != SeverityWarning {
+			t.Errorf("environment-tag-only severity = %v, want warning", f.Severity)
+		}
+	}
+	if report.HasErrors() {
+		t.Errorf("HasErrors() = true, want false (warnings only): %+v", report.Findings)
+	}
+}
+
+func TestValidate_PlanNotTraceableWarns(t *testing.T) {
+	root, run := stateTestRepo(t, false)
+	actID := NewActivityID()
+	planID := CollectionURNPrefix + strings.Repeat("ab", 32)
+	graph := fmt.Sprintf(`
+		{"@id": %q, "@type": "Activity", "hadPlan": %q},
+		{"@id": %q, "@type": "Entity", "exo:checksum": "sha256:deadbeef"}`, actID, planID, planID)
+	rec := minVersionRecordJSON(NewRecordID(), "recorded", "urn:exohub:agent:person:alice", firstMinVersionRelease, graph)
+	writeRepoFile(t, root, RecordDir+"/a.jsonld", rec)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	report, err := Validate(NewWorktreeReader(root))
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if !hasFinding(report, "plan-not-traceable", RecordDir+"/a.jsonld") {
+		t.Errorf("findings = %+v, want plan-not-traceable warning", report.Findings)
+	}
+}
+
+func TestValidate_PlanTraceableByRepositoryAndCommit(t *testing.T) {
+	root, run := stateTestRepo(t, false)
+	actID := NewActivityID()
+	planID := CollectionURNPrefix + strings.Repeat("cd", 32)
+	graph := fmt.Sprintf(`
+		{"@id": %q, "@type": "Activity", "hadPlan": %q},
+		{"@id": %q, "@type": "Entity", "exo:checksum": "sha256:deadbeef", "exo:repository": "https://github.com/org/pipeline", "exo:commit": "4f2a9c1"}`, actID, planID, planID)
+	rec := minVersionRecordJSON(NewRecordID(), "recorded", "urn:exohub:agent:person:alice", firstMinVersionRelease, graph)
+	writeRepoFile(t, root, RecordDir+"/a.jsonld", rec)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	report, err := Validate(NewWorktreeReader(root))
+	if err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	if hasFinding(report, "plan-not-traceable", RecordDir+"/a.jsonld") {
+		t.Errorf("findings = %+v, want no plan-not-traceable warning when exo:repository and exo:commit are set", report.Findings)
+	}
+}

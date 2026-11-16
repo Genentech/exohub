@@ -12,7 +12,12 @@ import (
 
 func runShowCmd(t *testing.T, args ...string) (stdout string, err error) {
 	t.Helper()
-	cmd := newShowCommand()
+	return runShowCmdVersion(t, "", args...)
+}
+
+func runShowCmdVersion(t *testing.T, version string, args ...string) (stdout string, err error) {
+	t.Helper()
+	cmd := newShowCommand(version)
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
 	cmd.SetErr(&buf)
@@ -27,7 +32,7 @@ func runShowCmd(t *testing.T, args ...string) (stdout string, err error) {
 // parse it).
 func runShowCmdSeparated(t *testing.T, args ...string) (stdout, stderr string, err error) {
 	t.Helper()
-	cmd := newShowCommand()
+	cmd := newShowCommand("")
 	var outBuf, errBuf bytes.Buffer
 	cmd.SetOut(&outBuf)
 	cmd.SetErr(&errBuf)
@@ -594,5 +599,122 @@ func TestShow_NamedCollectionFallbackDisclosesOthers(t *testing.T) {
 	}
 	if len(doc.NamedCollections) != 2 {
 		t.Fatalf("NamedCollections = %v, want 2 entries", doc.NamedCollections)
+	}
+}
+
+// TestShow_RefusesRecordNeedingNewerExo covers spec "Readers refuse
+// records that need a newer exo" for `exo provenance show`.
+func TestShow_RefusesRecordNeedingNewerExo(t *testing.T) {
+	root, run := addTestRepo(t, false)
+	chdir(t, root)
+	writeFile(t, root, "a.txt", "hello\n")
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+	blobOID := strings.TrimSpace(run("git", "rev-parse", "HEAD:a.txt"))
+
+	rec := fmt.Sprintf(`{
+  "@context": %q,
+  "@id": %q,
+  "exo:assertion": "recorded",
+  "exo:assertedBy": "urn:exohub:agent:person:alice",
+  "generatedAtTime": "2026-10-14T10:00:00Z",
+  "exo:minVersion": "0.999.0",
+  "@graph": [{"@id": "urn:exohub:git:blob:%s", "@type": "Entity"}]
+}`, lib.ContextIRI, lib.NewRecordID(), blobOID)
+	writeFile(t, root, ".exohub/provenance/a.jsonld", rec)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "add record")
+
+	out, err := runShowCmdVersion(t, "0.140.0", "a.txt")
+	if err == nil {
+		t.Fatalf("show error = nil, want non-nil; output: %s", out)
+	}
+	if !strings.Contains(err.Error(), "needs exo") || !strings.Contains(err.Error(), "0.999.0") {
+		t.Errorf("error = %q, want the needs-upgrade message naming 0.999.0", err.Error())
+	}
+}
+
+// TestShow_RolesParametersEnvironmentResultsPlanSource covers displaying
+// roles, parameters, environment, results, the plan pointer and the source
+// run, in both human and --json output (tasks.md 3.2).
+func TestShow_RolesParametersEnvironmentResultsPlanSource(t *testing.T) {
+	root, run := addTestRepo(t, false)
+	chdir(t, root)
+	noLoginToken(t)
+
+	writeFile(t, root, "data/counts.csv", "a,b\n1,2\n")
+	writeFile(t, root, "results/de.tsv", "gene,fc\n")
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	digest := "docker://ghcr.io/org/tool@sha256:" + strings.Repeat("ab", 32)
+	if _, err := runAddCmd(t, "--generated", "results/de.tsv",
+		"--role", "counts=data/counts.csv",
+		"--param", "alpha=0.05",
+		"--output-role", "summary=results/de.tsv",
+		"--result", "accuracy=0.93",
+		"--environment", digest,
+		"--plan-repository", "https://github.com/org/pipeline",
+		"--plan-commit", "4f2a9c1",
+		"--plan-url", "main.nf",
+		"--source", "lid://0d1f",
+		"--agent", "person:alice",
+	); err != nil {
+		t.Fatalf("add error = %v", err)
+	}
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "provenance")
+
+	out, err := runShowCmd(t, "results/de.tsv")
+	if err != nil {
+		t.Fatalf("show error = %v, output: %s", err, out)
+	}
+	for _, want := range []string{
+		"hadRole: counts",
+		"hadRole: alpha",
+		"hadRole: environment",
+		"hadRole: summary",
+		"hadRole: accuracy",
+		"value: 0.05",
+		"result accuracy: 0.93",
+		"exo:repository: https://github.com/org/pipeline",
+		"exo:commit: 4f2a9c1",
+		"hadPrimarySource: lid://0d1f",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output does not contain %q\noutput:\n%s", want, out)
+		}
+	}
+
+	jsonOut, err := runShowCmd(t, "results/de.tsv", "--json")
+	if err != nil {
+		t.Fatalf("show --json error = %v, output: %s", err, jsonOut)
+	}
+	var doc struct {
+		Graph []lib.Node `json:"@graph"`
+	}
+	if err := json.Unmarshal([]byte(jsonOut), &doc); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	var sawUsageRole, sawResultValue, sawPlanRepository bool
+	for _, n := range doc.Graph {
+		if role, _ := n["hadRole"].(string); role == "counts" {
+			sawUsageRole = true
+		}
+		if v, ok := n["value"].(float64); ok && v == 0.93 {
+			sawResultValue = true
+		}
+		if n["exo:repository"] == "https://github.com/org/pipeline" {
+			sawPlanRepository = true
+		}
+	}
+	if !sawUsageRole {
+		t.Error("--json output has no Usage node with hadRole counts")
+	}
+	if !sawResultValue {
+		t.Error("--json output has no result value entity with value 0.93")
+	}
+	if !sawPlanRepository {
+		t.Error("--json output has no plan entity with exo:repository")
 	}
 }

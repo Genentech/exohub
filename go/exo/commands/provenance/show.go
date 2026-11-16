@@ -18,8 +18,10 @@ type showOptions struct {
 	jsonOutput bool
 }
 
-// newShowCommand returns `exo provenance show` (design D9).
-func newShowCommand() *cobra.Command {
+// newShowCommand returns `exo provenance show` (design D9). version is the
+// running exo version, used to refuse records whose exo:minVersion is
+// higher (design "Readers refuse records that need a newer exo").
+func newShowCommand(version string) *cobra.Command {
 	var opts showOptions
 
 	cmd := &cobra.Command{
@@ -52,7 +54,7 @@ exo:path set to each entity's path at the ref.`,
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runShow(cmd, args[0], opts)
+			return runShow(cmd, args[0], opts, version)
 		},
 	}
 
@@ -65,7 +67,7 @@ exo:path set to each entity's path at the ref.`,
 	return cmd
 }
 
-func runShow(cmd *cobra.Command, pathArg string, opts showOptions) error {
+func runShow(cmd *cobra.Command, pathArg string, opts showOptions, version string) error {
 	if opts.depth < 0 {
 		return fmt.Errorf("--depth must not be negative")
 	}
@@ -83,6 +85,17 @@ func runShow(cmd *cobra.Command, pathArg string, opts showOptions) error {
 	}
 
 	reader := lib.NewRefReader(root, opts.ref)
+
+	versions, err := lib.LoadRecordVersions(reader)
+	if err != nil {
+		return fmt.Errorf("load provenance record versions: %w", err)
+	}
+	for _, rv := range versions {
+		if lib.NeedsUpgrade(rv.MinVersion, version) {
+			return fmt.Errorf("%s: %s", rv.Path, lib.MinVersionMessage(rv.MinVersion))
+		}
+	}
+
 	lineage, err := lib.BuildLineage(reader, relPath, opts.depth)
 	if err != nil {
 		return err
@@ -249,9 +262,17 @@ func printNodes(cmd *cobra.Command, lineage *lib.Lineage) {
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "    %s: %s\n", prop, strings.Join(targets, ", "))
 		}
-		for _, t := range []string{"startedAtTime", "endedAtTime", "generatedAtTime"} {
+		for _, t := range []string{"startedAtTime", "endedAtTime", "generatedAtTime", "hadRole", "exo:repository", "exo:commit", "exo:checksum"} {
 			if v, ok := node.Node[t].(string); ok && v != "" {
 				fmt.Fprintf(cmd.OutOrStdout(), "    %s: %s\n", t, v)
+			}
+		}
+		if value, ok := node.Node["value"]; ok {
+			fmt.Fprintf(cmd.OutOrStdout(), "    value: %s\n", formatValue(value))
+		}
+		if isActivity(types) {
+			for _, result := range lib.ActivityResults(lineage.Graph, id) {
+				fmt.Fprintf(cmd.OutOrStdout(), "    result %s: %s\n", result.Role, formatValue(result.Value))
 			}
 		}
 		if len(node.FromRecords) > 0 {
@@ -267,6 +288,31 @@ func printNodes(cmd *cobra.Command, lineage *lib.Lineage) {
 		}
 		fmt.Fprintln(cmd.OutOrStdout())
 	}
+}
+
+// isActivity reports whether types (a node's @type list) includes
+// "Activity".
+func isActivity(types []string) bool {
+	for _, t := range types {
+		if t == "Activity" {
+			return true
+		}
+	}
+	return false
+}
+
+// formatValue renders a parameter or result's typed value (spec
+// "Parameter values", "Non-file results") for human output: a JSON string
+// value prints bare (no quotes), anything else prints as compact JSON.
+func formatValue(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	enc, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprintf("%v", v)
+	}
+	return string(enc)
 }
 
 func sortedKeys(m map[string][]string) []string {

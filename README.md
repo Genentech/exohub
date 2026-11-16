@@ -92,6 +92,8 @@ the enterprise ArtifactDB API, so datasets round-trip cleanly. See
 - **Git/annex routing rules:** [`docs/annex-routing.md`](docs/annex-routing.md)
 - **Provenance (data lineage):** [`docs/provenance.md`](docs/provenance.md)
 - **Catalog remotes (publishing bundles to an Atlas):** [`docs/catalog-remotes.md`](docs/catalog-remotes.md)
+- **Help modes (`EXO_HELP=short` for agents):** [`docs/help-modes.md`](docs/help-modes.md)
+- **Environment variables (`EXO_USER_AGENT`, …):** [`docs/environment-variables.md`](docs/environment-variables.md)
 
 ## Contributing & Security
 

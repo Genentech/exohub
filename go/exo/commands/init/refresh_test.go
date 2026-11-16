@@ -16,18 +16,18 @@ func TestDiffRemoteConfigAddedChangedLocalOnly(t *testing.T) {
 		Type:        "artifactdb",
 		Mode:        "export",
 		S3URL:       "s3://bucket/_catalog",
-		InstanceURL: "https://old-instance.example.com",
+		URL:         "https://old-atlas.example.com",
 		Permissions: "", // not relevant for artifactdb, kept zero on both sides
 	}
 	current.RsyncOptions = "custom opts" // local-only: profile below doesn't define it
 
 	rendered := RemoteConfig{
-		Name:        "exohub-atlas",
-		Type:        "artifactdb",
-		Mode:        "export",
-		S3URL:       "s3://bucket/_catalog",
-		InstanceURL: "https://new-instance.example.com",
-		AtlasURL:    "https://atlas.example.com",
+		Name:            "exohub-atlas",
+		Type:            "artifactdb",
+		Mode:            "export",
+		S3URL:           "s3://bucket/_catalog",
+		URL:             "https://new-atlas.example.com",
+		GrantsAccountID: "111122223333",
 	}
 
 	entries := diffRemoteConfig("exohub-atlas", current, rendered)
@@ -37,11 +37,11 @@ func TestDiffRemoteConfigAddedChangedLocalOnly(t *testing.T) {
 		byField[e.Field] = e
 	}
 
-	if e, ok := byField["atlas_url"]; !ok || e.Status != "added" || e.Profile != "https://atlas.example.com" {
-		t.Errorf("atlas_url entry = %+v, want added https://atlas.example.com", e)
+	if e, ok := byField["grants_account_id"]; !ok || e.Status != "added" || e.Profile != "111122223333" {
+		t.Errorf("grants_account_id entry = %+v, want added 111122223333", e)
 	}
-	if e, ok := byField["instance_url"]; !ok || e.Status != "changed" || e.Current != "https://old-instance.example.com" || e.Profile != "https://new-instance.example.com" {
-		t.Errorf("instance_url entry = %+v, want changed", e)
+	if e, ok := byField["url"]; !ok || e.Status != "changed" || e.Current != "https://old-atlas.example.com" || e.Profile != "https://new-atlas.example.com" {
+		t.Errorf("url entry = %+v, want changed", e)
 	}
 	if e, ok := byField["rsync_options"]; !ok || e.Status != "local-only" || e.Current != "custom opts" {
 		t.Errorf("rsync_options entry = %+v, want local-only custom opts", e)
@@ -67,28 +67,28 @@ func TestDiffRemoteConfigNoDrift(t *testing.T) {
 
 func TestApplyRemoteFieldDiffOnlyTouchesListedFields(t *testing.T) {
 	current := RemoteConfig{
-		Name:        "exohub-atlas",
-		Type:        "artifactdb",
-		Mode:        "export",
-		S3URL:       "s3://bucket/_catalog",
-		InstanceURL: "https://old-instance.example.com",
+		Name:  "exohub-atlas",
+		Type:  "artifactdb",
+		Mode:  "export",
+		S3URL: "s3://bucket/_catalog",
+		URL:   "https://old-atlas.example.com",
 	}
 	rendered := RemoteConfig{
-		Name:        "exohub-atlas",
-		Type:        "artifactdb",
-		Mode:        "export",
-		S3URL:       "s3://bucket/_catalog",
-		InstanceURL: "https://new-instance.example.com",
-		AtlasURL:    "https://atlas.example.com",
+		Name:            "exohub-atlas",
+		Type:            "artifactdb",
+		Mode:            "export",
+		S3URL:           "s3://bucket/_catalog",
+		URL:             "https://new-atlas.example.com",
+		GrantsAccountID: "111122223333",
 	}
 	entries := changedEntries(diffRemoteConfig("exohub-atlas", current, rendered))
 
 	merged := applyRemoteFieldDiff(current, rendered, entries)
-	if merged.AtlasURL != "https://atlas.example.com" {
-		t.Errorf("AtlasURL not applied: got %q", merged.AtlasURL)
+	if merged.GrantsAccountID != "111122223333" {
+		t.Errorf("GrantsAccountID not applied: got %q", merged.GrantsAccountID)
 	}
-	if merged.InstanceURL != "https://new-instance.example.com" {
-		t.Errorf("InstanceURL not applied: got %q", merged.InstanceURL)
+	if merged.URL != "https://new-atlas.example.com" {
+		t.Errorf("URL not applied: got %q", merged.URL)
 	}
 	if merged.S3URL != current.S3URL {
 		t.Errorf("S3URL should be untouched: got %q", merged.S3URL)
@@ -201,7 +201,7 @@ func TestRunProfileRemoteRefreshAddsAtlasURL(t *testing.T) {
 		"vars": {},
 		"prompts": [],
 		"templates": {
-			"remotes": "remotes:\n  - name: exohub-atlas\n    type: artifactdb\n    mode: export\n    s3url: s3://bucket/_catalog\n    atlas_url: https://atlas.example.com\n"
+			"remotes": "remotes:\n  - name: exohub-atlas\n    type: artifactdb\n    mode: export\n    s3url: s3://bucket/_catalog\n    url: https://atlas.example.com\n"
 		},
 		"actions": []
 	}`
@@ -257,8 +257,8 @@ func TestRunProfileRemoteRefreshAddsAtlasURL(t *testing.T) {
 	if !ok {
 		t.Fatal("exohub-atlas missing after refresh")
 	}
-	if atlas.AtlasURL != "https://atlas.example.com" {
-		t.Errorf("AtlasURL not refreshed: got %q", atlas.AtlasURL)
+	if atlas.URL != "https://atlas.example.com" {
+		t.Errorf("URL not refreshed: got %q", atlas.URL)
 	}
 	if atlas.S3URL != "s3://bucket/_catalog" {
 		t.Errorf("S3URL should be unchanged: got %q", atlas.S3URL)
@@ -343,7 +343,7 @@ func TestRunProfileRemoteRefreshPreservesCommentsAndUnknownKeys(t *testing.T) {
 		"vars": {},
 		"prompts": [],
 		"templates": {
-			"remotes": "remotes:\n  - name: store\n    type: annex\n    s3url: s3://bucket/ds/annex/\n  - name: atlas\n    type: artifactdb\n    mode: export\n    s3url: s3://bucket/ds/_catalog/\n    atlas_url: https://atlas.example.com/\n"
+			"remotes": "remotes:\n  - name: store\n    type: annex\n    s3url: s3://bucket/ds/annex/\n  - name: atlas\n    type: artifactdb\n    mode: export\n    s3url: s3://bucket/ds/_catalog/\n    url: https://atlas.example.com/\n"
 		},
 		"actions": []
 	}`
@@ -404,7 +404,7 @@ func TestRunProfileRemoteRefreshPreservesCommentsAndUnknownKeys(t *testing.T) {
 		"    type: artifactdb\n" +
 		"    mode: export\n" +
 		"    s3url: \"s3://bucket/ds/_catalog/\"\n" +
-		"    atlas_url: https://atlas.example.com/\n"
+		"    url: https://atlas.example.com/\n"
 	if string(after) != want {
 		t.Errorf(".exohub/remotes not byte-identical except the inserted line:\ngot:\n%s\nwant:\n%s", after, want)
 	}
@@ -440,7 +440,7 @@ func TestRunProfileRemoteRefreshUsesLockedFolderNotDirectory(t *testing.T) {
 		"vars": {},
 		"prompts": [],
 		"templates": {
-			"remotes": "remotes:\n  - name: exohub-annex\n    type: annex\n    s3url: s3://exohub-sandbox-uat/styx/my-profile/{{.Folder}}/_annex\n    chunk: 1GiB\n"
+			"remotes": "remotes:\n  - name: exohub-annex\n    type: annex\n    s3url: s3://example-sandbox-bucket/styx/my-profile/{{.Folder}}/_annex\n    chunk: 1GiB\n"
 		},
 		"actions": []
 	}`
@@ -462,7 +462,7 @@ func TestRunProfileRemoteRefreshUsesLockedFolderNotDirectory(t *testing.T) {
 	// Current .exohub/remotes already has the correct, dataset-identity
 	// prefix — not the (irrelevant, randomly-named) test tmpdir.
 	cfg := &RemotesConfig{Remotes: []RemoteConfig{
-		{Name: "exohub-annex", Type: "annex", S3URL: "s3://exohub-sandbox-uat/styx/my-profile/DS000000001/_annex", Chunk: "1GiB"},
+		{Name: "exohub-annex", Type: "annex", S3URL: "s3://example-sandbox-bucket/styx/my-profile/DS000000001/_annex", Chunk: "1GiB"},
 	}}
 	if err := SaveRemotesConfig(cfg); err != nil {
 		t.Fatalf("SaveRemotesConfig: %v", err)
@@ -715,10 +715,10 @@ func TestResolveFolderFromExistingRemoteViaRefresh(t *testing.T) {
 	spec := &ProfileSpec{
 		Name: "my-profile",
 		Templates: map[string]string{
-			"remotes": "remotes:\n  - name: exohub-annex\n    type: annex\n    s3url: s3://exohub-sandbox-uat/styx/my-profile/{{.Folder}}/_annex\n",
+			"remotes": "remotes:\n  - name: exohub-annex\n    type: annex\n    s3url: s3://example-sandbox-bucket/styx/my-profile/{{.Folder}}/_annex\n",
 		},
 	}
-	current := RemoteConfig{Name: "exohub-annex", Type: "annex", S3URL: "s3://exohub-sandbox-uat/styx/my-profile/DS000000001/_annex"}
+	current := RemoteConfig{Name: "exohub-annex", Type: "annex", S3URL: "s3://example-sandbox-bucket/styx/my-profile/DS000000001/_annex"}
 
 	existing := &RemotesConfig{Remotes: []RemoteConfig{current}}
 	folder, source := resolveFolder("", spec, "jdoe", map[string]interface{}{}, existing, "/some/scratch-dir")
@@ -780,5 +780,87 @@ func TestRenderedRemoteForUsesLockedUnixIDNotCurrentUser(t *testing.T) {
 	}
 	if rendered.S3URL != current.S3URL {
 		t.Errorf("S3URL = %q, want %q (locked UnixID %q, not live %q)", rendered.S3URL, current.S3URL, lockedUnixID, actualUnixID)
+	}
+}
+
+// TestRunProfileRemoteRefreshSyncsGrantsOnMove is the MR !359 review's M6
+// regression: an already role-split grants: true remote's --allow-move
+// refresh must attempt a grants sync for the new s3url, not just rewrite
+// .exohub/remotes and reconfigure git-annex.
+func TestRunProfileRemoteRefreshSyncsGrantsOnMove(t *testing.T) {
+	chdirTemp(t)
+
+	withCommand(t, func(name string, args ...string) *exec.Cmd {
+		if name == "git" && len(args) >= 2 && args[0] == "config" && args[1] == "--get" {
+			return exec.Command("sh", "-c", "exit 1")
+		}
+		return exec.Command("true")
+	})
+
+	payload := `{
+		"name": "my-profile",
+		"vars": {},
+		"prompts": [],
+		"templates": {
+			"remotes": "remotes:\n  - name: exohub-annex\n    type: annex\n    s3url: s3://bucket/DS000000002/_annex\n    grants: true\n"
+		},
+		"actions": []
+	}`
+	var grantsSyncCalled bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/profiles/my-profile":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(payload))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/grants/verify":
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"in_sync":false,"drift":{"missing_grants":[{}],"extra_grants":[],"permission_mismatches":[]}}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/grants/sync":
+			grantsSyncCalled = true
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"status":"synced"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	t.Setenv("EXOHUB_API_URL", srv.URL+"/api")
+
+	if err := os.MkdirAll(".exohub", 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(".exohub", "permissions"),
+		[]byte("owners:\n  - testuser\nread_access: viewers\nwrite_access: owners\n"), 0644); err != nil {
+		t.Fatalf("WriteFile permissions: %v", err)
+	}
+	fakeJWT := "eyJhbGciOiAiUlMyNTYifQ" + "." + "eyJwcmVmZXJyZWRfdXNlcm5hbWUiOiAidGVzdHVzZXIifQ" + "." + "sig"
+	os.MkdirAll(filepath.Join(".", "exo", "credentials"), 0700)
+	credsDir := t.TempDir()
+	os.MkdirAll(filepath.Join(credsDir, "exo", "credentials"), 0700)
+	os.WriteFile(filepath.Join(credsDir, "exo", "credentials", "token.json"),
+		[]byte(`{"access_token":"`+fakeJWT+`","token_type":"Bearer"}`), 0600)
+	t.Setenv("XDG_CONFIG_HOME", credsDir)
+
+	oldYes, oldAllowMove := flagYes, flagAllowMove
+	flagYes, flagAllowMove = true, true
+	t.Cleanup(func() { flagYes, flagAllowMove = oldYes, oldAllowMove })
+
+	cfg := &RemotesConfig{Remotes: []RemoteConfig{
+		{Name: "exohub-annex", Type: "annex", S3URL: "s3://bucket/DS000000001/_annex", Grants: true},
+	}}
+	if err := SaveRemotesConfig(cfg); err != nil {
+		t.Fatalf("SaveRemotesConfig: %v", err)
+	}
+	reloaded, err := LoadRemotesConfig()
+	if err != nil {
+		t.Fatalf("LoadRemotesConfig: %v", err)
+	}
+
+	if err := runProfileRemoteRefresh("my-profile", "exohub-annex", reloaded); err != nil {
+		t.Fatalf("runProfileRemoteRefresh: %v", err)
+	}
+
+	if !grantsSyncCalled {
+		t.Errorf("expected a grants sync attempt for the moved grants: true remote")
 	}
 }

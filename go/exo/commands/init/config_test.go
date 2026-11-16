@@ -1,6 +1,8 @@
 package init
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -498,11 +500,11 @@ func TestRemoteConfigValidate(t *testing.T) {
 		{
 			name: "valid catalog remote (artifactdb export)",
 			remote: RemoteConfig{
-				Name:        "catalog",
-				Type:        "artifactdb",
-				Mode:        "export",
-				S3URL:       "s3://bucket/path/_artifactdb",
-				InstanceURL: "https://catalog.example.com/v1/cancerdb",
+				Name:  "catalog",
+				Type:  "artifactdb",
+				Mode:  "export",
+				S3URL: "s3://bucket/path/_artifactdb",
+				URL:   "https://catalog.example.com/v1/cancerdb",
 			},
 			wantErr: false,
 		},
@@ -546,6 +548,87 @@ func TestRemoteConfigValidate(t *testing.T) {
 				S3URL: "s3://bucket/path/_artifactdb",
 			},
 			wantErr: false,
+		},
+		// role-split artifactdb remote tests (split-remotes-by-role §1.2)
+		{
+			name: "role: atlas (explicit) behaves like default",
+			remote: RemoteConfig{
+				Name:  "catalog",
+				Type:  "artifactdb",
+				Role:  "atlas",
+				Mode:  "export",
+				S3URL: "s3://bucket/path/_artifactdb",
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid role",
+			remote: RemoteConfig{
+				Name:  "catalog",
+				Type:  "artifactdb",
+				Role:  "bogus",
+				S3URL: "s3://bucket/path/_artifactdb",
+			},
+			wantErr: true,
+			errMsg:  "invalid role",
+		},
+		{
+			name: "valid role: instance remote",
+			remote: RemoteConfig{
+				Name:  "instance",
+				Type:  "artifactdb",
+				Role:  "instance",
+				S3URL: "s3://bucket/DS1",
+				URL:   "https://adb.example.com/v1/b",
+			},
+			wantErr: false,
+		},
+		{
+			name: "role: instance missing url",
+			remote: RemoteConfig{
+				Name:  "instance",
+				Type:  "artifactdb",
+				Role:  "instance",
+				S3URL: "s3://bucket/DS1",
+			},
+			wantErr: true,
+			errMsg:  "url is required for role: instance",
+		},
+		{
+			name: "role: instance missing s3url",
+			remote: RemoteConfig{
+				Name: "instance",
+				Type: "artifactdb",
+				Role: "instance",
+				URL:  "https://adb.example.com/v1/b",
+			},
+			wantErr: true,
+			errMsg:  "s3url is required for role: instance",
+		},
+		{
+			name: "role: instance with a mode is rejected",
+			remote: RemoteConfig{
+				Name:  "instance",
+				Type:  "artifactdb",
+				Role:  "instance",
+				Mode:  "export",
+				S3URL: "s3://bucket/DS1",
+				URL:   "https://adb.example.com/v1/b",
+			},
+			wantErr: true,
+			errMsg:  "instance remotes take no mode",
+		},
+		{
+			name: "non-HTTPS url is rejected",
+			remote: RemoteConfig{
+				Name:  "catalog",
+				Type:  "artifactdb",
+				Mode:  "export",
+				S3URL: "s3://bucket/path/_artifactdb",
+				URL:   "http://atlas.example.com",
+			},
+			wantErr: true,
+			errMsg:  "must be HTTPS",
 		},
 	}
 
@@ -728,7 +811,7 @@ func TestLoadRemotesConfigFromRef(t *testing.T) {
 
 	runGitInit(t, repoDir, "git", "init", "-q")
 
-	oldCfg := &RemotesConfig{Remotes: []RemoteConfig{{Name: "atlas", Type: "artifactdb", S3URL: "s3://bucket/sandbox/old"}}}
+	oldCfg := &RemotesConfig{Remotes: []RemoteConfig{{Name: "atlas", Type: "artifactdb", Mode: "export", S3URL: "s3://bucket/sandbox/old"}}}
 	if err := SaveRemotesConfig(oldCfg); err != nil {
 		t.Fatalf("SaveRemotesConfig: %v", err)
 	}
@@ -736,7 +819,7 @@ func TestLoadRemotesConfigFromRef(t *testing.T) {
 	runGitInit(t, repoDir, "git", "commit", "-q", "-m", "old routing")
 	runGitInit(t, repoDir, "git", "tag", "1")
 
-	newCfg := &RemotesConfig{Remotes: []RemoteConfig{{Name: "atlas", Type: "artifactdb", S3URL: "s3://bucket/styx/psyche-poc", AtlasURL: "https://atlas.example/sandbox1"}}}
+	newCfg := &RemotesConfig{Remotes: []RemoteConfig{{Name: "atlas", Type: "artifactdb", Mode: "export", S3URL: "s3://bucket/styx/psyche-poc", URL: "https://atlas.example/sandbox1"}}}
 	if err := SaveRemotesConfig(newCfg); err != nil {
 		t.Fatalf("SaveRemotesConfig: %v", err)
 	}
@@ -747,7 +830,7 @@ func TestLoadRemotesConfigFromRef(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadRemotesConfigFromRef: %v", err)
 	}
-	if len(cfg.Remotes) != 1 || cfg.Remotes[0].S3URL != "s3://bucket/sandbox/old" || cfg.Remotes[0].AtlasURL != "" {
+	if len(cfg.Remotes) != 1 || cfg.Remotes[0].S3URL != "s3://bucket/sandbox/old" || cfg.Remotes[0].URL != "" {
 		t.Fatalf("expected tag 1's own (pre-migration) routing, got: %+v", cfg.Remotes)
 	}
 
@@ -755,7 +838,7 @@ func TestLoadRemotesConfigFromRef(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadRemotesConfigFromRef: %v", err)
 	}
-	if len(cfg.Remotes) != 1 || cfg.Remotes[0].AtlasURL != "https://atlas.example/sandbox1" {
+	if len(cfg.Remotes) != 1 || cfg.Remotes[0].URL != "https://atlas.example/sandbox1" {
 		t.Fatalf("expected HEAD's current (migrated) routing, got: %+v", cfg.Remotes)
 	}
 }
@@ -776,6 +859,69 @@ func TestLoadRemotesConfigFromRefMissingFile(t *testing.T) {
 	cfg, err := LoadRemotesConfigFromRef("HEAD")
 	if err != nil {
 		t.Fatalf("LoadRemotesConfigFromRef: %v", err)
+	}
+	if cfg == nil || len(cfg.Remotes) != 0 {
+		t.Fatalf("expected empty config for a ref predating .exohub/remotes, got: %+v", cfg)
+	}
+}
+
+// TestLoadRemotesConfigFromRefLenient verifies that a ref carrying legacy
+// atlas_url/instance_url remotes (predating the role-split migration) is
+// never refused by the lenient loader (exo-cli#196), unlike
+// LoadRemotesConfigFromRef, while still parsing Name/Type/UUID correctly.
+func TestLoadRemotesConfigFromRefLenient(t *testing.T) {
+	repoDir := t.TempDir()
+	oldWd, _ := os.Getwd()
+	defer os.Chdir(oldWd)
+	os.Chdir(repoDir)
+
+	runGitInit(t, repoDir, "git", "init", "-q")
+	data := []byte("remotes:\n  - name: atlas\n    type: artifactdb\n    mode: export\n    s3url: s3://bucket/old-layout\n    atlas_url: https://atlas.example/v1/catalog-a\n    uuid: abc-123\n")
+	if err := os.MkdirAll(".exohub", 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(".exohub", "remotes"), data, 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	runGitInit(t, repoDir, "git", "add", ".exohub/remotes")
+	runGitInit(t, repoDir, "git", "commit", "-q", "-m", "legacy routing")
+	runGitInit(t, repoDir, "git", "tag", "1")
+
+	if _, err := LoadRemotesConfigFromRef("1"); err == nil {
+		t.Fatal("expected strict LoadRemotesConfigFromRef to refuse on legacy atlas_url")
+	}
+
+	cfg, err := LoadRemotesConfigFromRefLenient("1")
+	if err != nil {
+		t.Fatalf("LoadRemotesConfigFromRefLenient: %v", err)
+	}
+	if len(cfg.Remotes) != 1 {
+		t.Fatalf("expected 1 remote, got: %+v", cfg.Remotes)
+	}
+	r := cfg.Remotes[0]
+	if r.Name != "atlas" || r.Type != "artifactdb" || r.UUID != "abc-123" {
+		t.Errorf("expected Name/Type/UUID to parse, got: %+v", r)
+	}
+}
+
+// TestLoadRemotesConfigFromRefLenientMissingFile verifies the same
+// missing-file fallback as LoadRemotesConfigFromRef.
+func TestLoadRemotesConfigFromRefLenientMissingFile(t *testing.T) {
+	repoDir := t.TempDir()
+	oldWd, _ := os.Getwd()
+	defer os.Chdir(oldWd)
+	os.Chdir(repoDir)
+
+	runGitInit(t, repoDir, "git", "init", "-q")
+	if err := os.WriteFile(filepath.Join(repoDir, "README.md"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitInit(t, repoDir, "git", "add", "README.md")
+	runGitInit(t, repoDir, "git", "commit", "-q", "-m", "no remotes file")
+
+	cfg, err := LoadRemotesConfigFromRefLenient("HEAD")
+	if err != nil {
+		t.Fatalf("LoadRemotesConfigFromRefLenient: %v", err)
 	}
 	if cfg == nil || len(cfg.Remotes) != 0 {
 		t.Fatalf("expected empty config for a ref predating .exohub/remotes, got: %+v", cfg)
@@ -804,7 +950,7 @@ func TestRoutingFieldsDiffer(t *testing.T) {
 	base := &RemoteConfig{Name: "atlas", Type: "artifactdb", S3URL: "s3://bucket/old"}
 	same := &RemoteConfig{Name: "atlas", Type: "artifactdb", S3URL: "s3://bucket/old", Include: []string{"irrelevant"}}
 	diffPrefix := &RemoteConfig{Name: "atlas", Type: "artifactdb", S3URL: "s3://bucket/new"}
-	diffAtlas := &RemoteConfig{Name: "atlas", Type: "artifactdb", S3URL: "s3://bucket/old", AtlasURL: "https://atlas.example/sandbox1"}
+	diffAtlas := &RemoteConfig{Name: "atlas", Type: "artifactdb", S3URL: "s3://bucket/old", URL: "https://atlas.example/sandbox1"}
 
 	if RoutingFieldsDiffer(base, same) {
 		t.Error("expected no diff for content-only field changes (include)")
@@ -820,6 +966,366 @@ func TestRoutingFieldsDiffer(t *testing.T) {
 	}
 	if !RoutingFieldsDiffer(base, nil) {
 		t.Error("expected diff when only one side is nil")
+	}
+}
+
+// TestLegacyRemoteKeysRefused covers split-remotes-by-role spec "atlas_url
+// and instance_url are no longer accepted": a remote carrying either
+// legacy key refuses before any command loads .exohub/remotes, showing the
+// equivalent role-split YAML and an exo init migration hint.
+func TestLegacyRemoteKeysRefused(t *testing.T) {
+	chdirTemp(t)
+
+	data := []byte("remotes:\n" +
+		"  - name: catalog\n" +
+		"    type: artifactdb\n" +
+		"    mode: export\n" +
+		"    s3url: s3://bucket/_catalog\n" +
+		"    atlas_url: https://atlas.example.com/v1/a\n" +
+		"    instance_url: https://adb.example.com/v1/b\n")
+	if err := os.MkdirAll(".exohub", 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(".exohub", "remotes"), data, 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	_, err := LoadRemotesConfig()
+	if err == nil {
+		t.Fatal("expected LoadRemotesConfig to refuse atlas_url/instance_url")
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		`"catalog"`,
+		"role: atlas",
+		"url: https://atlas.example.com/v1/a",
+		"role: instance",
+		"url: https://adb.example.com/v1/b",
+		"data_from: catalog",
+		"exo init --profile",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error %q missing %q", msg, want)
+		}
+	}
+}
+
+// TestLegacyRemoteKeysRefusedUsesProfileLock verifies the migration hint
+// names the repo's recorded profile when .exohub/profile.lock exists.
+func TestLegacyRemoteKeysRefusedUsesProfileLock(t *testing.T) {
+	chdirTemp(t)
+
+	if err := SaveProfileLock(&ProfileLock{Profile: "psyche-poc"}); err != nil {
+		t.Fatalf("SaveProfileLock: %v", err)
+	}
+	data := []byte("remotes:\n  - name: catalog\n    type: artifactdb\n    atlas_url: https://atlas.example.com\n")
+	if err := os.MkdirAll(".exohub", 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(".exohub", "remotes"), data, 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	_, err := LoadRemotesConfig()
+	if err == nil || !strings.Contains(err.Error(), "exo init --profile psyche-poc --remote <remote>") {
+		t.Fatalf("expected profile-specific hint, got: %v", err)
+	}
+}
+
+// TestLegacyRemoteKeysRefusedUsesProfileRenderedExample verifies that when
+// .exohub/profile.lock names a profile the server can still serve, the
+// refusal's example YAML is the profile's own rendered role-split remotes
+// (real names/bucket/data_from), not the generic placeholder.
+func TestLegacyRemoteKeysRefusedUsesProfileRenderedExample(t *testing.T) {
+	chdirTemp(t)
+
+	payload := `{
+		"name": "example-profile",
+		"vars": {},
+		"prompts": [],
+		"templates": {
+			"remotes": "remotes:\n  - name: catalog\n    type: artifactdb\n    mode: export\n    s3url: s3://example-bucket/_catalog\n    url: https://atlas.example.com/v1/a\n  - name: catalog-instance\n    type: artifactdb\n    role: instance\n    url: https://adb.example.com/v1/b\n    s3url: s3://example-instance-bucket/example-project\n"
+		},
+		"actions": []
+	}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/profiles/example-profile" {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(payload))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+	t.Setenv("EXOHUB_API_URL", srv.URL+"/api")
+
+	if err := SaveProfileLock(&ProfileLock{Profile: "example-profile"}); err != nil {
+		t.Fatalf("SaveProfileLock: %v", err)
+	}
+	data := []byte("remotes:\n" +
+		"  - name: catalog\n" +
+		"    type: artifactdb\n" +
+		"    mode: export\n" +
+		"    s3url: s3://example-bucket/_catalog\n" +
+		"    atlas_url: https://atlas.example.com/v1/a\n" +
+		"    instance_url: https://adb.example.com/v1/b\n")
+	if err := os.MkdirAll(".exohub", 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(".exohub", "remotes"), data, 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	_, err := LoadRemotesConfig()
+	if err == nil {
+		t.Fatal("expected LoadRemotesConfig to refuse")
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		"name: catalog-instance",
+		"s3url: s3://example-instance-bucket/example-project",
+		"data_from: catalog",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error %q missing profile-rendered %q", msg, want)
+		}
+	}
+	if strings.Contains(msg, "s3://<bucket>/<project_id>") {
+		t.Errorf("error %q still shows the generic placeholder instead of the profile-rendered example", msg)
+	}
+}
+
+// TestLoadRemotesConfigAllowLegacyNeverRefuses verifies the exo-cli#197
+// migration loader reads a legacy remote's existing fields (notably uuid)
+// instead of refusing, unlike LoadRemotesConfig.
+func TestLoadRemotesConfigAllowLegacyNeverRefuses(t *testing.T) {
+	chdirTemp(t)
+
+	data := []byte("remotes:\n" +
+		"  - name: catalog\n" +
+		"    type: artifactdb\n" +
+		"    mode: export\n" +
+		"    uuid: catalog-uuid\n" +
+		"    s3url: s3://bucket/_catalog\n" +
+		"    atlas_url: https://atlas.example.com/v1/a\n" +
+		"    instance_url: https://adb.example.com/v1/b\n")
+	if err := os.MkdirAll(".exohub", 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(".exohub", "remotes"), data, 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	if _, err := LoadRemotesConfig(); err == nil {
+		t.Fatal("expected LoadRemotesConfig to refuse")
+	}
+
+	cfg, err := LoadRemotesConfigAllowLegacy()
+	if err != nil {
+		t.Fatalf("LoadRemotesConfigAllowLegacy: %v", err)
+	}
+	if len(cfg.Remotes) != 1 || cfg.Remotes[0].Name != "catalog" {
+		t.Fatalf("expected 1 remote named catalog, got %+v", cfg.Remotes)
+	}
+	if cfg.Remotes[0].UUID != "catalog-uuid" {
+		t.Errorf("uuid = %q, want %q", cfg.Remotes[0].UUID, "catalog-uuid")
+	}
+	if cfg.Remotes[0].S3URL != "s3://bucket/_catalog" {
+		t.Errorf("s3url = %q, want %q", cfg.Remotes[0].S3URL, "s3://bucket/_catalog")
+	}
+}
+
+// TestLoadRemotesConfigAllowLegacyStillValidatesOtherFields verifies that a
+// remote which is both legacy AND otherwise malformed (invalid role) still
+// fails loudly instead of flowing into the migration path.
+func TestLoadRemotesConfigAllowLegacyStillValidatesOtherFields(t *testing.T) {
+	chdirTemp(t)
+
+	data := []byte("remotes:\n" +
+		"  - name: catalog\n" +
+		"    type: artifactdb\n" +
+		"    role: bogus\n" +
+		"    atlas_url: https://atlas.example.com/v1/a\n")
+	if err := os.MkdirAll(".exohub", 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(".exohub", "remotes"), data, 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	_, err := LoadRemotesConfigAllowLegacy()
+	if err == nil || !strings.Contains(err.Error(), "invalid role") {
+		t.Fatalf("expected invalid role error, got: %v", err)
+	}
+}
+
+// TestLoadRemotesConfigValidatesOnLoad covers the exo-cli maitre's #181
+// review: role validation must run on load, for every exo command that
+// loads .exohub/remotes — not just exo init — so exo sync/exo publish
+// refuse an invalid role/mode/url config before acting (spec: "any exo
+// command that loads .exohub/remotes").
+func TestLoadRemotesConfigValidatesOnLoad(t *testing.T) {
+	tests := []struct {
+		name   string
+		remote string
+		errMsg string
+	}{
+		{
+			name:   "role: instance with a mode",
+			remote: "  - name: instance\n    type: artifactdb\n    role: instance\n    mode: export\n    s3url: s3://bucket/DS1\n    url: https://adb.example.com/v1/b\n",
+			errMsg: "instance remotes take no mode",
+		},
+		{
+			name:   "role: instance with a non-HTTPS url",
+			remote: "  - name: instance\n    type: artifactdb\n    role: instance\n    s3url: s3://bucket/DS1\n    url: http://adb.example.com/v1/b\n",
+			errMsg: "must be HTTPS",
+		},
+		{
+			name:   "invalid role",
+			remote: "  - name: catalog\n    type: artifactdb\n    role: wrong\n    mode: export\n    s3url: s3://bucket/_catalog\n",
+			errMsg: "invalid role",
+		},
+		{
+			name:   "role: instance missing url",
+			remote: "  - name: instance\n    type: artifactdb\n    role: instance\n    s3url: s3://bucket/DS1\n",
+			errMsg: "url is required for role: instance",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chdirTemp(t)
+			data := []byte("remotes:\n" + tt.remote)
+			if err := os.MkdirAll(".exohub", 0755); err != nil {
+				t.Fatalf("MkdirAll: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(".exohub", "remotes"), data, 0644); err != nil {
+				t.Fatalf("WriteFile: %v", err)
+			}
+
+			_, err := LoadRemotesConfig()
+			if err == nil {
+				t.Fatalf("expected LoadRemotesConfig to refuse: %s", tt.remote)
+			}
+			if !strings.Contains(err.Error(), tt.errMsg) {
+				t.Errorf("error %q missing %q", err.Error(), tt.errMsg)
+			}
+		})
+	}
+}
+
+// TestLoadRemotesConfigFromRefValidatesOnLoad verifies the same validation
+// runs when loading a ref's .exohub/remotes (used by exo publish/sync's
+// stale-routing guard), not just the checked-out one.
+func TestLoadRemotesConfigFromRefValidatesOnLoad(t *testing.T) {
+	repoDir := t.TempDir()
+	oldWd, _ := os.Getwd()
+	defer os.Chdir(oldWd)
+	os.Chdir(repoDir)
+
+	runGitInit(t, repoDir, "git", "init", "-q")
+	data := []byte("remotes:\n  - name: instance\n    type: artifactdb\n    role: instance\n    mode: export\n    s3url: s3://bucket/DS1\n    url: https://adb.example.com/v1/b\n")
+	if err := os.MkdirAll(".exohub", 0755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(".exohub", "remotes"), data, 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	runGitInit(t, repoDir, "git", "add", ".exohub/remotes")
+	runGitInit(t, repoDir, "git", "commit", "-q", "-m", "invalid routing")
+
+	_, err := LoadRemotesConfigFromRef("HEAD")
+	if err == nil || !strings.Contains(err.Error(), "instance remotes take no mode") {
+		t.Fatalf("expected LoadRemotesConfigFromRef to refuse, got: %v", err)
+	}
+}
+
+func TestResolveDelegationAtlas(t *testing.T) {
+	atlas := RemoteConfig{Name: "catalog", Type: "artifactdb", Mode: "export", S3URL: "s3://bucket/_catalog"}
+	otherAtlas := RemoteConfig{Name: "catalog2", Type: "artifactdb", Mode: "export", S3URL: "s3://bucket/_catalog2"}
+	instance := RemoteConfig{Name: "cerberus", Type: "artifactdb", Role: "instance", S3URL: "s3://bucket/DS1", URL: "https://adb.example.com"}
+
+	t.Run("single atlas is inferred", func(t *testing.T) {
+		got, err := ResolveDelegationAtlas(instance, []RemoteConfig{atlas, instance})
+		if err != nil {
+			t.Fatalf("ResolveDelegationAtlas: %v", err)
+		}
+		if got.Name != "catalog" {
+			t.Errorf("got %q, want catalog", got.Name)
+		}
+	})
+
+	t.Run("ambiguous delegation is refused", func(t *testing.T) {
+		_, err := ResolveDelegationAtlas(instance, []RemoteConfig{atlas, otherAtlas, instance})
+		if err == nil {
+			t.Fatal("expected ambiguous-delegation error")
+		}
+		if !strings.Contains(err.Error(), "catalog") || !strings.Contains(err.Error(), "catalog2") {
+			t.Errorf("expected both candidates named, got: %v", err)
+		}
+	})
+
+	t.Run("zero atlas remotes is refused", func(t *testing.T) {
+		_, err := ResolveDelegationAtlas(instance, []RemoteConfig{instance})
+		if err == nil {
+			t.Fatal("expected no-atlas error")
+		}
+	})
+
+	t.Run("explicit data_from is honored", func(t *testing.T) {
+		withDataFrom := instance
+		withDataFrom.DataFrom = "catalog2"
+		got, err := ResolveDelegationAtlas(withDataFrom, []RemoteConfig{atlas, otherAtlas, instance})
+		if err != nil {
+			t.Fatalf("ResolveDelegationAtlas: %v", err)
+		}
+		if got.Name != "catalog2" {
+			t.Errorf("got %q, want catalog2", got.Name)
+		}
+	})
+
+	t.Run("unknown data_from is refused", func(t *testing.T) {
+		withDataFrom := instance
+		withDataFrom.DataFrom = "nonexistent"
+		_, err := ResolveDelegationAtlas(withDataFrom, []RemoteConfig{atlas, instance})
+		if err == nil {
+			t.Fatal("expected unknown-data_from error")
+		}
+	})
+
+	t.Run("data_from naming a non-atlas remote is refused", func(t *testing.T) {
+		withDataFrom := instance
+		withDataFrom.DataFrom = "cerberus"
+		_, err := ResolveDelegationAtlas(withDataFrom, []RemoteConfig{atlas, instance})
+		if err == nil {
+			t.Fatal("expected non-atlas data_from error")
+		}
+	})
+}
+
+func TestValidateInstancePrefix(t *testing.T) {
+	tests := []struct {
+		name      string
+		s3url     string
+		projectID string
+		wantErr   bool
+	}{
+		{name: "exact bucket/project", s3url: "s3://bucket/DS1", projectID: "DS1", wantErr: false},
+		{name: "foreign project", s3url: "s3://bucket/OTHER", projectID: "DS1", wantErr: true},
+		{name: "reserved underscore prefix", s3url: "s3://bucket/_external/DS1", projectID: "DS1", wantErr: true},
+		{name: "extra path segment", s3url: "s3://bucket/DS1/extra", projectID: "DS1", wantErr: true},
+		{name: "not s3", s3url: "https://bucket/DS1", projectID: "DS1", wantErr: true},
+		{name: "missing bucket", s3url: "s3:///DS1", projectID: "DS1", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateInstancePrefix(tt.s3url, tt.projectID)
+			if tt.wantErr && err == nil {
+				t.Errorf("ValidateInstancePrefix(%q, %q) expected error, got nil", tt.s3url, tt.projectID)
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("ValidateInstancePrefix(%q, %q) unexpected error: %v", tt.s3url, tt.projectID, err)
+			}
+		})
 	}
 }
 
