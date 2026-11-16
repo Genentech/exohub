@@ -3,7 +3,7 @@ title: "exo logout"
 description: "Clear cached authentication credentials"
 ---
 
-Full `exo logout --help` output, generated from exo-cli v0.140.2.
+Full `exo logout --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Remove locally cached authentication credentials.

@@ -3,7 +3,7 @@ title: "exo link"
 description: "Reconnect git-annex symlinks to an external store of annex key files"
 ---
 
-Full `exo link --help` output, generated from exo-cli v0.140.2.
+Full `exo link --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Reconnect git-annex symlinks to an external store of annex key files.

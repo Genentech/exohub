@@ -3,7 +3,7 @@ title: "exo broadcast"
 description: "Broadcast git-annex metadata"
 ---
 
-Full `exo broadcast --help` output, generated from exo-cli v0.140.2.
+Full `exo broadcast --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Broadcast git-annex metadata (git annex sync --no-content) to the configured remotes.

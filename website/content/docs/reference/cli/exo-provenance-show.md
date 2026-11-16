@@ -3,7 +3,7 @@ title: "exo provenance show"
 description: "Show an artifact's provenance lineage"
 ---
 
-Full `exo provenance show --help` output, generated from exo-cli v0.140.2.
+Full `exo provenance show --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Resolve <path> to its content identifier at a ref (default HEAD) and show

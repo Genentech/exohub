@@ -3,7 +3,7 @@ title: "exo mcp"
 description: "MCP server for agent-driven data operations"
 ---
 
-Full `exo mcp --help` output, generated from exo-cli v0.140.2.
+Full `exo mcp --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Model Context Protocol (MCP) server exposing exo data operations as tools for AI agents.

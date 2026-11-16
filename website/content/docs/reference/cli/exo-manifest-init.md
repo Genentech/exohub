@@ -3,7 +3,7 @@ title: "exo manifest init"
 description: "Print a manifest template"
 ---
 
-Full `exo manifest init --help` output, generated from exo-cli v0.140.2.
+Full `exo manifest init --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Print a manifest template

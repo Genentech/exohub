@@ -3,7 +3,7 @@ title: "exo theme mode"
 description: "Set dark/light mode preference"
 ---
 
-Full `exo theme mode --help` output, generated from exo-cli v0.140.2.
+Full `exo theme mode --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Set dark/light mode preference

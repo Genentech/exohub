@@ -3,7 +3,7 @@ title: "exo upgrade"
 description: "Upgrade exo CLI"
 ---
 
-Full `exo upgrade --help` output, generated from exo-cli v0.140.2.
+Full `exo upgrade --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Upgrade exo CLI.

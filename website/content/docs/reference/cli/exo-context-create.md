@@ -3,7 +3,7 @@ title: "exo context create"
 description: "Create a new context"
 ---
 
-Full `exo context create --help` output, generated from exo-cli v0.140.2.
+Full `exo context create --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Create a new context

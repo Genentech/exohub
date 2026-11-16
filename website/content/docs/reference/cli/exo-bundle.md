@@ -3,7 +3,7 @@ title: "exo bundle"
 description: "Generate JSON metadata bundle for catalog ingest"
 ---
 
-Full `exo bundle --help` output, generated from exo-cli v0.140.2.
+Full `exo bundle --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Generate JSON metadata files describing a dataset repository at the current git revision.
@@ -14,6 +14,19 @@ Output consists of bundle.json (bundle manifest), per-commit JSONs under commits
 Output is written to .git/exohub/bundle/<scope>/ where <scope> is derived
 from the current ref context (tag, branch, or commit hash).
 
+The --ref contract: content and keys come from the ref, never the worktree.
+  --ref <tag|commit> builds the bundle entirely from that ref's own git
+  tree: the file list (paths), the annex key of every annexed file, and
+  every file's git blob hash/size are all resolved by reading the ref's
+  tree directly (git ls-tree, git cat-file, and the ref tree's own symlink
+  targets / unlocked pointer file content for annex keys) — never from the
+  current working tree or index. A file added after the ref is absent from
+  the bundle; a file removed after the ref is present; a file modified
+  after the ref is bundled with the REF's content and the REF's annex key,
+  not whatever is currently checked out. This holds even when the worktree
+  has since diverged (different branch, newer commits, or an annexed
+  file's content/key changed).
+
 Examples:
   exo bundle                          # generate bundle with default preset
   exo bundle --preset parquet-only    # use a named preset
@@ -21,7 +34,7 @@ Examples:
   exo bundle --scope annex            # annexed file artifacts + markdown artifacts
   exo bundle --output /tmp/bundle     # custom output directory
   exo bundle --dry-run                # preview what the bundle would do
-  exo bundle --ref v5.3.0             # build bundle for a specific tag
+  exo bundle --ref v5.3.0             # build bundle for a specific tag (that tag's tree, not the worktree)
   exo bundle --ref v5.3.0 --dry-run   # preview bundle for a specific tag
 
 Usage:
@@ -38,7 +51,7 @@ Flags:
       --no-provenance        Skip compiling provenance.jsonld (provenance.require is still enforced)
       --output string        Custom output directory
       --preset string        Bundle manifest preset name (default "default")
-      --ref string           Commit hash or tag to build the bundle for (default: HEAD)
+      --ref string           Commit hash or tag to build the bundle for — content and keys come from the ref's own tree, never the worktree (default: HEAD)
       --resume               Resume a previous bundle run, skipping existing artifacts
       --scope string         Which metadata to generate: all, git, or annex (default: from preset or all)
       --verify               Re-resolve every named collection's external members over the network and fail on a lock mismatch, instead of trusting the committed lock (design D5 amendment of add-exohub-asset-import)

@@ -3,7 +3,7 @@ title: "exo tip"
 description: "Show a random tip"
 ---
 
-Full `exo tip --help` output, generated from exo-cli v0.140.2.
+Full `exo tip --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Fetch and display a random tip from the ExoHub tip bank.

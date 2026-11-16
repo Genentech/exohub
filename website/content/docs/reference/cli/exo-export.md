@@ -3,7 +3,7 @@ title: "exo export"
 description: "Export annexed content"
 ---
 
-Full `exo export --help` output, generated from exo-cli v0.140.2.
+Full `exo export --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Export annexed content to a remote.

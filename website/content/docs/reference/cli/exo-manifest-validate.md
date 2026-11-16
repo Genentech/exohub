@@ -3,7 +3,7 @@ title: "exo manifest validate"
 description: "Validate a manifest"
 ---
 
-Full `exo manifest validate --help` output, generated from exo-cli v0.140.2.
+Full `exo manifest validate --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Validate a manifest

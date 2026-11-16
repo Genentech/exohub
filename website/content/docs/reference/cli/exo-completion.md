@@ -3,7 +3,7 @@ title: "exo completion"
 description: "Generate the autocompletion script for the specified shell"
 ---
 
-Full `exo completion --help` output, generated from exo-cli v0.140.2.
+Full `exo completion --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Generate the autocompletion script for exo for the specified shell.

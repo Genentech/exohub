@@ -3,7 +3,7 @@ title: "exo heartbeat record"
 description: "Record exohub metrics into .git/exohub/metrics/"
 ---
 
-Full `exo heartbeat record --help` output, generated from exo-cli v0.140.2.
+Full `exo heartbeat record --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Record exohub metrics into .git/exohub/metrics/.

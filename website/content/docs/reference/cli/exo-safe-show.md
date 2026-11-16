@@ -3,7 +3,7 @@ title: "exo safe show"
 description: "Show a credential from ExoSafe"
 ---
 
-Full `exo safe show --help` output, generated from exo-cli v0.140.2.
+Full `exo safe show --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Show the value of a credential stored in ExoSafe.

@@ -3,7 +3,7 @@ title: "exo provenance validate"
 description: "Validate provenance records"
 ---
 
-Full `exo provenance validate --help` output, generated from exo-cli v0.140.2.
+Full `exo provenance validate --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Validate provenance records against the record profile and vocabulary,

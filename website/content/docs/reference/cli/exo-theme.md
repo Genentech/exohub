@@ -3,7 +3,7 @@ title: "exo theme"
 description: "Manage terminal color theme"
 ---
 
-Full `exo theme --help` output, generated from exo-cli v0.140.2.
+Full `exo theme --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Select, view, or change the terminal color theme used across all exo commands

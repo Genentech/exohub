@@ -3,7 +3,7 @@ title: "exo context list"
 description: "List all context names"
 ---
 
-Full `exo context list --help` output, generated from exo-cli v0.140.2.
+Full `exo context list --help` output, generated from exo-cli v0.145.1.
 
 ```text
 List all context names

@@ -3,7 +3,7 @@ title: "exo clone"
 description: "Clone repository with preset-based sparse checkout"
 ---
 
-Full `exo clone --help` output, generated from exo-cli v0.140.2.
+Full `exo clone --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Clone an exo-enabled repository with preset-based sparse checkout.

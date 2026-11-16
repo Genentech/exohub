@@ -3,7 +3,7 @@ title: "exo safe clear"
 description: "Remove all credentials from ExoSafe"
 ---
 
-Full `exo safe clear --help` output, generated from exo-cli v0.140.2.
+Full `exo safe clear --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Remove all credentials from ExoSafe

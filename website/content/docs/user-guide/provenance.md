@@ -16,6 +16,8 @@ Records follow the [W3C PROV](https://www.w3.org/TR/prov-overview/) data model a
 
 Every record shares one `@context` IRI, `https://genentech.github.io/exohub/ns/provenance/v1.jsonld`, which maps PROV-O terms (`Entity`, `Activity`, `Person`, `SoftwareAgent`, `used`, `wasGeneratedBy`, `wasDerivedFrom`, `wasRevisionOf`, `wasAssociatedWith`, `wasAttributedTo`, `actedOnBehalfOf`, and more) plus ExoHub-specific `exo:` terms. `exo` embeds this context and never fetches it over the network, so recording and validating provenance works fully offline.
 
+The context is extended in place, never replaced: every new term (for example the role/parameter/environment terms below) keeps the same context IRI, so old records never need rewriting. A record that uses a term added after the context's first release carries `exo:minVersion`, the minimum `exo` version that understands every term it uses. `exo provenance validate`, `show`, and `bundle` refuse a record whose `exo:minVersion` is higher than the running `exo`, with a hint to run `exo upgrade`. A record using only the original terms needs no `exo:minVersion`.
+
 Records are **add-only**: once committed, a record file is never modified or deleted. A correction is a new record whose `exo:supersedes` lists the ids of the records it replaces — superseded records stay in the repository for audit, but are excluded from `exo provenance show` and from compiled bundle output. Records must be tracked as **git blobs**, never annexed — `exo provenance add` handles this automatically, and if you hand-write a record you must stage it with `exo add` (never plain `git add`), or, without exo, `git -c annex.largefiles=nothing add`.
 
 Content is identified by hash, not by path, so provenance survives renames: an annexed file is `urn:exohub:annex:<git-annex key>`, a git-tracked file is `urn:exohub:git:blob:<object id>`, a folder collection (below) is `urn:exohub:git:tree:<object id>`, and a named collection (below) is `urn:exohub:collection:sha256:<hex digest>`.
@@ -135,6 +137,34 @@ exo provenance add \
 
 The resulting record's activity is associated with both the software agent and the person it acted for. `exo provenance validate` warns when an `asserted` record made by a software agent has no `exo:evidence`. See [Agent Workflow](#agent-workflow) below for the full set of recommendations.
 
+### Roles, Parameters, Environment, and Plan Pointers
+
+Beyond the plain `used`/`wasGeneratedBy`/`hadPlan` shortcuts, a record can state the **role** an entity played, a step's **parameters** and non-file **results**, its **software environment**, and a traceable **pointer to the step's code**:
+
+```bash
+exo provenance add \
+  --generated results/de.tsv \
+  --role counts=data/counts.csv \
+  --param alpha=0.05 \
+  --param method=DESeq2 \
+  --output-role summary=results/de.tsv \
+  --result accuracy=0.93 \
+  --environment docker://ghcr.io/org/tool@sha256:ab12cd34... \
+  --plan-repository https://github.com/org/pipeline \
+  --plan-commit 4f2a9c1 \
+  --plan-url main.nf \
+  --source lid://0d1f3a5c-nextflow-run \
+  --agent person:alice
+```
+
+- `--role role=path` / `--output-role role=path` (repeatable) state the role an input or output entity played, for example `counts` or `summary`.
+- `--param name=value` / `--result name=value` (repeatable) record a step's typed parameters and non-file results; the value is parsed as JSON when possible (so `0.05` and `true` keep their type), otherwise kept as a string.
+- `--environment <path-or-IRI>` (repeatable) records the software environment used, for example `docker://host/image@sha256:...` (identify containers by digest — a tag-only reference validates but warns it isn't reproducible) or a conda environment's content id/hash.
+- `--plan-repository`, `--plan-commit`, and `--plan-url` build a traceable pointer to the `--plan` entity's code when you don't have a local `--plan` path: `--plan-repository` + `--plan-commit` identifies the commit (with `--plan-url`, if given, as its label — the script or process name), or `--plan-url` alone identifies it when it's itself an addressable URL.
+- `--source <iri>` sets the activity's `hadPrimarySource`, for a record describing a run captured elsewhere (a workflow engine's lineage, an RO-Crate) — see [Importing from a Workflow Engine](#importing-from-a-workflow-engine) below for the common case.
+
+Using any of these flags marks the record with `exo:minVersion`. `exo provenance show` displays the role, parameter, environment, result, plan pointer, and source fields alongside the plain shortcuts.
+
 ## Inspecting Provenance
 
 ```bash
@@ -189,6 +219,34 @@ AI agents and scripts that produce or import artifacts in an ExoHub repository s
 3. Include `--evidence` for inferred claims — anything not directly observed (for example, claiming a generation when the activity's output was read from a log rather than written directly).
 4. **Never edit or delete an existing record.** A correction is a new record that supersedes the ones it replaces (`--supersedes`).
 5. Run `exo provenance validate` before committing; `exo provenance install-hook` automates this.
+
+## Importing from a Workflow Engine
+
+```bash
+exo provenance import <format> [<run>]
+```
+
+reads one run a workflow engine already recorded and writes ExoHub provenance records for it, with `exo:assertion imported`, staged the same way as `exo provenance add`. `<format>` selects the source format — `nextflow` ([below](#nextflow)) is the only format currently supported. When `<run>` is omitted, the latest run in the format's default location is imported.
+
+Each run file is resolved to repository content the same way `exo provenance add` resolves a path — an annex key or git blob id — and verified against the size and checksum the engine recorded, when exo can compute that checksum algorithm (`sha256`, `md5`); otherwise by size only. A file outside the repository, or whose content no longer matches, is referenced by an external IRI and reported as unmatched; an untracked repository file is reported with a hint to run `exo add` first. A summary of activities and of matched/external/unmatched inputs-outputs is printed after the run.
+
+By default one activity covers the whole run (its overall inputs, outputs, parameters, and environments); `--tasks` writes one activity per task instead.
+
+Importing a run that was already imported writes nothing and exits zero, naming the existing record; `--supersedes <record-id>` writes new records that supersede it instead. `--keep-source` commits a copy of the run's source lineage documents under `.exohub/provenance/sources/` as git blobs, referenced from the record's `exo:evidence`. `--store` points at the format's lineage store when it isn't in its default location. `--dry-run` and `--json` work the same as on `exo provenance add`.
+
+This command requires an exo login token to identify the importing person (run `exo login`); unlike `add`, it has no `--agent` flag.
+
+### Nextflow
+
+```bash
+exo provenance import nextflow [<run>]
+```
+
+reads [Nextflow's lineage store](https://www.nextflow.io/docs/latest/lineage.html) directly — the `.lineage` directory Nextflow writes next to where a pipeline was launched — without needing the `nextflow` binary. Enable it once per pipeline run with `nextflow run ... -lineage` (or `lineage.enabled = true` in `nextflow.config`); after the run, `.lineage/` holds the run's `WorkflowRun`, `TaskRun`, and file/output records.
+
+A run is selected by its `lid://` identifier or its run name (for example `exo provenance import nextflow happy_curie`); with neither, the most recent run in the store is imported. `--store <dir>` points at a lineage store that isn't at `.lineage` under the current directory.
+
+Each file Nextflow recorded is matched against the repository the same way every format is (above): a workflow input or output under the repository root resolves to its content id, verified by checksum when possible or by size otherwise; a path outside the repository (for example a reference file read from `s3://` or an absolute path elsewhere on disk) is recorded as an external input and listed in the summary, never treated as missing. `--tasks` writes one activity per Nextflow process instead of one for the whole run; `--keep-source` commits the run's lineage JSON under `.exohub/provenance/sources/` as evidence.
 
 ## How Provenance Reaches the Catalog
 

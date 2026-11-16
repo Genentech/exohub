@@ -3,7 +3,7 @@ title: "exo copy"
 description: "Copy annexed content between remotes"
 ---
 
-Full `exo copy --help` output, generated from exo-cli v0.140.2.
+Full `exo copy --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Copy annexed content between remotes

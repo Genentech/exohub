@@ -3,7 +3,7 @@ title: "exo lock"
 description: "Lock annexed files (switch back to read-only symlinks)"
 ---
 
-Full `exo lock --help` output, generated from exo-cli v0.140.2.
+Full `exo lock --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Lock annexed files, switching them back to read-only symlinks.

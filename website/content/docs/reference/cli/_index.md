@@ -4,7 +4,7 @@ description: "Full --help output for every exo command and subcommand"
 ---
 
 
-Full `--help` output for every `exo` command and subcommand, generated from **exo-cli v0.140.2**. Regenerated daily by `scripts/gen-cli-reference` — do not hand-edit this section.
+Full `--help` output for every `exo` command and subcommand, generated from **exo-cli v0.145.1**. Regenerated daily by `scripts/gen-cli-reference` — do not hand-edit this section.
 
 ## add
 
@@ -129,6 +129,7 @@ Full `--help` output for every `exo` command and subcommand, generated from **ex
 
 - [exo provenance]({{< ref "exo-provenance" >}}) — Record and inspect data lineage
   - [exo provenance add]({{< ref "exo-provenance-add" >}}) — Create a new provenance record
+  - [exo provenance import]({{< ref "exo-provenance-import" >}}) — Import provenance a workflow engine already recorded
   - [exo provenance install-hook]({{< ref "exo-provenance-install-hook" >}}) — Install a pre-commit hook that runs exo provenance validate --staged
   - [exo provenance show]({{< ref "exo-provenance-show" >}}) — Show an artifact's provenance lineage
   - [exo provenance validate]({{< ref "exo-provenance-validate" >}}) — Validate provenance records

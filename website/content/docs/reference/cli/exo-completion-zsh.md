@@ -3,7 +3,7 @@ title: "exo completion zsh"
 description: "Generate the autocompletion script for zsh"
 ---
 
-Full `exo completion zsh --help` output, generated from exo-cli v0.140.2.
+Full `exo completion zsh --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Generate the autocompletion script for the zsh shell.

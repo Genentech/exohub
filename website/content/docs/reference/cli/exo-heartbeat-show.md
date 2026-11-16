@@ -3,7 +3,7 @@ title: "exo heartbeat show"
 description: "Show heartbeat metrics"
 ---
 
-Full `exo heartbeat show --help` output, generated from exo-cli v0.140.2.
+Full `exo heartbeat show --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Show heartbeat metrics for a repository.

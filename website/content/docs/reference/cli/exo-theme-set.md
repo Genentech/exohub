@@ -3,7 +3,7 @@ title: "exo theme set"
 description: "Set the active theme"
 ---
 
-Full `exo theme set --help` output, generated from exo-cli v0.140.2.
+Full `exo theme set --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Set the active theme

@@ -3,7 +3,7 @@ title: "exo theme show"
 description: "Show the current active theme and mode"
 ---
 
-Full `exo theme show --help` output, generated from exo-cli v0.140.2.
+Full `exo theme show --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Show the current active theme and mode

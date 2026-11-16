@@ -3,7 +3,7 @@ title: "exo download"
 description: "Download artifact files from the catalog"
 ---
 
-Full `exo download --help` output, generated from exo-cli v0.140.2.
+Full `exo download --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Download artifact files from an ArtifactDB catalog.

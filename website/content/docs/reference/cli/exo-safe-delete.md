@@ -3,7 +3,7 @@ title: "exo safe delete"
 description: "Delete a credential from ExoSafe"
 ---
 
-Full `exo safe delete --help` output, generated from exo-cli v0.140.2.
+Full `exo safe delete --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Delete a credential from ExoSafe.
