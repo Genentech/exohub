@@ -21,6 +21,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3control"
 	"github.com/aws/aws-sdk-go-v2/service/s3control/types"
 	"gopkg.in/yaml.v3"
+
+	"github.com/Genentech/exohub/go/useragent"
 )
 
 var appVersion = "dev"
@@ -52,7 +54,10 @@ type credentialOutput struct {
 }
 
 func main() {
+	useragent.Install(appVersion)
+
 	s3URL := flag.String("s3url", "", "S3 URL (s3://bucket/prefix/) - detected from .exohub/remotes if not provided")
+	sourceS3URL := flag.String("source-s3url", "", "s3url of the resolved data_from Atlas remote for a role: instance remote, so the server fallback authorizes against the source project (omitted for Atlas remotes)")
 	grantsFlag := flag.Bool("grants", true, "Use S3 Access Grants for credentials (default: true; set false for plain base-creds path)")
 	groupFlag := flag.String("group", "", "Remote-scoped group overriding the active credential-scoping group (grants:false only; ignored elsewhere; internal builds only)")
 	permission := flag.String("permission", "READWRITE", "Permission level: READ or READWRITE")
@@ -78,6 +83,7 @@ This tool calls AWS GetDataAccess directly using your current AWS credentials
 
 Options:
   --s3url URL         S3 URL (s3://bucket/prefix/) - detected from .exohub/remotes if not provided
+  --source-s3url URL  s3url of the source Atlas remote for a role: instance remote (server fallback only)
   --permission P      Permission level: READ or READWRITE (default: READWRITE)
   --group GROUP       Remote-scoped group overriding the active credential-scoping group (grants:false only)
   --duration SEC      Credential duration in seconds (default: 3600 = 1 hour)
@@ -94,7 +100,7 @@ Options:
 
 Examples:
   # Get credentials for a specific S3 prefix
-  exo-credential-helper --s3url s3://exohub-sandbox-uat/myproject/
+  exo-credential-helper --s3url s3://example-sandbox-bucket/myproject/
 
   # Auto-detect from .exohub/remotes in current directory
   exo-credential-helper
@@ -278,7 +284,7 @@ Output format (default):
 			// fall back to the exohub API which provisions credentials via the Bearer token.
 			if err != nil && (isAccessDeniedError(err) || isMissingCredentialsError(err)) {
 				debugf("GetDataAccess unavailable (%v), falling back to POST /api/grants/credentials", err)
-				creds, err = getCredsFromServer(*s3URL, *permission, debugf)
+				creds, err = getCredsFromServer(*s3URL, *permission, *sourceS3URL, debugf)
 				if err != nil {
 					printCredsFromServerError(err, *s3URL)
 					os.Exit(1)
@@ -346,6 +352,7 @@ func probeWriteAccess(ctx context.Context, s3URL string, creds *credentialOutput
 				SessionToken:    creds.SessionToken,
 			}, nil
 		})),
+		config.WithAppID(useragent.AppID()),
 	)
 	if err != nil {
 		return fmt.Errorf("cannot build AWS config for write probe: %w", err)
@@ -391,7 +398,7 @@ func getDataAccess(ctx context.Context, accountID, region, s3URL, permission str
 	if profile == "" {
 		profile = "exohub"
 	}
-	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region), config.WithSharedConfigProfile(profile))
+	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region), config.WithSharedConfigProfile(profile), config.WithAppID(useragent.AppID()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}

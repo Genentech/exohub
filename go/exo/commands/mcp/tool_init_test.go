@@ -130,7 +130,7 @@ func TestHandleInitWithRemoteFlag(t *testing.T) {
 
 	_, err := handleInit(context.Background(), mustRequest(map[string]any{
 		"repo_dir": dir,
-		"profile":  "psyche-poc",
+		"profile":  "my-profile",
 		"remote":   "exohub-atlas",
 	}))
 	if err != nil {
@@ -147,8 +147,8 @@ func TestHandleInitWithRemoteFlag(t *testing.T) {
 		}
 		return false
 	}
-	if !contains("--profile", "psyche-poc") {
-		t.Errorf("missing --profile psyche-poc in %s", argsJSON)
+	if !contains("--profile", "my-profile") {
+		t.Errorf("missing --profile my-profile in %s", argsJSON)
 	}
 	if !contains("--remote", "exohub-atlas") {
 		t.Errorf("missing --remote exohub-atlas in %s", argsJSON)
@@ -161,7 +161,7 @@ func TestHandleInitDryRunJSONDriftFoundIsNotToolError(t *testing.T) {
 
 	result, err := handleInit(context.Background(), mustRequest(map[string]any{
 		"repo_dir": dir,
-		"profile":  "psyche-poc",
+		"profile":  "my-profile",
 		"dry_run":  true,
 		"json":     true,
 	}))
@@ -193,7 +193,7 @@ func TestHandleInitDryRunJSONNoDrift(t *testing.T) {
 
 	result, err := handleInit(context.Background(), mustRequest(map[string]any{
 		"repo_dir": dir,
-		"profile":  "psyche-poc",
+		"profile":  "my-profile",
 		"dry_run":  true,
 		"json":     true,
 	}))

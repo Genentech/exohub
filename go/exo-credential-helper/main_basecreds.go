@@ -10,6 +10,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+
+	"github.com/Genentech/exohub/go/useragent"
 )
 
 // getBaseCreds returns base AWS credentials for a grants:false remote.
@@ -57,7 +59,7 @@ func getBaseCreds(ctx context.Context, _ string, _ string, duration int, debugf 
 	}
 
 	debugf("base-creds: AssumeRoleWithWebIdentity (role=%s region=%s)", roleARN, region)
-	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(region))
+	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(region), awsconfig.WithAppID(useragent.AppID()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config for STS: %w", err)
 	}

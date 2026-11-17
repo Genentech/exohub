@@ -32,7 +32,7 @@ cases:
 
   - id: search_multi_term
     path: /search
-    query: {q: "build cli buddy", size: "5"}
+    query: {q: "feat add initial scaffolding", size: "5"}
     gates: [G2]
     note: multi-term phrase search
 
@@ -44,7 +44,7 @@ cases:
 
   - id: search_by_project_id
     path: /search
-    query: {q: "dld1-nf-v26", size: "5"}
+    query: {q: "sample-dataset", size: "5"}
     gates: [G2]
     note: search by project_id value
 
@@ -104,13 +104,13 @@ cases:
   # ── /files/{id}/metadata ──────────────────────────────────────────────
 
   - id: metadata_existing
-    path: /files/sample-app:bundle.json@v2.2.0/metadata
+    path: /files/sample-app:bundle.json@v2.0.0/metadata
     fixture: file_metadata.json
     gates: [G1]
     note: existing document — returns verbatim doc
 
   - id: metadata_url_encoded
-    path: /files/sample-app%3Abundle.json%40v2.2.0/metadata
+    path: /files/sample-app%3Abundle.json%40v2.0.0/metadata
     fixture: file_metadata.json
     gates: [G1]
     note: URL-encoded id (%3A = :, %40 = @) — must decode and find same doc
@@ -130,7 +130,7 @@ cases:
     note: multi-version project — aggs list, total, latest
 
   - id: versions_single_project
-    path: /projects/dld1-nf-v26/versions
+    path: /projects/sample-dataset/versions
     gates: [G1]
     note: second project — has distinct version set
 
@@ -143,7 +143,7 @@ cases:
   # ── /files/{id} redirect + chunks ─────────────────────────────────────
 
   - id: files_redirect_existing
-    path: /files/sample-app:bundle.json@v2.2.0
+    path: /files/sample-app:bundle.json@v2.0.0
     expected_status: 307
     requires_storage: true
     gates: []

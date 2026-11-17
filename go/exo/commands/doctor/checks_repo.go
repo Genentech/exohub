@@ -25,12 +25,15 @@ const groupRepo = "Repository Config"
 
 // remoteEntry is used for parsing .exohub/remotes.
 type remoteEntry struct {
-	Name        string                       `yaml:"name"`
-	Type        string                       `yaml:"type"`
-	UUID        string                       `yaml:"uuid,omitempty"`
-	S3URL       string                       `yaml:"s3url,omitempty"`
-	Grants      bool                         `yaml:"grants,omitempty"`
-	Credentials map[string]map[string]string `yaml:"credentials,omitempty"`
+	Name            string                       `yaml:"name"`
+	Type            string                       `yaml:"type"`
+	UUID            string                       `yaml:"uuid,omitempty"`
+	S3URL           string                       `yaml:"s3url,omitempty"`
+	Grants          bool                         `yaml:"grants,omitempty"`
+	GrantsAccountID string                       `yaml:"grants_account_id,omitempty"`
+	Role            string                       `yaml:"role,omitempty"`
+	DataFrom        string                       `yaml:"data_from,omitempty"`
+	Credentials     map[string]map[string]string `yaml:"credentials,omitempty"`
 }
 
 type remotesFile struct {
@@ -384,10 +387,10 @@ func checkRegistryDrift(repoDir string, remotes []remoteEntry) []CheckResult {
 	var result struct {
 		InSync bool `json:"in_sync"`
 		Drift  struct {
-			RegistryDrift  []json.RawMessage `json:"registry_drift"`
-			MetadataDrift  []json.RawMessage `json:"metadata_drift"`
-			MissingGrants  []json.RawMessage `json:"missing_grants"`
-			ExtraGrants    []json.RawMessage `json:"extra_grants"`
+			RegistryDrift []json.RawMessage `json:"registry_drift"`
+			MetadataDrift []json.RawMessage `json:"metadata_drift"`
+			MissingGrants []json.RawMessage `json:"missing_grants"`
+			ExtraGrants   []json.RawMessage `json:"extra_grants"`
 		} `json:"drift"`
 	}
 	if err := json.Unmarshal(respBody, &result); err != nil {

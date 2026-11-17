@@ -3,7 +3,7 @@ title: "exo info"
 description: "Show git-annex repository info"
 ---
 
-Full `exo info --help` output, generated from exo-cli v0.140.2.
+Full `exo info --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Show git-annex repository info.

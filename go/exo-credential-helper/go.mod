@@ -7,7 +7,6 @@ toolchain go1.24.7
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.3
 	github.com/aws/aws-sdk-go-v2/config v1.32.11
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.96.0
 	github.com/aws/aws-sdk-go-v2/service/s3control v1.68.2
 	github.com/aws/aws-sdk-go-v2/service/sts v1.41.8
 	gopkg.in/yaml.v3 v3.0.1
@@ -32,3 +31,10 @@ require (
 	github.com/kr/pretty v0.3.1 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 )
+
+require (
+	github.com/Genentech/exohub/go/useragent v0.0.0
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.96.0
+)
+
+replace github.com/Genentech/exohub/go/useragent => ../useragent

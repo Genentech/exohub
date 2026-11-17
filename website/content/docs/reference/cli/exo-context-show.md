@@ -3,7 +3,7 @@ title: "exo context show"
 description: "Show a context"
 ---
 
-Full `exo context show --help` output, generated from exo-cli v0.140.2.
+Full `exo context show --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Show a context

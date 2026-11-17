@@ -3,7 +3,7 @@ title: "exo standalone"
 description: "Manage the local adb-standalone stack"
 ---
 
-Full `exo standalone --help` output, generated from exo-cli v0.140.2.
+Full `exo standalone --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Manage a batteries-included local ArtifactDB stack.

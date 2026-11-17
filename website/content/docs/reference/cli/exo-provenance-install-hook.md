@@ -3,7 +3,7 @@ title: "exo provenance install-hook"
 description: "Install a pre-commit hook that runs exo provenance validate --staged"
 ---
 
-Full `exo provenance install-hook --help` output, generated from exo-cli v0.140.2.
+Full `exo provenance install-hook --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Install a git pre-commit hook that runs "exo provenance validate --staged"

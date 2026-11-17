@@ -9,7 +9,7 @@ import (
 // driftExitCode is the exit code for `exo init --profile <name> --dry-run
 // --json` when drift is found between the profile and the repo's
 // .exohub/remotes, distinct from cobra's generic exit 1 for command errors,
-// so automation (e.g. obol) can tell "stale repo" apart from "exo itself
+// so automation can tell "stale repo" apart from "exo itself
 // failed" (exo-cli#164).
 const driftExitCode = 3
 
@@ -71,6 +71,15 @@ func runProfileDriftReport(profileName, remoteFilter string, remotesConfig *Remo
 		return err
 	}
 
+	return printDriftEntriesJSON(entries)
+}
+
+// printDriftEntriesJSON prints entries as a JSON array and exits the
+// process directly with driftExitCode when hasActionableDrift(entries),
+// so the normal cobra error path (exit 1) stays reserved for actual
+// failures. Shared by runProfileDriftReport and the exo-cli#197 legacy
+// migration's own dry-run --json report.
+func printDriftEntriesJSON(entries []driftEntry) error {
 	out, err := json.MarshalIndent(entries, "", "  ")
 	if err != nil {
 		return err

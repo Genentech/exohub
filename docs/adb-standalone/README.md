@@ -26,7 +26,9 @@ Permissions: `GET/PUT/DELETE /projects/{id}/permissions`.
 ## Documents
 - [`design-surrealdb.md`](./design-surrealdb.md) — document model, SurrealQL schema, per-endpoint mapping, config strategy.
 - [`design-testing.md`](./design-testing.md) — parity/testing plan vs ArtifactDB (oracle), 5 gates, 4 levels, 3-bucket normalizer.
-- [`fixtures/`](./fixtures/) — golden fixtures + `seed/documents.ndjson` (600 live docs) = the L1 oracle.
+- [`fixtures/`](./fixtures/) — golden fixtures + `seed/documents.ndjson`, a small synthetic corpus = the L1 oracle.
+  Fully synthetic and deterministic: regenerate with `make genfixtures` (from `go/adb-standalone`,
+  requires `SURREAL_BIN`); see [`tools/genfixtures`](../../go/adb-standalone/tools/genfixtures).
 
 ## Implementation slices
 1. Committed snapshot/fixtures ✅

@@ -3,7 +3,7 @@ title: "exo mirror plan"
 description: "Generate an s5cmd plan file without executing"
 ---
 
-Full `exo mirror plan --help` output, generated from exo-cli v0.140.2.
+Full `exo mirror plan --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Generate an s5cmd plan file without executing

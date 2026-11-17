@@ -46,6 +46,33 @@ func handleProvenanceAdd(ctx context.Context, request gomcp.CallToolRequest) (*g
 	if plan := getStringParam(request, "plan"); plan != "" {
 		args = append(args, "--plan", plan)
 	}
+	if planRepository := getStringParam(request, "plan_repository"); planRepository != "" {
+		args = append(args, "--plan-repository", planRepository)
+	}
+	if planCommit := getStringParam(request, "plan_commit"); planCommit != "" {
+		args = append(args, "--plan-commit", planCommit)
+	}
+	if planURL := getStringParam(request, "plan_url"); planURL != "" {
+		args = append(args, "--plan-url", planURL)
+	}
+	for _, p := range getStringArrayParam(request, "param") {
+		args = append(args, "--param", p)
+	}
+	for _, r := range getStringArrayParam(request, "role") {
+		args = append(args, "--role", r)
+	}
+	for _, r := range getStringArrayParam(request, "output_role") {
+		args = append(args, "--output-role", r)
+	}
+	for _, r := range getStringArrayParam(request, "result") {
+		args = append(args, "--result", r)
+	}
+	for _, e := range getStringArrayParam(request, "environment") {
+		args = append(args, "--environment", e)
+	}
+	if source := getStringParam(request, "source"); source != "" {
+		args = append(args, "--source", source)
+	}
 
 	// Default agent to this MCP client as a software agent, unless the
 	// caller gave one explicitly. exo provenance add already defaults

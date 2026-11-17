@@ -3,7 +3,7 @@ title: "exo auth"
 description: "Authorize a Google Drive remote"
 ---
 
-Full `exo auth --help` output, generated from exo-cli v0.140.2.
+Full `exo auth --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Authorize exo to access Google Drive for a specific remote.

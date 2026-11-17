@@ -3,7 +3,7 @@ title: "exo add"
 description: "Add files or URLs with repository-level git/annex routing"
 ---
 
-Full `exo add --help` output, generated from exo-cli v0.140.2.
+Full `exo add --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Add files or URLs to git/git-annex tracking.

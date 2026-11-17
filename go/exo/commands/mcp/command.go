@@ -127,7 +127,7 @@ func toolRegistry() []toolEntry {
 						"Step 3: Syncs to artifactdb/catalog remotes only. "+
 						"Use 'sync' parameter to override step 1 and sync only to specified remotes. "+
 						"Use 'ref' to publish one or more tags/commits: content and metadata come from each ref, "+
-						"while routing (remotes, atlas_url, instance_url) comes from the current checked-out "+
+						"while routing (remotes, role, url, data_from) comes from the current checked-out "+
 						".exohub/remotes — this is how an older tag whose own routing predates a migration "+
 						"gets published to the current catalog instead of a stale or missing target. "+
 						"If no artifactdb remote is configured, step 3 is skipped with a warning.",
@@ -135,7 +135,7 @@ func toolRegistry() []toolEntry {
 				mcp.WithString("repo_dir", mcp.Required(), mcp.Description("Path to the git repository")),
 				mcp.WithArray("sync", mcp.Description("Remote names to sync in step 1 (overrides auto-discovery)"), mcp.WithStringItems()),
 				mcp.WithArray("ref", mcp.Description("Tags or commits to publish with the current routing (repeatable)"), mcp.WithStringItems()),
-				mcp.WithBoolean("force", mcp.Description("With 'ref', publish even if the ref's content-availability check finds fixable/lost content on the current remote(s)")),
+				mcp.WithBoolean("force", mcp.Description("Bypass the ref-to-remotes check and the source-repo guard (with 'ref', also skip the content-availability check); never bypasses tag immutability")),
 			),
 			handler: handlePublish,
 		},
@@ -263,10 +263,14 @@ func toolRegistry() []toolEntry {
 				mcp.WithString("repo_dir", mcp.Required(), mcp.Description("Path to the git repository")),
 				mcp.WithString("name", mcp.Required(), mcp.Description("Remote name (e.g., s3-annex, s3-export)")),
 				mcp.WithString("type", mcp.Required(), mcp.Description("Remote type"), mcp.Enum("annex", "export", "artifactdb", "exospace")),
-				mcp.WithString("s3url", mcp.Description("S3 URL. Ask the user, suggest default: s3://exohub-sandbox-uat/sandbox/<org>/<repo>/<suffix> where suffix is _annex for annex, _export for export, _catalog for artifactdb")),
+				mcp.WithString("s3url", mcp.Description("S3 URL. Ask the user, suggest default: s3://example-sandbox-bucket/sandbox/<org>/<repo>/<suffix> where suffix is _annex for annex, _export for export, _catalog for artifactdb")),
 				mcp.WithString("rsyncurl", mcp.Description("Rsync URL or local path (required for exospace). Example: rsync://host/path")),
 				mcp.WithString("tracking_branch", mcp.Description("Tracking branch for export remotes (defaults to current branch)")),
 				mcp.WithBoolean("grants", mcp.Description("Enable fine-grained S3 Access Grants permissions (default: true). Ask the user.")),
+				mcp.WithString("role", mcp.Description("artifactdb remotes only: atlas (default, publishes the bundle) or instance (publishes .artifactdb/ into an ArtifactDB instance, never a git-annex special remote)"), mcp.Enum("atlas", "instance")),
+				mcp.WithString("url", mcp.Description("artifactdb remotes only: the Atlas to publish to (role: atlas, optional) or the ArtifactDB instance endpoint (role: instance, required)")),
+				mcp.WithString("grants_account_id", mcp.Description("artifactdb remotes only: Access Grants account id to request credentials from for this remote")),
+				mcp.WithString("data_from", mcp.Description("artifactdb role: instance only: the role: atlas remote this instance delegates to (defaults to the repository's single atlas remote)")),
 			),
 			handler: handleInitRemote,
 		},
@@ -320,6 +324,15 @@ func toolRegistry() []toolEntry {
 				mcp.WithBoolean("no_derived_from", mcp.Description("Explicitly assert 'generated' has no inputs (e.g. hand-authored files)")),
 				mcp.WithArray("revision_of", mcp.Description("Paths/ids that 'generated' is a revision of"), mcp.WithStringItems()),
 				mcp.WithString("plan", mcp.Description("Path to a plan/script/notebook document describing the activity")),
+				mcp.WithString("plan_repository", mcp.Description("Git repository URL hosting the plan's code (exo:repository)")),
+				mcp.WithString("plan_commit", mcp.Description("Commit of the plan's code in its repository (exo:commit)")),
+				mcp.WithString("plan_url", mcp.Description("The plan's addressable URL, or its script/process path within plan_repository (label); identifies the plan when 'plan' is omitted")),
+				mcp.WithArray("param", mcp.Description("name=value parameter used by this activity (repeatable); value is parsed as JSON when possible, else kept as a string"), mcp.WithStringItems()),
+				mcp.WithArray("role", mcp.Description("role=path the entity played as an input of this activity (repeatable)"), mcp.WithStringItems()),
+				mcp.WithArray("output_role", mcp.Description("role=path the role a 'generated' entity played as an output of this activity (repeatable)"), mcp.WithStringItems()),
+				mcp.WithArray("result", mcp.Description("name=value non-file result generated by this activity (repeatable); value is parsed as JSON when possible, else kept as a string"), mcp.WithStringItems()),
+				mcp.WithArray("environment", mcp.Description("Path or IRI of the software environment used by this activity (repeatable), for example docker://host/image@sha256:..."), mcp.WithStringItems()),
+				mcp.WithString("source", mcp.Description("IRI of the run this activity was recorded from elsewhere (hadPrimarySource)")),
 				mcp.WithString("agent", mcp.Description("person:<unix id> or software:<name> asserting this record; defaults to software:<this MCP client>")),
 				mcp.WithString("on_behalf_of", mcp.Description("person:<unix id> the software agent acted on behalf of; defaults to the logged-in user when agent is a software agent")),
 				mcp.WithString("model", mcp.Description("Model identifier for a software agent (requires agent software:<name>)")),
@@ -363,6 +376,28 @@ func toolRegistry() []toolEntry {
 				mcp.WithReadOnlyHintAnnotation(true),
 			),
 			handler: handleProvenanceValidate,
+		},
+		{
+			tool: mcp.NewTool("provenance_import",
+				mcp.WithDescription(
+					"Import provenance a workflow engine already recorded (wraps 'exo provenance import'): reads one run from a "+
+						"supported source format and writes ExoHub provenance records with exo:assertion 'imported', staged like "+
+						"records written by 'provenance_add'. Each run file is resolved to repository content the same way "+
+						"'provenance_add' resolves a path, verified by checksum when possible, by size otherwise; a file outside the "+
+						"repository or whose content no longer matches is referenced by an external IRI. Importing a run that was "+
+						"already imported writes nothing and exits zero, reporting the existing record; pass 'supersedes' to "+
+						"re-import on purpose. Requires an exo login token to identify the importing person (run 'login' first).",
+				),
+				mcp.WithString("repo_dir", mcp.Required(), mcp.Description("Path to the git repository")),
+				mcp.WithString("format", mcp.Required(), mcp.Description("Import format adapter name, for example 'nextflow'")),
+				mcp.WithString("run", mcp.Description("Run id/name to import (defaults to the latest run found in the format's default location)")),
+				mcp.WithString("store", mcp.Description("Location of the format's lineage store (format-specific; defaults to the format's usual location)")),
+				mcp.WithBoolean("tasks", mcp.Description("Write one activity per task instead of one for the whole run")),
+				mcp.WithArray("supersedes", mcp.Description("Record ids this import supersedes (repeatable); required to re-import an already-imported run"), mcp.WithStringItems()),
+				mcp.WithBoolean("keep_source", mcp.Description("Commit a copy of the run's source lineage documents under .exohub/provenance/sources/, referenced as evidence")),
+				mcp.WithBoolean("dry_run", mcp.Description("Print the records that would be written without writing them")),
+			),
+			handler: handleProvenanceImport,
 		},
 		{
 			tool: mcp.NewTool("info",
@@ -486,6 +521,9 @@ Recording and checking provenance:
   when you are inferring lineage after the fact, 'imported' when the lineage comes from another system.
 - Use 'provenance_show' to see a path's recorded lineage from the repository directly — what produced it and its
   upstream inputs, walking back through recorded activities.
+- Use 'provenance_import' to record provenance a workflow engine already captured (e.g. a Nextflow run), instead of
+  reconstructing it by hand with 'provenance_add'. Re-importing the same run writes nothing and exits zero unless
+  you pass 'supersedes'.
 - Use 'provenance_validate' before committing or publishing to catch schema errors, dangling references, or
   missing coverage in recorded provenance.
 - Use 'catalog_lineage' to read lineage already published to the catalog for an artifact, plus its direct

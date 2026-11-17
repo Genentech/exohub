@@ -3,7 +3,7 @@ title: "exo completion bash"
 description: "Generate the autocompletion script for bash"
 ---
 
-Full `exo completion bash --help` output, generated from exo-cli v0.140.2.
+Full `exo completion bash --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Generate the autocompletion script for the bash shell.

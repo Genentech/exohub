@@ -54,7 +54,7 @@ func credentialHelperBin() string {
 // scoped STS credentials per location) and fetchBaseCredentials (grants=false,
 // the caller's own identity). exo never relies on the default AWS chain
 // (env vars / ~/.aws / instance role) for remote data (exo-cli#168).
-func fetchCredentialsViaHelper(s3url string, grants bool, group, permission string) (aws.Credentials, error) {
+func fetchCredentialsViaHelper(s3url string, grants bool, group, permission, accountID string) (aws.Credentials, error) {
 	args := []string{"--s3url", s3url}
 	if grants {
 		args = append(args, "--permission", permission)
@@ -63,6 +63,9 @@ func fetchCredentialsViaHelper(s3url string, grants bool, group, permission stri
 		if group != "" {
 			args = append(args, "--group", group)
 		}
+	}
+	if accountID != "" {
+		args = append(args, "--account-id", accountID)
 	}
 	cmd := exec.Command(credentialHelperBin(), args...)
 	var outBuf, errBuf bytes.Buffer
@@ -589,11 +592,11 @@ func migrateRemoteContent(remote RemoteConfig, oldS3URL, newS3URL string, dryRun
 	ctx := context.Background()
 	group := remoteGroupValue(remote)
 
-	oldCreds, err := credentialFetcher(oldS3URL, remote.Grants, group, "READ")
+	oldCreds, err := credentialFetcher(oldS3URL, remote.Grants, group, "READ", remote.GrantsAccountID)
 	if err != nil {
 		return fmt.Errorf("content migration for '%s': credentials for old location: %w", remote.Name, err)
 	}
-	newCreds, err := credentialFetcher(newS3URL, remote.Grants, group, "READWRITE")
+	newCreds, err := credentialFetcher(newS3URL, remote.Grants, group, "READWRITE", remote.GrantsAccountID)
 	if err != nil {
 		return fmt.Errorf("content migration for '%s': credentials for new location: %w", remote.Name, err)
 	}

@@ -96,11 +96,11 @@ func (s *stringValue) UnmarshalYAML(node *yaml.Node) error {
 }
 
 type manifest struct {
-	RepoDir               string      `yaml:"repo_dir"`
-	RepoDirHyphen         string      `yaml:"repo-dir"`
-	With                  stringList  `yaml:"with"`
-	WithRemotes           stringList  `yaml:"with_remotes"`
-	WithRemotesHyphenated stringList  `yaml:"with-remotes"`
+	RepoDir               string     `yaml:"repo_dir"`
+	RepoDirHyphen         string     `yaml:"repo-dir"`
+	With                  stringList `yaml:"with"`
+	WithRemotes           stringList `yaml:"with_remotes"`
+	WithRemotesHyphenated stringList `yaml:"with-remotes"`
 }
 
 func (m manifest) repoDir() string {
@@ -126,6 +126,13 @@ func NewCommand() *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:   "broadcast",
 		Short: "Broadcast git-annex metadata",
+		Long: `Broadcast git-annex metadata (git annex sync --no-content) to the configured remotes.
+
+If a remote force-pushed (rewrote) its main branch since this clone last synced with
+it, the sync fails; broadcast then adds a hint to the error naming the remote and
+'exo sync --reset-synced <r>', and aborts any merge the failed sync left in
+progress. There is no up-front refusal: unpushed local commits broadcast normally.
+See 'exo sync --help' for --reset-synced.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := requireBinary("git-annex"); err != nil {
 				return err
@@ -159,20 +166,29 @@ func NewCommand() *cobra.Command {
 
 			if len(withRemotes) == 0 {
 				ui.info("Broadcasting metadata with all remotes")
-				return runCommand([]string{"git", "annex", "sync", "--no-content"})
+				remotes, err := listGitRemotes()
+				if err != nil {
+					return fmt.Errorf("listing git remotes: %w", err)
+				}
+				before := snapshotRemoteTips(remotes)
+				if err := runCommand([]string{"git", "annex", "sync", "--no-content"}); err != nil {
+					return withRewriteDiagnosis(err, before)
+				}
+				return nil
 			}
 
 			for _, remote := range withRemotes {
 				if remote == "" {
 					continue
 				}
+				before := snapshotRemoteTips([]string{remote})
 				ui.info(fmt.Sprintf("Enabling git-annex remote '%s'", remote))
 				if err := runCommand([]string{"git", "annex", "enableremote", remote}); err != nil {
 					return fmt.Errorf("failed to enable remote '%s'", remote)
 				}
 				ui.info(fmt.Sprintf("Broadcasting metadata with remote '%s'", remote))
 				if err := runCommand([]string{"git", "annex", "sync", "--no-content", remote}); err != nil {
-					return err
+					return withRewriteDiagnosis(err, before)
 				}
 			}
 			ui.success("Broadcast complete")
@@ -184,6 +200,71 @@ func NewCommand() *cobra.Command {
 	rootCmd.Flags().StringArrayVar(&withRemotes, "with", nil, "Remote name to sync (repeatable)")
 
 	return rootCmd
+}
+
+// listGitRemotes returns the names registered via `git remote` (plain git
+// remotes, as opposed to git-annex special remotes that are never `git
+// fetch`-able).
+func listGitRemotes() ([]string, error) {
+	out, err := command("git", "remote").Output()
+	if err != nil {
+		return nil, err
+	}
+	var remotes []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			remotes = append(remotes, line)
+		}
+	}
+	return remotes, nil
+}
+
+// isGitRemote reports whether name is registered as a plain git remote (has
+// a remote.<name>.url), as opposed to a git-annex-only special remote.
+func isGitRemote(name string) bool {
+	return runCommandQuiet([]string{"git", "config", "--get", "remote." + name + ".url"}) == nil
+}
+
+// snapshotRemoteTips records refs/remotes/<r>/main for each plain git remote
+// BEFORE syncing (no fetch, no refusal), so a sync failure can later be
+// diagnosed against what the remote's main was observed to be.
+func snapshotRemoteTips(remotes []string) map[string]string {
+	tips := map[string]string{}
+	for _, remote := range remotes {
+		if remote == "" || !isGitRemote(remote) {
+			continue
+		}
+		tip, _ := commandutil.RemoteBranchRef(remote, "main")
+		tips[remote] = tip
+	}
+	return tips
+}
+
+// withRewriteDiagnosis is called only after a git-annex sync has FAILED: if
+// one of the remotes' main was actually force-pushed (rewritten) since
+// `before` was observed (exo-cli#178), it appends the `exo sync
+// --reset-synced` hint to the original error; otherwise it returns the
+// original error unchanged. Broadcast never refuses up front.
+func withRewriteDiagnosis(syncErr error, before map[string]string) error {
+	for remote, tip := range before {
+		if diag := commandutil.DiagnoseRewrittenRemote(remote, "main", tip); diag != nil {
+			return fmt.Errorf("%w\n%s%s", syncErr, diag.Error(), abortNote())
+		}
+	}
+	return syncErr
+}
+
+// abortNote aborts a merge the failed sync left in progress and returns a
+// sentence for the user saying so (or how to do it by hand if that failed).
+func abortNote() string {
+	aborted, err := commandutil.AbortMergeIfInProgress()
+	switch {
+	case err != nil:
+		return "\nThe sync left a merge in progress that exo could not abort (" + err.Error() + "); run `git merge --abort` before anything else."
+	case aborted:
+		return "\nexo aborted the half-done merge the sync left behind; your working tree is back to its state before the sync."
+	}
+	return ""
 }
 
 func requireBinary(name string) error {

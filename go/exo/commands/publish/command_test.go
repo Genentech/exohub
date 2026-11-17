@@ -1,10 +1,14 @@
 package publish
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	"runtime"
+	"sort"
 	"strings"
 	"testing"
 
@@ -317,7 +321,7 @@ func TestPublishRefOrchestration(t *testing.T) {
 
 	remotesConfig := &initcmd.RemotesConfig{
 		Remotes: []initcmd.RemoteConfig{
-			{Name: "atlas", Type: "artifactdb", S3URL: "s3://bucket/new-prefix", AtlasURL: "https://atlas.example/sandbox1"},
+			{Name: "atlas", Type: "artifactdb", Mode: "export", S3URL: "s3://bucket/new-prefix", URL: "https://atlas.example/sandbox1"},
 		},
 	}
 	if err := initcmd.SaveRemotesConfig(remotesConfig); err != nil {
@@ -385,7 +389,7 @@ func TestPublishRefForce(t *testing.T) {
 	defer cleanup()
 
 	remotesConfig := &initcmd.RemotesConfig{
-		Remotes: []initcmd.RemoteConfig{{Name: "atlas", Type: "artifactdb", S3URL: "s3://bucket/new-prefix"}},
+		Remotes: []initcmd.RemoteConfig{{Name: "atlas", Type: "artifactdb", Mode: "export", S3URL: "s3://bucket/new-prefix"}},
 	}
 	if err := initcmd.SaveRemotesConfig(remotesConfig); err != nil {
 		t.Fatalf("SaveRemotesConfig: %v", err)
@@ -479,16 +483,17 @@ func chdirForTest(t *testing.T, dir string) {
 	t.Cleanup(func() { os.Chdir(oldWd) }) //nolint:errcheck
 }
 
-// TestValidateRefRemoteMapping_RefusesOnMissingCatalogRemote verifies that a
-// ref referencing a catalog remote absent from the current config (by both
-// name and UUID) is refused with a message naming the missing remote.
-func TestValidateRefRemoteMapping_RefusesOnMissingCatalogRemote(t *testing.T) {
+// TestPublishRefForceBypassesRefRemoteMapping verifies that --force bypasses
+// the ref-to-remotes mapping check (validateRefRemoteMapping), not just the
+// content-availability check (exo-cli#186: "--force bypasses both the ref
+// ↔ remotes check and the source-repo guard").
+func TestPublishRefForceBypassesRefRemoteMapping(t *testing.T) {
 	repoDir := t.TempDir()
 	chdirForTest(t, repoDir)
 	runGitForTest(t, repoDir, "git", "init", "-q")
 
 	oldRemotes := &initcmd.RemotesConfig{Remotes: []initcmd.RemoteConfig{
-		{Name: "old-atlas", Type: "artifactdb", S3URL: "s3://bucket/old"},
+		{Name: "old-atlas", Type: "artifactdb", Mode: "export", S3URL: "s3://bucket/old"},
 	}}
 	if err := initcmd.SaveRemotesConfig(oldRemotes); err != nil {
 		t.Fatal(err)
@@ -498,7 +503,114 @@ func TestValidateRefRemoteMapping_RefusesOnMissingCatalogRemote(t *testing.T) {
 	runGitForTest(t, repoDir, "git", "tag", "1")
 
 	currentConfig := &initcmd.RemotesConfig{Remotes: []initcmd.RemoteConfig{
-		{Name: "new-atlas", Type: "artifactdb", S3URL: "s3://bucket/new"},
+		{Name: "new-atlas", Type: "artifactdb", Mode: "export", S3URL: "s3://bucket/new"},
+	}}
+	if err := initcmd.SaveRemotesConfig(currentConfig); err != nil {
+		t.Fatal(err)
+	}
+
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "exo"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	oldPath := os.Getenv("PATH")
+	os.Setenv("PATH", binDir+":"+oldPath)
+	defer os.Setenv("PATH", oldPath)
+
+	oldCommand := command
+	command = func(name string, args ...string) *exec.Cmd {
+		return exec.Command("sh", "-c", "exit 0")
+	}
+	defer func() { command = oldCommand }()
+
+	oldResolveCloneURL := resolveCloneURL
+	resolveCloneURL = func() (string, error) { return "https://example.com/repo.git", nil }
+	defer func() { resolveCloneURL = oldResolveCloneURL }()
+
+	if err := runPublish(nil, []string{"1"}, false); err == nil {
+		t.Fatal("expected refusal without --force: ref's catalog remote not present in current config")
+	} else if !strings.Contains(err.Error(), "old-atlas") {
+		t.Errorf("expected error to name the missing remote, got: %v", err)
+	}
+
+	if err := runPublish(nil, []string{"1"}, true); err != nil {
+		t.Fatalf("runPublish with --force: %v", err)
+	}
+}
+
+// TestPublishRefLegacyTagSucceedsWithHeadRouting verifies the exo-cli#196
+// tracer scenario end to end: a tag made before the role-split migration
+// carries legacy atlas_url remotes, while HEAD has role-split ones. `exo
+// publish --ref <old>` must succeed (no --force needed) and use HEAD's
+// routing, not refuse at parse time for the tag's legacy keys.
+func TestPublishRefLegacyTagSucceedsWithHeadRouting(t *testing.T) {
+	repoDir := t.TempDir()
+	chdirForTest(t, repoDir)
+	runGitForTest(t, repoDir, "git", "init", "-q")
+
+	legacyRemotes := "remotes:\n  - name: atlas\n    type: artifactdb\n    mode: export\n    s3url: s3://bucket/old-layout\n    atlas_url: https://atlas.example/v1/catalog-a\n"
+	if err := os.MkdirAll(filepath.Join(repoDir, ".exohub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, ".exohub", "remotes"), []byte(legacyRemotes), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitForTest(t, repoDir, "git", "add", ".exohub/remotes")
+	runGitForTest(t, repoDir, "git", "commit", "-q", "-m", "legacy routing")
+	runGitForTest(t, repoDir, "git", "tag", "1")
+
+	headConfig := &initcmd.RemotesConfig{Remotes: []initcmd.RemoteConfig{
+		{Name: "atlas", Type: "artifactdb", Mode: "export", S3URL: "s3://bucket/project", URL: "https://atlas.example/v1/catalog-a"},
+	}}
+	if err := initcmd.SaveRemotesConfig(headConfig); err != nil {
+		t.Fatal(err)
+	}
+	runGitForTest(t, repoDir, "git", "add", ".exohub/remotes")
+	runGitForTest(t, repoDir, "git", "commit", "-q", "-m", "migrate routing")
+
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "exo"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	oldPath := os.Getenv("PATH")
+	os.Setenv("PATH", binDir+":"+oldPath)
+	defer os.Setenv("PATH", oldPath)
+
+	oldCommand := command
+	command = func(name string, args ...string) *exec.Cmd {
+		return exec.Command("sh", "-c", "exit 0")
+	}
+	defer func() { command = oldCommand }()
+
+	oldResolveCloneURL := resolveCloneURL
+	resolveCloneURL = func() (string, error) { return "https://example.com/repo.git", nil }
+	defer func() { resolveCloneURL = oldResolveCloneURL }()
+
+	if err := runPublish(nil, []string{"1"}, false); err != nil {
+		t.Fatalf("expected legacy tag 1 to publish successfully using HEAD's routing, got: %v", err)
+	}
+}
+
+// TestValidateRefRemoteMapping_RefusesOnMissingCatalogRemote verifies that a
+// ref referencing a catalog remote absent from the current config (by both
+// name and UUID) is refused with a message naming the missing remote.
+func TestValidateRefRemoteMapping_RefusesOnMissingCatalogRemote(t *testing.T) {
+	repoDir := t.TempDir()
+	chdirForTest(t, repoDir)
+	runGitForTest(t, repoDir, "git", "init", "-q")
+
+	oldRemotes := &initcmd.RemotesConfig{Remotes: []initcmd.RemoteConfig{
+		{Name: "old-atlas", Type: "artifactdb", Mode: "export", S3URL: "s3://bucket/old"},
+	}}
+	if err := initcmd.SaveRemotesConfig(oldRemotes); err != nil {
+		t.Fatal(err)
+	}
+	runGitForTest(t, repoDir, "git", "add", ".exohub/remotes")
+	runGitForTest(t, repoDir, "git", "commit", "-q", "-m", "old routing")
+	runGitForTest(t, repoDir, "git", "tag", "1")
+
+	currentConfig := &initcmd.RemotesConfig{Remotes: []initcmd.RemoteConfig{
+		{Name: "new-atlas", Type: "artifactdb", Mode: "export", S3URL: "s3://bucket/new"},
 	}}
 
 	err := validateRefRemoteMapping("1", currentConfig)
@@ -519,7 +631,7 @@ func TestValidateRefRemoteMapping_AllowsUUIDMatchAcrossRename(t *testing.T) {
 	runGitForTest(t, repoDir, "git", "init", "-q")
 
 	oldRemotes := &initcmd.RemotesConfig{Remotes: []initcmd.RemoteConfig{
-		{Name: "atlas-old-name", Type: "artifactdb", UUID: "same-uuid", S3URL: "s3://bucket/old"},
+		{Name: "atlas-old-name", Type: "artifactdb", Mode: "export", UUID: "same-uuid", S3URL: "s3://bucket/old"},
 	}}
 	if err := initcmd.SaveRemotesConfig(oldRemotes); err != nil {
 		t.Fatal(err)
@@ -529,11 +641,74 @@ func TestValidateRefRemoteMapping_AllowsUUIDMatchAcrossRename(t *testing.T) {
 	runGitForTest(t, repoDir, "git", "tag", "1")
 
 	currentConfig := &initcmd.RemotesConfig{Remotes: []initcmd.RemoteConfig{
-		{Name: "atlas-new-name", Type: "artifactdb", UUID: "same-uuid", S3URL: "s3://bucket/new"},
+		{Name: "atlas-new-name", Type: "artifactdb", Mode: "export", UUID: "same-uuid", S3URL: "s3://bucket/new"},
 	}}
 
 	if err := validateRefRemoteMapping("1", currentConfig); err != nil {
 		t.Errorf("expected UUID match across rename to be allowed, got: %v", err)
+	}
+}
+
+// TestValidateRefRemoteMapping_AllowsLegacyRefRemotes verifies that a ref
+// whose own .exohub/remotes predates the role-split migration (legacy
+// atlas_url/instance_url keys) is never refused for carrying those keys
+// (exo-cli#196): only the CURRENT config is validated/used for routing, and
+// the ref's file is read leniently just to match remotes by name/UUID.
+func TestValidateRefRemoteMapping_AllowsLegacyRefRemotes(t *testing.T) {
+	repoDir := t.TempDir()
+	chdirForTest(t, repoDir)
+	runGitForTest(t, repoDir, "git", "init", "-q")
+
+	legacyRemotes := "remotes:\n  - name: atlas\n    type: artifactdb\n    mode: export\n    s3url: s3://bucket/old-layout\n    atlas_url: https://atlas.example/v1/catalog-a\n"
+	if err := os.MkdirAll(filepath.Join(repoDir, ".exohub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, ".exohub", "remotes"), []byte(legacyRemotes), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitForTest(t, repoDir, "git", "add", ".exohub/remotes")
+	runGitForTest(t, repoDir, "git", "commit", "-q", "-m", "legacy routing")
+	runGitForTest(t, repoDir, "git", "tag", "1")
+
+	currentConfig := &initcmd.RemotesConfig{Remotes: []initcmd.RemoteConfig{
+		{Name: "atlas", Type: "artifactdb", Mode: "export", S3URL: "s3://bucket/project", URL: "https://atlas.example/v1/catalog-a"},
+	}}
+
+	if err := validateRefRemoteMapping("1", currentConfig); err != nil {
+		t.Errorf("expected a legacy ref's atlas_url/instance_url keys to never be refused, got: %v", err)
+	}
+}
+
+// TestValidateRefRemoteMapping_RefusesMissingCatalogRemoteEvenWhenLegacy
+// verifies that --ref's missing-catalog-remote refusal still applies when
+// the ref's own config is legacy: leniency only waives the legacy-key
+// refusal, not the current-routing-home check.
+func TestValidateRefRemoteMapping_RefusesMissingCatalogRemoteEvenWhenLegacy(t *testing.T) {
+	repoDir := t.TempDir()
+	chdirForTest(t, repoDir)
+	runGitForTest(t, repoDir, "git", "init", "-q")
+
+	legacyRemotes := "remotes:\n  - name: old-atlas\n    type: artifactdb\n    mode: export\n    s3url: s3://bucket/old-layout\n    atlas_url: https://atlas.example/v1/catalog-a\n"
+	if err := os.MkdirAll(filepath.Join(repoDir, ".exohub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, ".exohub", "remotes"), []byte(legacyRemotes), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitForTest(t, repoDir, "git", "add", ".exohub/remotes")
+	runGitForTest(t, repoDir, "git", "commit", "-q", "-m", "legacy routing")
+	runGitForTest(t, repoDir, "git", "tag", "1")
+
+	currentConfig := &initcmd.RemotesConfig{Remotes: []initcmd.RemoteConfig{
+		{Name: "new-atlas", Type: "artifactdb", Mode: "export", S3URL: "s3://bucket/new"},
+	}}
+
+	err := validateRefRemoteMapping("1", currentConfig)
+	if err == nil {
+		t.Fatal("expected refusal: legacy ref's catalog remote not present in current config")
+	}
+	if !strings.Contains(err.Error(), "old-atlas") {
+		t.Errorf("expected error to name the missing remote, got: %v", err)
 	}
 }
 
@@ -578,8 +753,12 @@ func TestExtractArtifactDBFromRef_ExtractsFiles(t *testing.T) {
 	runGitForTest(t, repoDir, "git", "tag", "1")
 
 	destDir := t.TempDir()
-	if err := extractArtifactDBFromRef("1", destDir); err != nil {
+	artifactdbDir, err := extractArtifactDBFromRef("1", destDir)
+	if err != nil {
 		t.Fatalf("extractArtifactDBFromRef: %v", err)
+	}
+	if want := filepath.Join(destDir, ".artifactdb"); artifactdbDir != want {
+		t.Errorf("artifactdbDir = %q, want %q", artifactdbDir, want)
 	}
 
 	data, err := os.ReadFile(filepath.Join(destDir, ".artifactdb", "foo.json"))
@@ -605,11 +784,106 @@ func TestExtractArtifactDBFromRef_NoArtifactDBIsNotError(t *testing.T) {
 	runGitForTest(t, repoDir, "git", "tag", "1")
 
 	destDir := t.TempDir()
-	if err := extractArtifactDBFromRef("1", destDir); err != nil {
+	artifactdbDir, err := extractArtifactDBFromRef("1", destDir)
+	if err != nil {
 		t.Fatalf("expected no error for a ref without .artifactdb/, got: %v", err)
+	}
+	if artifactdbDir != "" {
+		t.Errorf("expected empty artifactdbDir for a ref without .artifactdb/, got: %q", artifactdbDir)
 	}
 	if _, err := os.Stat(filepath.Join(destDir, ".artifactdb")); !os.IsNotExist(err) {
 		t.Errorf("expected nothing extracted, got stat err = %v", err)
+	}
+}
+
+// TestPublishRefKeepsArtifactDBOutsideBundleDir verifies that publishRef,
+// for a ref with a tracked .artifactdb/, extracts it into a directory
+// separate from the bundle dir and passes that sidecar dir explicitly via
+// 'exo sync --artifactdb-dir' (exo-cli#177): a bundle dir containing a
+// nested .artifactdb/ would be uploaded whole to a role: atlas remote's
+// .exohub-bundle/, and the Atlas rejects instance-typed documents it finds
+// there. Mutation check: extracting into the bundle tempDir instead of a
+// sibling dir makes this FAIL (bundleHasNestedArtifactDB would be true,
+// or the sync call's --artifactdb-dir would sit inside the bundle dir).
+func TestPublishRefKeepsArtifactDBOutsideBundleDir(t *testing.T) {
+	repoDir := t.TempDir()
+	chdirForTest(t, repoDir)
+	runGitForTest(t, repoDir, "git", "init", "-q")
+
+	if err := os.MkdirAll(filepath.Join(repoDir, ".artifactdb", "dataset"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, ".artifactdb", "dataset", "v2.json"), []byte(`{"id":"DS1"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitForTest(t, repoDir, "git", "add", ".artifactdb")
+	runGitForTest(t, repoDir, "git", "commit", "-q", "-m", "add artifactdb")
+	runGitForTest(t, repoDir, "git", "tag", "1")
+
+	remotesConfig := &initcmd.RemotesConfig{
+		Remotes: []initcmd.RemoteConfig{{Name: "atlas", Type: "artifactdb", Mode: "export", S3URL: "s3://bucket/prefix"}},
+	}
+	if err := initcmd.SaveRemotesConfig(remotesConfig); err != nil {
+		t.Fatal(err)
+	}
+
+	// Fake "exo" on PATH for the bundle/sync/broadcast subcommand invocations.
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "exo"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	oldPath := os.Getenv("PATH")
+	os.Setenv("PATH", binDir+":"+oldPath)
+	defer os.Setenv("PATH", oldPath)
+
+	// Delegate "git" invocations through to the real binary (so extraction
+	// really happens), and inspect the 'sync' invocation on the spot, since
+	// publishRef removes its temp dirs via defer once it returns.
+	var bundleHasNestedArtifactDB bool
+	var sawArtifactdbDirFlag bool
+	var artifactdbDirOutsideBundle bool
+	var extractedContent []byte
+	oldCommand := command
+	command = func(name string, args ...string) *exec.Cmd {
+		call := name + " " + strings.Join(args, " ")
+		if name == "git" {
+			return exec.Command("git", args...)
+		}
+		if len(args) > 0 && args[0] == "sync" {
+			if bd, ok := extractArg(call, "--bundle-dir"); ok {
+				if _, statErr := os.Stat(filepath.Join(bd, ".artifactdb")); statErr == nil {
+					bundleHasNestedArtifactDB = true
+				}
+				if ad, ok := extractArg(call, "--artifactdb-dir"); ok {
+					sawArtifactdbDirFlag = true
+					artifactdbDirOutsideBundle = filepath.Dir(ad) != bd
+					extractedContent, _ = os.ReadFile(filepath.Join(ad, "dataset", "v2.json"))
+				}
+			}
+		}
+		return exec.Command("sh", "-c", "exit 0")
+	}
+	defer func() { command = oldCommand }()
+
+	oldResolveCloneURL := resolveCloneURL
+	resolveCloneURL = func() (string, error) { return "https://example.com/repo.git", nil }
+	defer func() { resolveCloneURL = oldResolveCloneURL }()
+
+	if err := runPublish(nil, []string{"1"}, true); err != nil {
+		t.Fatalf("runPublish: %v", err)
+	}
+
+	if bundleHasNestedArtifactDB {
+		t.Error("expected the bundle dir to never contain .artifactdb/")
+	}
+	if !sawArtifactdbDirFlag {
+		t.Fatal("expected sync call to include --artifactdb-dir")
+	}
+	if !artifactdbDirOutsideBundle {
+		t.Error("expected --artifactdb-dir to be outside the bundle dir")
+	}
+	if string(extractedContent) != `{"id":"DS1"}` {
+		t.Errorf("extracted content = %q, want %q", extractedContent, `{"id":"DS1"}`)
 	}
 }
 
@@ -655,4 +929,258 @@ func sliceEqual(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// TestPublishPropagatesBroadcastFailure verifies that runPublish surfaces a
+// step-4 (broadcast) failure untouched -- e.g. the exo-cli#178 rewritten-
+// remote-main refusal -- with a clear "broadcast failed" wrapper, rather
+// than swallowing it or reporting success.
+func TestPublishPropagatesBroadcastFailure(t *testing.T) {
+	repoDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repoDir, ".git"), 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	oldDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(repoDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer os.Chdir(oldDir) //nolint:errcheck
+
+	// Install a fake "exo" on PATH: runExoBundle/runExoSync/runExoBroadcast
+	// all exec.LookPath("exo") before calling the (overridden) command var,
+	// and CI has no real exo binary on PATH.
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "exo"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write fake exo: %v", err)
+	}
+	oldPath := os.Getenv("PATH")
+	os.Setenv("PATH", binDir+":"+oldPath)
+	defer os.Setenv("PATH", oldPath)
+
+	oldCommand := command
+	const rewrittenRemoteMsg = "remote origin rewrote main (force-push); local synced/* refs are stale; run `exo sync --reset-synced origin` after checking your local work is safe"
+	command = func(name string, args ...string) *exec.Cmd {
+		for _, a := range args {
+			if a == "broadcast" {
+				return exec.Command("sh", "-c", "echo '"+rewrittenRemoteMsg+"' >&2; exit 1")
+			}
+		}
+		return exec.Command("sh", "-c", "exit 0")
+	}
+	defer func() { command = oldCommand }()
+
+	oldResolveCloneURL := resolveCloneURL
+	resolveCloneURL = func() (string, error) { return "https://example.com/repo.git", nil }
+	defer func() { resolveCloneURL = oldResolveCloneURL }()
+
+	// runExoBroadcast wires the subprocess's stderr directly to this
+	// process's stderr (so the operator sees the hint live); capture it here
+	// to confirm it was actually printed.
+	oldStderr := os.Stderr
+	r, w, pipeErr := os.Pipe()
+	if pipeErr != nil {
+		t.Fatalf("pipe: %v", pipeErr)
+	}
+	os.Stderr = w
+	done := make(chan string, 1)
+	go func() {
+		buf := make([]byte, 0, 4096)
+		tmp := make([]byte, 4096)
+		for {
+			n, readErr := r.Read(tmp)
+			if n > 0 {
+				buf = append(buf, tmp[:n]...)
+			}
+			if readErr != nil {
+				break
+			}
+		}
+		done <- string(buf)
+	}()
+
+	err = runPublish(nil, nil, false)
+
+	os.Stderr = oldStderr
+	w.Close()
+	stderrOutput := <-done
+
+	if err == nil {
+		t.Fatal("expected runPublish to surface the broadcast failure")
+	}
+	if !strings.Contains(err.Error(), "broadcast failed") {
+		t.Errorf("expected error to be wrapped as a broadcast failure, got: %v", err)
+	}
+	if !strings.Contains(stderrOutput, "rewrote main") {
+		t.Errorf("expected the underlying rewritten-remote hint on stderr, got: %q", stderrOutput)
+	}
+}
+
+// TestPublishRefUsesRefTreeNotWorktree is the exo-cli#203 regression at the
+// publish level: 'exo publish --ref <tag>' must build its bundle from the
+// ref's own tree (paths AND annex keys), never the current checkout's. It
+// runs the REAL 'exo bundle --ref' subprocess (built from this module) so
+// the bundle content inspected below is whatever runExoBundleRef actually
+// produces, not a stub.
+func TestPublishRefUsesRefTreeNotWorktree(t *testing.T) {
+	if _, err := exec.LookPath("git-annex"); err != nil {
+		t.Skip("git-annex not in PATH")
+	}
+
+	repoDir := t.TempDir()
+	chdirForTest(t, repoDir)
+	t.Cleanup(func() {
+		filepath.Walk(repoDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil
+			}
+			return os.Chmod(path, info.Mode()|0o600)
+		})
+	})
+	runGitForTest(t, repoDir, "git", "init", "-q")
+	runGitForTest(t, repoDir, "git", "annex", "init", "testrepo")
+
+	remotesConfig := &initcmd.RemotesConfig{
+		Remotes: []initcmd.RemoteConfig{{Name: "atlas", Type: "artifactdb", Mode: "export", S3URL: "s3://bucket/prefix"}},
+	}
+	if err := initcmd.SaveRemotesConfig(remotesConfig); err != nil {
+		t.Fatal(err)
+	}
+
+	annexAdd := func(path, content string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(repoDir, path), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runGitForTest(t, repoDir, "git", "annex", "add", path)
+	}
+	lookupKey := func(path string) string {
+		t.Helper()
+		cmd := exec.Command("git", "annex", "lookupkey", path)
+		cmd.Dir = repoDir
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "HOME="+repoDir)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("git annex lookupkey %s: %v", path, err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+
+	annexAdd("data.bin", "v1 content")
+	annexAdd("removed.bin", "removed content")
+	runGitForTest(t, repoDir, "git", "add", ".")
+	runGitForTest(t, repoDir, "git", "commit", "-q", "-m", "v1")
+	runGitForTest(t, repoDir, "git", "tag", "1")
+	v1Key := lookupKey("data.bin")
+
+	if err := os.Remove(filepath.Join(repoDir, "data.bin")); err != nil {
+		t.Fatalf("remove data.bin: %v", err)
+	}
+	annexAdd("data.bin", "v2 content, modified")
+	headKey := lookupKey("data.bin")
+	if headKey == v1Key {
+		t.Fatal("test setup invalid: data.bin's key should differ between v1 and HEAD")
+	}
+	annexAdd("added.bin", "added after v1")
+	runGitForTest(t, repoDir, "git", "rm", "-q", "removed.bin")
+	runGitForTest(t, repoDir, "git", "commit", "-q", "-m", "v2: modify data.bin, add added.bin, remove removed.bin")
+
+	binPath := buildExoBinary(t)
+	binDir := filepath.Dir(binPath)
+	if err := os.Rename(binPath, filepath.Join(binDir, "exo")); err != nil {
+		t.Fatalf("rename exo binary: %v", err)
+	}
+	binPath = filepath.Join(binDir, "exo")
+	oldPath := os.Getenv("PATH")
+	os.Setenv("PATH", binDir+":"+oldPath)
+	defer os.Setenv("PATH", oldPath)
+
+	var sawBundleDir string
+	var gotPaths []string
+	var dataArtifactKey string
+	oldCommand := command
+	command = func(name string, args ...string) *exec.Cmd {
+		if name == "git" {
+			return exec.Command("git", args...)
+		}
+		if len(args) > 0 && args[0] == "bundle" {
+			cmd := exec.Command(binPath, args...)
+			cmd.Dir = repoDir
+			cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "HOME="+repoDir)
+			return cmd
+		}
+		if len(args) > 0 && args[0] == "sync" {
+			call := name + " " + strings.Join(args, " ")
+			if bd, ok := extractArg(call, "--bundle-dir"); ok {
+				sawBundleDir = bd
+				filesDir := filepath.Join(bd, "files")
+				entries, _ := os.ReadDir(filesDir)
+				for _, e := range entries {
+					gotPaths = append(gotPaths, e.Name())
+				}
+				if data, err := os.ReadFile(filepath.Join(filesDir, "data.bin.json")); err == nil {
+					var artifact struct {
+						Key string `json:"key"`
+					}
+					if json.Unmarshal(data, &artifact) == nil {
+						dataArtifactKey = artifact.Key
+					}
+				}
+			}
+		}
+		return exec.Command("sh", "-c", "exit 0")
+	}
+	defer func() { command = oldCommand }()
+
+	oldResolveCloneURL := resolveCloneURL
+	resolveCloneURL = func() (string, error) { return "https://example.com/repo.git", nil }
+	defer func() { resolveCloneURL = oldResolveCloneURL }()
+
+	if err := runPublish(nil, []string{"1"}, true); err != nil {
+		t.Fatalf("runPublish: %v", err)
+	}
+
+	if sawBundleDir == "" {
+		t.Fatal("expected a 'sync --bundle-dir' call")
+	}
+	sort.Strings(gotPaths)
+	wantPaths := []string{"data.bin.json", "removed.bin.json"}
+	if !reflect.DeepEqual(gotPaths, wantPaths) {
+		t.Fatalf("bundle files = %v, want %v (added.bin must be absent, removed.bin must be present)", gotPaths, wantPaths)
+	}
+	if dataArtifactKey != v1Key {
+		t.Errorf("data.bin.json key = %q, want v1's key %q (got HEAD's key %q)", dataArtifactKey, v1Key, headKey)
+	}
+}
+
+// buildExoBinary compiles the real exo binary (main.go at the module root)
+// into a temp file and returns its path, mirroring the sync package's test
+// helper of the same name (each package needs its own copy since Go test
+// helpers aren't exported across packages). It must be called before any
+// test chdirs elsewhere: `go env GOMOD` is resolved relative to the
+// process's current directory, which this package's source tree sets via
+// the surrounding go.mod.
+func buildExoBinary(t *testing.T) string {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller(0) failed")
+	}
+	modDirCmd := exec.Command("go", "env", "GOMOD")
+	modDirCmd.Dir = filepath.Dir(thisFile)
+	modDir, err := modDirCmd.Output()
+	if err != nil {
+		t.Fatalf("go env GOMOD: %v", err)
+	}
+	moduleRoot := filepath.Dir(strings.TrimSpace(string(modDir)))
+
+	binPath := filepath.Join(t.TempDir(), "exo-real")
+	build := exec.Command("go", "build", "-o", binPath, ".")
+	build.Dir = moduleRoot
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build exo: %v\n%s", err, out)
+	}
+	return binPath
 }

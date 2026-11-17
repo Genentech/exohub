@@ -3,7 +3,7 @@ title: "exo safe store"
 description: "Store a credential in ExoSafe"
 ---
 
-Full `exo safe store --help` output, generated from exo-cli v0.140.2.
+Full `exo safe store --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Upload a credential to your ExoSafe.

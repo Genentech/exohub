@@ -3,7 +3,7 @@ title: "exo safe pull"
 description: "Provision credentials from ExoSafe (non-interactive)"
 ---
 
-Full `exo safe pull --help` output, generated from exo-cli v0.140.2.
+Full `exo safe pull --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Fetch and provision credentials from ExoSafe without any interactive prompt.

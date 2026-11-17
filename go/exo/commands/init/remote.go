@@ -13,13 +13,17 @@ import (
 )
 
 var (
-	remoteType         string
-	remoteName         string
-	remoteS3URL        string
-	remoteRsyncURL     string
-	remoteTrackingBranch string
-	remoteChunk        string
-	remoteGrants       bool
+	remoteType            string
+	remoteName            string
+	remoteS3URL           string
+	remoteRsyncURL        string
+	remoteTrackingBranch  string
+	remoteChunk           string
+	remoteGrants          bool
+	remoteRole            string
+	remoteURL             string
+	remoteGrantsAccountID string
+	remoteDataFrom        string
 )
 
 func NewRemoteCommand() *cobra.Command {
@@ -64,13 +68,17 @@ Or use rsync_options for custom rsync flags (mutually exclusive with permissions
 		},
 	}
 
-	cmd.Flags().StringVar(&remoteType, "type", "", "Remote type (annex, export, import, exospace, drive)")
+	cmd.Flags().StringVar(&remoteType, "type", "", "Remote type (annex, export, import, exospace, artifactdb, drive)")
 	cmd.Flags().StringVar(&remoteName, "name", "", "Remote name")
-	cmd.Flags().StringVar(&remoteS3URL, "s3url", "", "S3 URL (for annex/export/import types)")
+	cmd.Flags().StringVar(&remoteS3URL, "s3url", "", "S3 URL (for annex/export/import/artifactdb types)")
 	cmd.Flags().StringVar(&remoteRsyncURL, "rsyncurl", "", "Rsync URL (for exospace type)")
 	cmd.Flags().StringVar(&remoteTrackingBranch, "tracking-branch", "", "Tracking branch (for export/import types)")
 	cmd.Flags().StringVar(&remoteChunk, "chunk", "1GiB", "Chunk size (for annex type)")
 	cmd.Flags().BoolVar(&remoteGrants, "grants", false, "Enable fine-grained S3 Access Grants permissions")
+	cmd.Flags().StringVar(&remoteRole, "role", "", "artifactdb remote role: atlas (default) or instance")
+	cmd.Flags().StringVar(&remoteURL, "url", "", "artifactdb remote url: the Atlas to publish to (role: atlas) or the ArtifactDB instance endpoint (role: instance)")
+	cmd.Flags().StringVar(&remoteGrantsAccountID, "grants-account-id", "", "Access Grants account id to request credentials from for this remote")
+	cmd.Flags().StringVar(&remoteDataFrom, "data-from", "", "artifactdb role: instance only: the role: atlas remote this instance delegates to")
 
 	return cmd
 }
@@ -81,9 +89,13 @@ func runDeclarativeRemoteSetup(rtype, rname string) error {
 		return fmt.Errorf("unsupported remote type: %s (must be annex, export, import, exospace, artifactdb, or drive)", rtype)
 	}
 
-	// Check binary availability
-	if err := checkRemoteBinaries(rtype); err != nil {
-		return err
+	// role: instance artifactdb remotes are never git-annex special remotes
+	// (D3), so the catalog binary isn't needed to create them.
+	if !(rtype == "artifactdb" && remoteRole == "instance") {
+		// Check binary availability
+		if err := checkRemoteBinaries(rtype); err != nil {
+			return err
+		}
 	}
 
 	// Ensure we're in a git repo
@@ -300,6 +312,9 @@ func createAnnexRemoteInteractive(name string) (RemoteConfig, error) {
 	if remoteGrants {
 		initArgs = append(initArgs, "grants=true")
 	}
+	if remoteGrantsAccountID != "" {
+		initArgs = append(initArgs, "grants_account_id="+remoteGrantsAccountID)
+	}
 	if err := runCommand(initArgs); err != nil {
 		return RemoteConfig{}, err
 	}
@@ -308,12 +323,13 @@ func createAnnexRemoteInteractive(name string) (RemoteConfig, error) {
 	uuid := getRemoteUUID(name)
 
 	rc := RemoteConfig{
-		Name:   name,
-		Type:   "annex",
-		UUID:   uuid,
-		S3URL:  s3url,
-		Chunk:  chunk,
-		Grants: remoteGrants,
+		Name:            name,
+		Type:            "annex",
+		UUID:            uuid,
+		S3URL:           s3url,
+		Chunk:           chunk,
+		Grants:          remoteGrants,
+		GrantsAccountID: remoteGrantsAccountID,
 	}
 
 	if remoteGrants {
@@ -344,12 +360,19 @@ func createExportRemoteInteractive(name string) (RemoteConfig, error) {
 	if remoteGrants {
 		initArgs = append(initArgs, "grants=true")
 	}
+	if remoteGrantsAccountID != "" {
+		initArgs = append(initArgs, "grants_account_id="+remoteGrantsAccountID)
+	}
 	if err := runCommand(initArgs); err != nil {
 		return RemoteConfig{}, err
 	}
 
 	// Enable remote again to ensure settings are applied
-	_ = runCommand([]string{"git", "annex", "enableremote", name, "s3url=" + s3url, "exporttree=yes"})
+	enableArgs := []string{"git", "annex", "enableremote", name, "s3url=" + s3url, "exporttree=yes"}
+	if remoteGrantsAccountID != "" {
+		enableArgs = append(enableArgs, "grants_account_id="+remoteGrantsAccountID)
+	}
+	_ = runCommand(enableArgs)
 
 	// Ask for tracking branch if not provided via flag
 	trackingBranch := remoteTrackingBranch
@@ -367,18 +390,19 @@ func createExportRemoteInteractive(name string) (RemoteConfig, error) {
 		fmt.Printf("Set remote.%s.annex-tracking-branch to '%s'\n", name, trackingBranch)
 	}
 
-	ensureRemoteConfigS3URL(RemoteConfig{Name: name, S3URL: s3url, Type: "export", Grants: remoteGrants})
+	ensureRemoteConfigS3URL(RemoteConfig{Name: name, S3URL: s3url, Type: "export", Grants: remoteGrants, GrantsAccountID: remoteGrantsAccountID})
 
 	// Get UUID for tracking
 	uuid := getRemoteUUID(name)
 
 	rc := RemoteConfig{
-		Name:           name,
-		Type:           "export",
-		UUID:           uuid,
-		S3URL:          s3url,
-		TrackingBranch: trackingBranch,
-		Grants:         remoteGrants,
+		Name:            name,
+		Type:            "export",
+		UUID:            uuid,
+		S3URL:           s3url,
+		TrackingBranch:  trackingBranch,
+		Grants:          remoteGrants,
+		GrantsAccountID: remoteGrantsAccountID,
 	}
 
 	if remoteGrants {
@@ -575,6 +599,14 @@ func createExospaceRemoteInteractive(name string) (RemoteConfig, error) {
 }
 
 func createArtifactDBRemoteInteractive(name string) (RemoteConfig, error) {
+	role := remoteRole
+	if role == "" {
+		role = "atlas"
+	}
+	if role != "atlas" && role != "instance" {
+		return RemoteConfig{}, fmt.Errorf("invalid --role %q for artifactdb remote (must be: atlas or instance)", role)
+	}
+
 	s3url := remoteS3URL
 	if s3url == "" {
 		// Try to derive from first existing annex remote
@@ -601,6 +633,31 @@ func createArtifactDBRemoteInteractive(name string) (RemoteConfig, error) {
 		}
 	}
 
+	if role == "instance" {
+		// role: instance remotes are never git-annex special remotes (D3):
+		// exo publish/sync upload to them directly, never via initremote.
+		rc := RemoteConfig{
+			Name:            name,
+			Type:            "artifactdb",
+			Role:            "instance",
+			S3URL:           s3url,
+			URL:             remoteURL,
+			Grants:          remoteGrants,
+			GrantsAccountID: remoteGrantsAccountID,
+			DataFrom:        remoteDataFrom,
+		}
+		if err := rc.Validate(); err != nil {
+			return RemoteConfig{}, err
+		}
+		fmt.Printf("Registering role: instance remote %q (not a git-annex special remote)\n", name)
+		if remoteGrants {
+			if _, err := loadOrCreatePermissions(); err != nil {
+				fmt.Printf("⚠️  Could not create permissions file: %v\n", err)
+			}
+		}
+		return rc, nil
+	}
+
 	externalType := "artifactdb-export"
 	fmt.Printf("Initializing %s as exporttree via %s external remote\n", name, externalType)
 	initArgs := []string{
@@ -611,13 +668,23 @@ func createArtifactDBRemoteInteractive(name string) (RemoteConfig, error) {
 	if remoteGrants {
 		initArgs = append(initArgs, "grants=true")
 	}
+	if remoteGrantsAccountID != "" {
+		initArgs = append(initArgs, "grants_account_id="+remoteGrantsAccountID)
+	}
+	if remoteURL != "" {
+		initArgs = append(initArgs, "atlas_url="+remoteURL)
+	}
 	if err := runCommand(initArgs); err != nil {
 		return RemoteConfig{}, err
 	}
 
-	_ = runCommand([]string{"git", "annex", "enableremote", name, "s3url=" + s3url, "exporttree=yes"})
+	enableArgs := []string{"git", "annex", "enableremote", name, "s3url=" + s3url, "exporttree=yes"}
+	if remoteGrantsAccountID != "" {
+		enableArgs = append(enableArgs, "grants_account_id="+remoteGrantsAccountID)
+	}
+	_ = runCommand(enableArgs)
 
-	ensureRemoteConfigS3URL(RemoteConfig{Name: name, S3URL: s3url, Type: "artifactdb", Grants: remoteGrants})
+	ensureRemoteConfigS3URL(RemoteConfig{Name: name, S3URL: s3url, Type: "artifactdb", Grants: remoteGrants, URL: remoteURL, GrantsAccountID: remoteGrantsAccountID})
 
 	// Set preferred content
 	wanted := "include=.exohub/bundles/* or include=.artifactdb/*"
@@ -627,12 +694,14 @@ func createArtifactDBRemoteInteractive(name string) (RemoteConfig, error) {
 	uuid := getRemoteUUID(name)
 
 	rc := RemoteConfig{
-		Name:   name,
-		Type:   "artifactdb",
-		UUID:   uuid,
-		S3URL:  s3url,
-		Grants: remoteGrants,
-		Mode:   "export",
+		Name:            name,
+		Type:            "artifactdb",
+		UUID:            uuid,
+		S3URL:           s3url,
+		Grants:          remoteGrants,
+		Mode:            "export",
+		URL:             remoteURL,
+		GrantsAccountID: remoteGrantsAccountID,
 	}
 
 	if remoteGrants {

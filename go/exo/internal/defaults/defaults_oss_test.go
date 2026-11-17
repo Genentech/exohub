@@ -22,6 +22,15 @@ func TestDocsURL_OSSBuiltin(t *testing.T) {
 	}
 }
 
+func TestManPageBaseURL_OSSBuiltin(t *testing.T) {
+	t.Setenv("EXOHUB_DOCS_URL", "")
+	got := ManPageBaseURL()
+	want := "https://genentech.github.io/exohub"
+	if got != want {
+		t.Errorf("ManPageBaseURL() = %q, want OSS builtin %q", got, want)
+	}
+}
+
 func TestUpgradeURL_OSSBuiltin(t *testing.T) {
 	t.Setenv("EXO_UPGRADE_URL", "")
 	got := UpgradeURL()

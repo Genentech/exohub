@@ -7,8 +7,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// NewCommand returns the root `exo provenance` cobra command.
-func NewCommand() *cobra.Command {
+// NewCommand returns the root `exo provenance` cobra command. version is
+// the running exo version, used to refuse records whose exo:minVersion is
+// higher (design "Readers refuse records that need a newer exo").
+func NewCommand(version string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "provenance",
 		Short: "Record and inspect data lineage",
@@ -37,6 +39,7 @@ Workflow for AI agents and scripts:
 
 Subcommands:
   add          Create a new provenance record
+  import       Import provenance a workflow engine already recorded
   validate     Validate provenance records
   show         Show an artifact's provenance lineage
   install-hook Install a pre-commit hook that runs validate --staged`,
@@ -46,8 +49,9 @@ Subcommands:
 	}
 
 	cmd.AddCommand(newAddCommand())
-	cmd.AddCommand(newValidateCommand())
-	cmd.AddCommand(newShowCommand())
+	cmd.AddCommand(newImportCommand())
+	cmd.AddCommand(newValidateCommand(version))
+	cmd.AddCommand(newShowCommand(version))
 	cmd.AddCommand(newInstallHookCommand())
 
 	return cmd

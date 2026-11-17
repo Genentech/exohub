@@ -240,7 +240,7 @@ This re-renders the `catalog` remote from `my-profile` and prints a diff of the 
 
 ```
 ==> Remote catalog drift from profile "my-profile":
-  + atlas_url: https://atlas.example.com/...
+  + url: https://atlas.example.com/...
 ```
 
 Unless `--yes` is also passed, you're asked to confirm. Only the changed/added fields are written to `.exohub/remotes` and applied to the git-annex remote config — comments, key order, and any key the profile doesn't know about are preserved; nothing the profile doesn't define is ever cleared.
@@ -250,6 +250,8 @@ exo init --profile my-profile --remote catalog --yes
 ```
 
 Answers needed to re-render (e.g. a templated path) come from, in order: `--set key=value`, `.exohub/profile.lock` (written automatically by every `exo init --profile` run), or reverse-matched from the remote's current fields. If a prompt can't be resolved any of these ways, the command fails and names exactly which keys are missing.
+
+> If the named remote still has legacy `atlas_url`/`instance_url` keys, `exo init --profile <profile> --remote <remote>` instead performs the legacy→role-split conversion — see [Migrating from atlas_url / instance_url]({{< ref "syncing#migrating-from-atlas_url--instance_url" >}}).
 
 #### Reporting Drift for Automation
 
@@ -548,8 +550,16 @@ remotes:
     type: artifactdb
     mode: export
     s3url: s3://my-bucket/datasets/mnist
-    instance_url: https://artifactdb.example.com
+    url: https://atlas.example.com/v1/main   # optional; publishes the bundle to this Atlas
     publish_on: tag
+
+  - name: catalog-instance
+    type: artifactdb
+    role: instance
+    url: https://artifactdb.example.com/v1/mnist
+    s3url: s3://my-instance-bucket/mnist
+    # exclude:
+    #   - "dataset_merged.json*"
 
   - name: minio-import
     type: import
@@ -586,13 +596,19 @@ Catalog remote fields:
 
 | Field | Description |
 |-------|-------------|
-| `mode` | Required: `export` or `import` |
-| `instance_url` | ArtifactDB instance URL |
-| `atlas_url` | Publish to a specific, non-default Atlas instead of the deployment's default (must be allowlisted by the deployment); see [Choosing the Target Atlas]({{< ref "syncing#choosing-the-target-atlas" >}}) |
+| `role` | `atlas` (default) or `instance`; see [Catalog Remote Publishing]({{< ref "syncing#catalog-remote-publishing" >}}) |
+| `mode` | Required for `role: atlas` (default role): `export` or `import`. Not allowed for `role: instance` — it takes no mode |
+| `url` | For `role: atlas`: publish to a specific, non-default Atlas instead of the deployment's default (must be allowlisted by the deployment); see [Choosing the Target Atlas]({{< ref "syncing#choosing-the-target-atlas" >}}). For `role: instance`: the ArtifactDB instance's HTTPS endpoint (required) |
+| `s3url` | Required for both roles. For `role: instance`, must be exactly `s3://<bucket>/<project_id>` |
+| `data_from` | `role: instance` only: names the `role: atlas` remote this instance delegates to (inferred when there's exactly one) |
+| `exclude` | `role: instance` only: glob patterns for `.artifactdb/` files to keep out of this instance's upload; see [Excluding Files From the Instance Upload]({{< ref "syncing#excluding-files-from-the-instance-upload" >}}) |
+| `grants_account_id` | S3 Access Grants account id to request credentials from for this remote (falls back to the build default when unset) |
 | `publish_on` | When to publish: `tag` (only on tags) or `always` (default) |
 | `project_id` | Custom project ID override (defaults to repo name) |
 
-> When creating a catalog remote through `exo init`'s interactive wizard (not `--profile`), you're also prompted for an optional "ExoHub Atlas URL", which sets `atlas_url`.
+> When creating a catalog remote through `exo init`'s interactive wizard (not `--profile`), you're also prompted for an optional "ExoHub Atlas URL", which sets `url` on a `role: atlas` remote.
+
+> **Breaking change:** `atlas_url` and `instance_url` are no longer accepted — exo refuses to run any command against a remotes file that still has either key. See [Migrating from atlas_url / instance_url]({{< ref "syncing#migrating-from-atlas_url--instance_url" >}}).
 
 ### `.exohub/presets`
 

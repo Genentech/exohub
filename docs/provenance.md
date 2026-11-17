@@ -27,11 +27,24 @@ https://genentech.github.io/exohub/ns/provenance/v1.jsonld
 That context maps short PROV-O aliases (`Entity`, `Collection`, `Activity`,
 `Person`, `SoftwareAgent`, `used`, `wasGeneratedBy`, `wasDerivedFrom`,
 `wasRevisionOf`, `wasAssociatedWith`, `wasAttributedTo`, `actedOnBehalfOf`,
-`hadPlan`, `startedAtTime`, `endedAtTime`, `generatedAtTime`, `label`) plus
-ExoHub-specific `exo:` terms (`exo:path`, `exo:assertion`, `exo:assertedBy`,
-`exo:evidence`, `exo:supersedes`, `exo:model`, `exo:version`,
-`exo:fromRecord`). `exo` embeds this context and never fetches it over the
-network, so validation and lineage work fully offline.
+`hadPlan`, `startedAtTime`, `endedAtTime`, `generatedAtTime`, `label`,
+`qualifiedUsage`, `Usage`, `qualifiedGeneration`, `Generation`, `entity`,
+`activity`, `hadRole`, `value`) plus ExoHub-specific `exo:` terms
+(`exo:path`, `exo:assertion`, `exo:assertedBy`, `exo:evidence`,
+`exo:supersedes`, `exo:model`, `exo:version`, `exo:fromRecord`,
+`exo:checksum`, `exo:minVersion`). `exo` embeds this context and never
+fetches it over the network, so validation and lineage work fully offline.
+
+The context is extended in place, never replaced: every new term keeps the
+same context IRI, so old records never need rewriting. A record that uses a
+term added after the context's first release carries `exo:minVersion`, the
+minimum `exo` version that understands every term the record uses (computed
+by the writer, not the writer's own version). `exo provenance validate`,
+`exo provenance show` and `exo bundle` refuse a record whose
+`exo:minVersion` is higher than the running `exo` with: "this record needs
+exo ≥ `<minVersion>`: run `exo upgrade`". A record that uses only the
+original v1 terms needs no `exo:minVersion`. Development builds read every
+record regardless of `exo:minVersion`.
 
 A record is a JSON-LD named graph with a required envelope:
 
@@ -73,6 +86,9 @@ the id of the commit it lives in and because paths change on rename:
 | Named collection | `urn:exohub:collection:sha256:<hex digest>` |
 | Record | `urn:exohub:record:<UUIDv7>` |
 | Activity | `urn:exohub:activity:<UUIDv7>` |
+| Qualified usage node | `urn:exohub:usage:<UUIDv7>` |
+| Qualified generation node | `urn:exohub:generation:<UUIDv7>` |
+| Parameter or result value | `urn:exohub:value:sha256:<hex digest of role and value>` |
 | Person | `urn:exohub:agent:person:<unix id>` |
 | Software or AI agent | `urn:exohub:agent:software:<name>` |
 | External resource | its own IRI (URL, DOI, `s3://` URI) |
@@ -160,6 +176,234 @@ Note the annex key's extension: git-annex only keeps a file's extension in
 its key when it is 4 characters or fewer (its default
 `annex.maxextensionlength`), so `results/de.parquet` would produce a key
 with no extension at all — `results/de.tsv` keeps `.tsv`.
+
+### Roles, parameter values, environment and step code pointers
+
+Beyond the plain `used`/`wasGeneratedBy`/`hadPlan` shortcuts above, a record
+can state the **role** an entity played, a step's **parameters** and
+non-file **results**, its **software environment**, and a traceable
+**pointer to the step's code**. `exo provenance add` sets all of these with
+`--role`, `--param`, `--output-role`, `--result`, `--environment`,
+`--plan-repository`/`--plan-commit`/`--plan-url` and `--source`; this
+section explains the record shape they produce, piece by piece, before a
+worked example with the actual flags.
+
+A role is a `qualifiedUsage`/`qualifiedGeneration` node (`Usage`/
+`Generation`) alongside the required `used`/`wasGeneratedBy` shortcut, so
+tools that only read the shortcuts still see every edge:
+
+<!-- excerpt -->
+```json
+{
+  "@id": "urn:exohub:activity:01a13bc5-5a2a-72f8-983f-8f5c1d457563",
+  "@type": "Activity",
+  "used": ["urn:exohub:annex:SHA256E-s4--...csv"],
+  "qualifiedUsage": "urn:exohub:usage:01a13bc5-5a2a-7a00-8000-000000000001",
+  "hadPlan": "urn:exohub:git:blob:aec92917403fe09d962fb43a3bcef0ae21f4c217",
+  "wasAssociatedWith": "urn:exohub:agent:person:alice"
+},
+{
+  "@id": "urn:exohub:usage:01a13bc5-5a2a-7a00-8000-000000000001",
+  "@type": "Usage",
+  "entity": "urn:exohub:annex:SHA256E-s4--...csv",
+  "hadRole": "counts"
+}
+```
+
+A parameter or non-file result is a **value entity** (`Entity` with `value`,
+keeping its JSON type), used or generated through a qualified node whose
+`hadRole` is the parameter or result name. Its `@id` is deterministic
+(`urn:exohub:value:sha256:<hex digest of the role and the value's canonical
+JSON>`), so identical parameters dedupe in the compiled graph:
+
+<!-- excerpt -->
+```json
+{
+  "@id": "urn:exohub:value:sha256:b85496f56c91343d2377a091769ba1baa99b1b094a568d3a0e1d602c2da4af9f",
+  "@type": "Entity",
+  "value": 0.05
+}
+```
+
+used with `qualifiedUsage`/`hadRole` `"alpha"` on the activity, or
+`qualifiedGeneration`/`hadRole` on an entity for a result such as
+`accuracy`.
+
+A software environment is an entity used with `hadRole: "environment"`.
+Containers should be identified by digest (`docker://ghcr.io/org/tool@sha256:
+...`) — a tag-only reference (`docker://ghcr.io/org/tool:latest`) validates
+but warns that it is not reproducible. A conda environment is identified by
+a content id or the engine's environment hash.
+
+A step's code is a pointer, never a copy: the `hadPlan` entity's best
+reference, in order, is a content id already in the repository, `exo:
+repository` + `exo:commit` for a git repository, the local checkout's
+remote and commit (warning when dirty), another addressable URL, or being
+inside the environment container. `exo:checksum` alone (no other reference)
+validates but warns "pipeline code not traceable":
+
+<!-- excerpt -->
+```json
+{
+  "@id": "urn:exohub:git:blob:aec92917403fe09d962fb43a3bcef0ae21f4c217",
+  "@type": "Entity",
+  "label": "normalize.R",
+  "exo:checksum": "sha256:1b2c3d4e..."
+}
+```
+
+Finally, an activity describing a run recorded elsewhere (a workflow
+engine's lineage, an RO-Crate) states `hadPrimarySource` pointing at an
+entity identifying that run, for example `{"@id": "lid://0d1f..."}`;
+`exo provenance add --source <iri>` sets it.
+
+Because these terms were added after the context's first release, a record
+using any of them must carry `exo:minVersion`:
+
+<!-- excerpt -->
+```json
+{ "exo:minVersion": "0.143.0" }
+```
+
+Putting it together, `--role`, `--param`, `--output-role`, `--result` and
+`--environment` are repeatable, and value names/values are typed
+(`name=value`, parsed as JSON when it is one, else kept as a string). A
+plan pointer without a local `--plan` path is synthesized from
+`--plan-repository`/`--plan-commit` (an `@<commit>` suffix on the
+repository IRI, the same shape as a container digest reference) or from an
+addressable `--plan-url`; `--plan-url` otherwise becomes the pointer's
+`label` (the script or process name):
+
+```sh
+exo provenance add \
+  --generated results/de.tsv \
+  --role counts=data/counts.csv \
+  --param alpha=0.05 \
+  --param method=DESeq2 \
+  --output-role summary=results/de.tsv \
+  --result accuracy=0.93 \
+  --environment docker://ghcr.io/org/tool@sha256:ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34 \
+  --plan-repository https://github.com/org/pipeline \
+  --plan-commit 4f2a9c1 \
+  --plan-url main.nf \
+  --source lid://0d1f3a5c-nextflow-run \
+  --agent person:alice
+```
+
+The exact output of the same command with `--dry-run`:
+
+```json
+{
+  "@context": "https://genentech.github.io/exohub/ns/provenance/v1.jsonld",
+  "@id": "urn:exohub:record:01a1c1d1-9b3f-75af-8af8-8c209b46e76f",
+  "exo:assertion": "asserted",
+  "exo:assertedBy": "urn:exohub:agent:person:alice",
+  "generatedAtTime": "2026-11-09T19:38:21Z",
+  "exo:minVersion": "0.143.0",
+  "@graph": [
+    {
+      "@id": "https://github.com/org/pipeline@4f2a9c1",
+      "@type": "Entity",
+      "exo:commit": "4f2a9c1",
+      "exo:repository": "https://github.com/org/pipeline",
+      "label": "main.nf"
+    },
+    {
+      "@id": "urn:exohub:activity:01a1c1d1-9b36-7d9a-94f4-77c9f622317d",
+      "@type": "Activity",
+      "hadPlan": "https://github.com/org/pipeline@4f2a9c1",
+      "hadPrimarySource": "lid://0d1f3a5c-nextflow-run",
+      "qualifiedUsage": [
+        "urn:exohub:usage:01a1c1d1-9b36-7cd8-96a4-174189d73ca6",
+        "urn:exohub:usage:01a1c1d1-9b36-7d5b-b550-ff2a5620fc5a",
+        "urn:exohub:usage:01a1c1d1-9b36-7d7a-b35f-4b7c983af2b9",
+        "urn:exohub:usage:01a1c1d1-9b36-7d83-9c19-e833745a2b59"
+      ],
+      "used": [
+        "docker://ghcr.io/org/tool@sha256:ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34",
+        "urn:exohub:git:blob:9739ac92cdc6875dc71f5b8c82c2b3a922919f4e",
+        "urn:exohub:value:sha256:b85496f56c91343d2377a091769ba1baa99b1b094a568d3a0e1d602c2da4af9f",
+        "urn:exohub:value:sha256:c70cf50bdf2c19f0be149fa1903d036cde3d02d9510d264afe78879cc49c7fd6"
+      ],
+      "wasAssociatedWith": "urn:exohub:agent:person:alice"
+    },
+    {
+      "@id": "urn:exohub:agent:person:alice",
+      "@type": "Person"
+    },
+    {
+      "@id": "urn:exohub:generation:01a1c1d1-9b3f-7525-a15f-64bc0f7fd25b",
+      "@type": "Generation",
+      "activity": "urn:exohub:activity:01a1c1d1-9b36-7d9a-94f4-77c9f622317d",
+      "hadRole": "summary"
+    },
+    {
+      "@id": "urn:exohub:generation:01a1c1d1-9b3f-759d-9d62-30d3d5f56d25",
+      "@type": "Generation",
+      "activity": "urn:exohub:activity:01a1c1d1-9b36-7d9a-94f4-77c9f622317d",
+      "hadRole": "accuracy"
+    },
+    {
+      "@id": "urn:exohub:git:blob:7eb7298e2061f07378d4621d61e6c976dc5676bc",
+      "@type": "Entity",
+      "exo:path": "results/de.tsv",
+      "qualifiedGeneration": "urn:exohub:generation:01a1c1d1-9b3f-7525-a15f-64bc0f7fd25b",
+      "wasGeneratedBy": "urn:exohub:activity:01a1c1d1-9b36-7d9a-94f4-77c9f622317d"
+    },
+    {
+      "@id": "urn:exohub:git:blob:9739ac92cdc6875dc71f5b8c82c2b3a922919f4e",
+      "@type": "Entity",
+      "exo:path": "data/counts.csv"
+    },
+    {
+      "@id": "urn:exohub:usage:01a1c1d1-9b36-7cd8-96a4-174189d73ca6",
+      "@type": "Usage",
+      "entity": "urn:exohub:git:blob:9739ac92cdc6875dc71f5b8c82c2b3a922919f4e",
+      "hadRole": "counts"
+    },
+    {
+      "@id": "urn:exohub:usage:01a1c1d1-9b36-7d5b-b550-ff2a5620fc5a",
+      "@type": "Usage",
+      "entity": "urn:exohub:value:sha256:b85496f56c91343d2377a091769ba1baa99b1b094a568d3a0e1d602c2da4af9f",
+      "hadRole": "alpha"
+    },
+    {
+      "@id": "urn:exohub:usage:01a1c1d1-9b36-7d7a-b35f-4b7c983af2b9",
+      "@type": "Usage",
+      "entity": "urn:exohub:value:sha256:c70cf50bdf2c19f0be149fa1903d036cde3d02d9510d264afe78879cc49c7fd6",
+      "hadRole": "method"
+    },
+    {
+      "@id": "urn:exohub:usage:01a1c1d1-9b36-7d83-9c19-e833745a2b59",
+      "@type": "Usage",
+      "entity": "docker://ghcr.io/org/tool@sha256:ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34ab12cd34",
+      "hadRole": "environment"
+    },
+    {
+      "@id": "urn:exohub:value:sha256:b85496f56c91343d2377a091769ba1baa99b1b094a568d3a0e1d602c2da4af9f",
+      "@type": "Entity",
+      "value": 0.05
+    },
+    {
+      "@id": "urn:exohub:value:sha256:c70cf50bdf2c19f0be149fa1903d036cde3d02d9510d264afe78879cc49c7fd6",
+      "@type": "Entity",
+      "value": "DESeq2"
+    },
+    {
+      "@id": "urn:exohub:value:sha256:c9a4485a736a7c229ad5ee84b992b335a718b43d4d968a91587780b4e18d56d0",
+      "@type": "Entity",
+      "qualifiedGeneration": "urn:exohub:generation:01a1c1d1-9b3f-759d-9d62-30d3d5f56d25",
+      "value": 0.93,
+      "wasGeneratedBy": "urn:exohub:activity:01a1c1d1-9b36-7d9a-94f4-77c9f622317d"
+    }
+  ]
+}
+```
+
+Dropping `--dry-run` writes this exact JSON to `.exohub/provenance/` and
+stages it. `exo provenance show results/de.tsv` then displays the role,
+parameter, environment, result, plan pointer and source fields alongside
+the plain shortcuts.
 
 ### Re-running add
 
@@ -808,6 +1052,78 @@ context, capped at `--max-commits` (default `10`, `0` = unlimited) — this is
 not a provenance claim, just git history. `--json` emits the lineage
 subgraph as JSON-LD, like every other `exo provenance` command's `--json`
 output, to stdout.
+
+## Importing from a workflow engine
+
+```sh
+exo provenance import <format> [<run>]
+```
+
+reads one run a workflow engine already recorded and writes ExoHub
+provenance records for it, with `exo:assertion` `imported`, staged the same
+way as `exo provenance add`. `<format>` selects the source format;
+`nextflow` ([below](#nextflow)) is the format this change ships. When
+`<run>` is omitted, the latest run in the format's default location is
+imported.
+
+Each run file is resolved to repository content the same way `exo
+provenance add` resolves a path — an annex key or git blob id — and
+verified against the size and checksum the engine recorded, when exo can
+compute that checksum algorithm (`sha256`, `md5`); otherwise by size only.
+A file outside the repository, or whose content no longer matches, is
+referenced by an external IRI and reported as unmatched; an untracked
+repository file is reported with a hint to run `exo add` first. A summary
+of activities, and of matched (verified by checksum or by size only),
+external and unmatched inputs/outputs is printed after the run; `--json`
+includes each matched file's `verified: "checksum"|"size"`.
+
+By default one activity covers the whole run (its overall inputs, outputs,
+parameters and environments); `--tasks` writes one activity per task
+instead, with intermediate files that aren't repository files represented
+as path-less entities.
+
+Importing a run that was already imported writes nothing and exits zero,
+naming the existing record; `--supersedes <record-id>` writes new records
+that supersede it instead. `--keep-source` commits a copy of the run's
+source lineage documents under `.exohub/provenance/sources/` as git blobs,
+referenced from the record's `exo:evidence`. `--store` points at the
+format's lineage store when it isn't in its default location. `--dry-run`
+and `--json` work the same as on `exo provenance add`.
+
+This command requires an exo login token to identify the importing person
+(run `exo login`); unlike `add`, it has no `--agent` flag.
+
+### Nextflow
+
+```sh
+exo provenance import nextflow [<run>]
+```
+
+reads [Nextflow's lineage
+store](https://www.nextflow.io/docs/latest/lineage.html) directly —
+the `.lineage` directory Nextflow writes next to where a pipeline was
+launched — without needing the `nextflow` binary. Enable it once per
+pipeline run with `nextflow run ... -lineage` (or `lineage.enabled = true`
+in `nextflow.config`); after the run, `.lineage/` holds the run's
+`WorkflowRun`, `TaskRun` and file/output records.
+
+`exo provenance import nextflow` checks the store's model version and
+refuses any version but `lineage/v1beta1`, failing clearly and writing
+nothing otherwise. A run is selected by its `lid://` identifier or its
+run name (for example `exo provenance import nextflow happy_curie`); with
+neither, the most recent run in the store is imported. `--store <dir>`
+points at a lineage store that isn't at `.lineage` under the current
+directory.
+
+Each file Nextflow recorded is matched against the repository the same
+way every format is (above): a workflow input or output under the
+repository root resolves to its content id, verified by checksum when
+possible or by size otherwise; a path outside the repository (for example
+a reference file read from `s3://` or an absolute path elsewhere on disk)
+is recorded as an external input and listed in the summary, never treated
+as missing. `--tasks` writes one activity per Nextflow process instead of
+one for the whole run; `--keep-source` commits the run's lineage JSON
+under `.exohub/provenance/sources/` as evidence.
 
 ## Agent workflow
 

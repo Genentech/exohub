@@ -3,7 +3,7 @@ title: "exo safe"
 description: "Manage credentials in ExoSafe"
 ---
 
-Full `exo safe --help` output, generated from exo-cli v0.140.2.
+Full `exo safe --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Manage SSH keys and git tokens in your personal ExoSafe credential store.

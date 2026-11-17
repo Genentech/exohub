@@ -1,0 +1,19 @@
+{
+  "Entity": "http://www.w3.org/ns/prov#Entity",
+  "Activity": "http://www.w3.org/ns/prov#Activity",
+  "Usage": "http://www.w3.org/ns/prov#Usage",
+  "Generation": "http://www.w3.org/ns/prov#Generation",
+  "Person": "http://www.w3.org/ns/prov#Person",
+  "wasGeneratedBy": "http://www.w3.org/ns/prov#wasGeneratedBy",
+  "qualifiedGeneration": "http://www.w3.org/ns/prov#qualifiedGeneration",
+  "qualifiedUsage": "http://www.w3.org/ns/prov#qualifiedUsage",
+  "activity": "http://www.w3.org/ns/prov#activity",
+  "entity": "http://www.w3.org/ns/prov#entity",
+  "hadRole": "http://www.w3.org/ns/prov#hadRole",
+  "used": "http://www.w3.org/ns/prov#used",
+  "hadPlan": "http://www.w3.org/ns/prov#hadPlan",
+  "wasAssociatedWith": "http://www.w3.org/ns/prov#wasAssociatedWith",
+  "label": "http://www.w3.org/2000/01/rdf-schema#label",
+  "exo:path": "https://genentech.github.io/exohub/ns/provenance#path",
+  "exo:checksum": "https://genentech.github.io/exohub/ns/provenance#checksum"
+}

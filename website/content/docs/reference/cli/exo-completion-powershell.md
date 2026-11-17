@@ -3,7 +3,7 @@ title: "exo completion powershell"
 description: "Generate the autocompletion script for powershell"
 ---
 
-Full `exo completion powershell --help` output, generated from exo-cli v0.140.2.
+Full `exo completion powershell --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Generate the autocompletion script for powershell.

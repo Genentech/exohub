@@ -235,6 +235,9 @@ func handleInitRemote() {
 	if v, ok := config["group"]; ok && v != "" {
 		writeLine("CONFIG group=" + v)
 	}
+	if v, ok := config["grants_account_id"]; ok && v != "" {
+		writeLine("CONFIG grants_account_id=" + v)
+	}
 	writeLine("INITREMOTE-SUCCESS")
 }
 
@@ -250,7 +253,11 @@ func fetchGrantsCredentials(s3url string, permission ...string) error {
 	if len(permission) > 0 && permission[0] != "" {
 		perm = permission[0]
 	}
-	cmd := exec.Command(credHelperBin, "--s3url", s3url, "--permission", perm)
+	args := []string{"--s3url", s3url, "--permission", perm}
+	if accountID := configuredGrantsAccountID(); accountID != "" {
+		args = append(args, "--account-id", accountID)
+	}
+	cmd := exec.Command(credHelperBin, args...)
 	var outBuf, errBuf bytes.Buffer
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
@@ -304,6 +311,9 @@ func fetchBaseCredentials(s3url, group string) error {
 	args := []string{"--s3url", s3url, "--grants=false"}
 	if group != "" {
 		args = append(args, "--group", group)
+	}
+	if accountID := configuredGrantsAccountID(); accountID != "" {
+		args = append(args, "--account-id", accountID)
 	}
 	cmd := exec.Command(credHelperBin, args...)
 	var outBuf, errBuf bytes.Buffer
@@ -365,6 +375,17 @@ func configuredGroup() string {
 		return g
 	}
 	return getConfigFromAnnex("group")
+}
+
+// configuredGrantsAccountID returns the remote's grants_account_id config
+// (the Access Grants account to request credentials from), falling back to
+// exo-credential-helper's own resolution (EXOHUB_GRANTS_ACCOUNT_ID, then the
+// build default) when unset.
+func configuredGrantsAccountID() string {
+	if v := config["grants_account_id"]; v != "" {
+		return v
+	}
+	return getConfigFromAnnex("grants_account_id")
 }
 
 // isCredentialError checks if an error message indicates an AWS credential issue.
@@ -749,7 +770,7 @@ func getContentIdentifier(bucket, key string) (string, error) {
 	if r.code != 0 {
 		return "", fmt.Errorf("s5cmd ls failed: %s", sanitizeMsg(string(r.stderr)))
 	}
-	
+
 	objects, err := parseS5cmdJSON(r.stdout)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse s5cmd output: %v", err)
@@ -757,7 +778,7 @@ func getContentIdentifier(bucket, key string) (string, error) {
 	if len(objects) == 0 {
 		return "", fmt.Errorf("object not found")
 	}
-	
+
 	obj := objects[0]
 	return formatContentIdentifier(obj.ETag, obj.Size, obj.LastModified), nil
 }
@@ -772,16 +793,16 @@ func verifyExpectedContent(bucket, key, expectedCID string) error {
 		}
 		return nil
 	}
-	
+
 	currentCID, err := getContentIdentifier(bucket, key)
 	if err != nil {
 		return fmt.Errorf("failed to get current content: %v", err)
 	}
-	
+
 	if currentCID != expectedCID {
 		return fmt.Errorf("content mismatch: expected %s, got %s", expectedCID, currentCID)
 	}
-	
+
 	return nil
 }
 
@@ -801,7 +822,7 @@ func handleListImportableContents() {
 		writeLine("END")
 		return
 	}
-	
+
 	// Build S3 path - include export ref if set
 	s3Path := "s3://" + bucket
 	ref := strings.Trim(getExportRef(), "/")
@@ -812,9 +833,9 @@ func handleListImportableContents() {
 		s3Path += "/" + ref
 	}
 	s3Path += "/"
-	
+
 	debug("Listing importable contents from: " + s3Path)
-	
+
 	// Use s5cmd ls --json to get all objects recursively
 	r := runS5cmd(s5cmdBin, "ls", "--json", s3Path)
 	if r.code != 0 {
@@ -823,14 +844,14 @@ func handleListImportableContents() {
 		writeLine("END")
 		return
 	}
-	
+
 	objects, err := parseS5cmdJSON(r.stdout)
 	if err != nil {
 		debug("Failed to parse s5cmd output: " + err.Error())
 		writeLine("END")
 		return
 	}
-	
+
 	// Emit CONTENT and CONTENTIDENTIFIER for each object
 	basePrefix := bucket
 	if prefix != "" {
@@ -840,7 +861,7 @@ func handleListImportableContents() {
 		basePrefix += "/" + ref
 	}
 	basePrefix += "/"
-	
+
 	for _, obj := range objects {
 		// Remove the base prefix to get relative name
 		name := obj.Key
@@ -851,12 +872,12 @@ func handleListImportableContents() {
 		if name == "" || strings.HasSuffix(name, "/") {
 			continue
 		}
-		
+
 		cid := formatContentIdentifier(obj.ETag, obj.Size, obj.LastModified)
 		writeLine(fmt.Sprintf("CONTENT %d %s", obj.Size, name))
 		writeLine("CONTENTIDENTIFIER " + cid)
 	}
-	
+
 	writeLine("END")
 }
 
@@ -892,23 +913,23 @@ func handleRetrieveExportExpected(filePath string) {
 		writeLine("RETRIEVE-FAILURE missing location")
 		return
 	}
-	
+
 	bucket, prefix, err := ensureCfg()
 	if err != nil {
 		writeLine("RETRIEVE-FAILURE " + err.Error())
 		return
 	}
-	
+
 	obj := s3ExportKey(currentLocation, prefix)
 	expected := expectedContent[currentLocation]
-	
+
 	// Verify expected content
 	if err := verifyExpectedContent(bucket, obj, expected); err != nil {
 		writeLine("RETRIEVE-FAILURE " + err.Error())
 		resetLocationState()
 		return
 	}
-	
+
 	// Download the file
 	_ = os.MkdirAll(filepath.Dir(filePath), 0o755)
 	r := runS5cmd(s5cmdBin, "cp", fmt.Sprintf("s3://%s/%s", bucket, obj), filePath)
@@ -918,7 +939,7 @@ func handleRetrieveExportExpected(filePath string) {
 		writeLine("RETRIEVE-SUCCESS")
 		return
 	}
-	
+
 	msg := sanitizeMsg(string(r.stderr))
 	if msg == "" {
 		msg = fmt.Sprintf("s5cmd cp failed (exit %d)", r.code)
@@ -932,30 +953,30 @@ func handleStoreExportExpected(key, filePath string) {
 		writeLine("STORE-FAILURE " + key + " missing location")
 		return
 	}
-	
+
 	bucket, prefix, err := ensureCfg()
 	if err != nil {
 		writeLine("STORE-FAILURE " + key + " " + err.Error())
 		return
 	}
-	
+
 	obj := s3ExportKey(currentLocation, prefix)
 	expected := expectedContent[currentLocation]
-	
+
 	// Verify expected content before storing
 	if err := verifyExpectedContent(bucket, obj, expected); err != nil {
 		writeLine("STORE-FAILURE " + key + " " + err.Error())
 		resetLocationState()
 		return
 	}
-	
+
 	// Check local file exists
 	if fi, err := os.Stat(filePath); err != nil || fi.IsDir() {
 		writeLine("STORE-FAILURE " + key + " local file not found")
 		resetLocationState()
 		return
 	}
-	
+
 	// Upload the file
 	r := runS5cmd(s5cmdBin, "cp", filePath, fmt.Sprintf("s3://%s/%s", bucket, obj))
 	if r.code != 0 {
@@ -967,7 +988,7 @@ func handleStoreExportExpected(key, filePath string) {
 		resetLocationState()
 		return
 	}
-	
+
 	// Get the new content identifier
 	newCID, err := getContentIdentifier(bucket, obj)
 	if err != nil {
@@ -976,7 +997,7 @@ func handleStoreExportExpected(key, filePath string) {
 		resetLocationState()
 		return
 	}
-	
+
 	writeLine("STORE-SUCCESS " + key + " " + newCID)
 	resetLocationState()
 }
@@ -987,24 +1008,24 @@ func handleCheckPresentExportExpected(key string) {
 		writeLine("CHECKPRESENT-UNKNOWN " + key + " missing location")
 		return
 	}
-	
+
 	bucket, prefix, err := ensureCfg()
 	if err != nil {
 		writeLine("CHECKPRESENT-UNKNOWN " + key + " " + err.Error())
 		resetLocationState()
 		return
 	}
-	
+
 	obj := s3ExportKey(currentLocation, prefix)
 	expected := expectedContent[currentLocation]
-	
+
 	// Verify expected content
 	if err := verifyExpectedContent(bucket, obj, expected); err != nil {
 		writeLine("CHECKPRESENT-FAILURE " + key)
 		resetLocationState()
 		return
 	}
-	
+
 	writeLine("CHECKPRESENT-SUCCESS " + key)
 	resetLocationState()
 }
@@ -1015,33 +1036,33 @@ func handleRemoveExportExpected(key string) {
 		writeLine("REMOVE-FAILURE " + key + " missing location")
 		return
 	}
-	
+
 	bucket, prefix, err := ensureCfg()
 	if err != nil {
 		writeLine("REMOVE-FAILURE " + key + " " + err.Error())
 		resetLocationState()
 		return
 	}
-	
+
 	obj := s3ExportKey(currentLocation, prefix)
 	expected := expectedContent[currentLocation]
-	
+
 	// Verify expected content before removing
 	if err := verifyExpectedContent(bucket, obj, expected); err != nil {
 		writeLine("REMOVE-FAILURE " + key + " " + err.Error())
 		resetLocationState()
 		return
 	}
-	
+
 	// Remove the object
 	r := runS5cmd(s5cmdBin, "rm", fmt.Sprintf("s3://%s/%s", bucket, obj))
 	resetLocationState()
-	
+
 	if r.code == 0 {
 		writeLine("REMOVE-SUCCESS " + key)
 		return
 	}
-	
+
 	msg := sanitizeMsg(string(r.stderr))
 	if msg == "" {
 		msg = fmt.Sprintf("s5cmd rm failed (exit %d)", r.code)
@@ -1056,7 +1077,7 @@ func handleRemoveExportDirectoryWhenEmpty(directory string) {
 		writeLine("REMOVEEXPORTDIRECTORY-FAILURE")
 		return
 	}
-	
+
 	// Build S3 path for directory
 	ref := strings.Trim(getExportRef(), "/")
 	dirPath := directory
@@ -1064,11 +1085,11 @@ func handleRemoveExportDirectoryWhenEmpty(directory string) {
 		dirPath = ref + "/" + directory
 	}
 	obj := s3Key(dirPath, prefix)
-	
+
 	// Check if directory is empty by listing objects under it
 	s3Path := fmt.Sprintf("s3://%s/%s/", bucket, strings.TrimRight(obj, "/"))
 	_ = runS5cmd(s5cmdBin, "ls", s3Path)
-	
+
 	// If ls returns non-zero or no output, directory is empty or doesn't exist
 	// In S3, directories don't really exist, so we just report success
 	writeLine("REMOVEEXPORTDIRECTORY-SUCCESS")
@@ -1131,6 +1152,7 @@ func main() {
 			writeLine("CONFIG s3url")
 			writeLine("CONFIG grants")
 			writeLine("CONFIG group")
+			writeLine("CONFIG grants_account_id")
 			writeLine("CONFIGEND")
 			continue
 		case line == "INFO":

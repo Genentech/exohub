@@ -562,3 +562,79 @@ func TestCompileBundleWithVerify_MismatchFails(t *testing.T) {
 		t.Fatalf("HasErrors(): %+v", report.Findings)
 	}
 }
+
+// TestCompileBundleForVersion_NeedsUpgradeWritesNothing covers spec "Bundle
+// does not compile a partial graph": a record whose exo:minVersion exceeds
+// the running version aborts compilation like any other validation error,
+// so CompileBundleForVersion returns a nil CompileResult and a Report with
+// errors, not a partial document.
+func TestCompileBundleForVersion_NeedsUpgradeWritesNothing(t *testing.T) {
+	root, run := stateTestRepo(t, false)
+	writeRepoFile(t, root, "a.txt", "hello\n")
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+	entityID := GitBlobEntityID(mustBlobID(t, run, "a.txt"))
+
+	rec := fmt.Sprintf(`{
+  "@context": %q,
+  "@id": %q,
+  "exo:assertion": "recorded",
+  "exo:assertedBy": "urn:exohub:agent:person:alice",
+  "generatedAtTime": "2026-10-14T10:00:00Z",
+  "exo:minVersion": "0.999.0",
+  "@graph": [{"@id": %q, "@type": "Entity"}]
+}`, ContextIRI, NewRecordID(), entityID)
+	writeRepoFile(t, root, RecordDir+"/a.jsonld", rec)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "add record")
+
+	result, report, err := CompileBundleForVersion(NewRefReader(root, "HEAD"), []string{"a.txt"}, false, "0.140.0")
+	if err != nil {
+		t.Fatalf("CompileBundleForVersion() error = %v", err)
+	}
+	if !report.HasErrors() {
+		t.Fatal("HasErrors() = false, want true")
+	}
+	if !hasFinding(report, "needs-upgrade", RecordDir+"/a.jsonld") {
+		t.Errorf("findings = %+v, want needs-upgrade", report.Findings)
+	}
+	if result != nil {
+		t.Errorf("result = %+v, want nil (bundle must not compile a partial graph)", result)
+	}
+}
+
+// TestCompileBundle_NoVersionSkipsMinVersionCheck proves CompileBundle (no
+// version parameter) keeps its existing unversioned behavior: a record
+// requiring a newer exo does not fail compilation when no running version
+// is supplied.
+func TestCompileBundle_NoVersionSkipsMinVersionCheck(t *testing.T) {
+	root, run := stateTestRepo(t, false)
+	writeRepoFile(t, root, "a.txt", "hello\n")
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+	entityID := GitBlobEntityID(mustBlobID(t, run, "a.txt"))
+
+	rec := fmt.Sprintf(`{
+  "@context": %q,
+  "@id": %q,
+  "exo:assertion": "recorded",
+  "exo:assertedBy": "urn:exohub:agent:person:alice",
+  "generatedAtTime": "2026-10-14T10:00:00Z",
+  "exo:minVersion": "0.999.0",
+  "@graph": [{"@id": %q, "@type": "Entity"}]
+}`, ContextIRI, NewRecordID(), entityID)
+	writeRepoFile(t, root, RecordDir+"/a.jsonld", rec)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "add record")
+
+	result, report, err := CompileBundle(NewRefReader(root, "HEAD"), []string{"a.txt"})
+	if err != nil {
+		t.Fatalf("CompileBundle() error = %v", err)
+	}
+	if report.HasErrors() {
+		t.Fatalf("HasErrors() = true, want false: %+v", report.Findings)
+	}
+	if result == nil || result.Document == nil {
+		t.Error("result.Document = nil, want a compiled document when no running version is supplied")
+	}
+}

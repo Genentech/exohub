@@ -73,6 +73,7 @@ exo mcp show sync
 | `get` | Download git-annex managed content for specific paths |
 | `doctor` | Run ExoHub client diagnostics: environment, auth, network, repo config, grants/S3 access, provenance |
 | `provenance_add` | Record PROV-O provenance for generated/derived files |
+| `provenance_import` | Import provenance a workflow engine already recorded (e.g. a Nextflow run) |
 | `provenance_show` | Show a path's recorded lineage from the repository's provenance records |
 | `provenance_validate` | Validate recorded provenance for schema conformance, dangling references, and coverage |
 | `info` | Show repository information: configured remotes, annex state, and storage statistics |
@@ -156,8 +157,10 @@ Use `info` to see configured remotes and their types, or `exo info` from the CLI
 ```
 1. provenance_add       → after generating/transforming files, before committing: what was generated, what it
                            was derived from or used, and who/what is responsible
-2. provenance_show      → see a path's recorded lineage from the repository directly
-3. provenance_validate  → before committing or publishing: catch schema errors, dangling references, or
+2. provenance_import    → instead of provenance_add, when a workflow engine (e.g. Nextflow) already recorded the
+                           run's lineage
+3. provenance_show      → see a path's recorded lineage from the repository directly
+4. provenance_validate  → before committing or publishing: catch schema errors, dangling references, or
                            missing coverage
 ```
 
@@ -252,8 +255,8 @@ Orchestrate the full publish workflow: sync content to storage remotes, generate
 |-----------|----------|-------------|
 | `repo_dir` | Yes | Path to the git repository |
 | `sync` | No | Array of remote names to sync in step 1; overrides auto-discovery when provided |
-| `ref` | No | Array of tags/commits to publish with the current routing (repeatable). Content and metadata come from each ref, while routing (remotes, `atlas_url`, `instance_url`) comes from the current checked-out `.exohub/remotes` — this is how an older tag whose own routing predates a migration gets published to the current catalog instead of a stale or missing target |
-| `force` | No | With `ref`, publish even if the ref's content-availability check finds fixable/lost content on the current remote(s) |
+| `ref` | No | Array of tags/commits to publish with the current routing (repeatable). Content and metadata come from each ref, while routing (remotes, `role`, `url`, `data_from`) comes from the current checked-out `.exohub/remotes` — this is how an older tag whose own routing predates a migration gets published to the current catalog instead of a stale or missing target |
+| `force` | No | Bypass the ref-to-remotes check and the source-repo guard (with `ref`, also skip the content-availability check); never bypasses tag immutability |
 
 **Prerequisites:** git-annex initialized. Remotes defined in `.exohub/remotes`.
 
@@ -302,6 +305,10 @@ Add a new storage remote to the repository. Creates an S3 or local remote for st
 | `rsyncurl` | No | Rsync URL or local path (required for `exospace`). Example: `rsync://host/path` |
 | `tracking_branch` | No | Tracking branch for export remotes (defaults to current branch) |
 | `grants` | No | Enable fine-grained S3 Access Grants permissions (default: `true`) |
+| `role` | No | `artifactdb` remotes only: `atlas` (default, publishes the bundle) or `instance` (publishes `.artifactdb/` into an ArtifactDB instance, never a git-annex special remote) |
+| `url` | No | `artifactdb` remotes only: the Atlas to publish to (`role: atlas`, optional) or the ArtifactDB instance endpoint (`role: instance`, required) |
+| `grants_account_id` | No | `artifactdb` remotes only: Access Grants account id to request credentials from for this remote |
+| `data_from` | No | `artifactdb` `role: instance` only: the `role: atlas` remote this instance delegates to (defaults to the repository's single atlas remote) |
 
 ### get
 
@@ -347,6 +354,15 @@ Unless `agent` is given explicitly, the record is attributed to this calling too
 | `no_derived_from` | No | Explicitly assert `generated` has no inputs (e.g. hand-authored files) |
 | `revision_of` | No | Paths/ids that `generated` is a revision of |
 | `plan` | No | Path to a plan/script/notebook document describing the activity |
+| `plan_repository` | No | Git repository URL hosting the plan's code (`exo:repository`) |
+| `plan_commit` | No | Commit of the plan's code in its repository (`exo:commit`) |
+| `plan_url` | No | The plan's addressable URL, or its script/process path within `plan_repository` (label); identifies the plan when `plan` is omitted |
+| `role` | No | `role=path` the entity played as an input of this activity (repeatable) |
+| `output_role` | No | `role=path` the role a `generated` entity played as an output of this activity (repeatable) |
+| `param` | No | `name=value` parameter used by this activity (repeatable); value is parsed as JSON when possible, else kept as a string |
+| `result` | No | `name=value` non-file result generated by this activity (repeatable); value is parsed as JSON when possible, else kept as a string |
+| `environment` | No | Path or IRI of the software environment used by this activity (repeatable), for example `docker://host/image@sha256:...` |
+| `source` | No | IRI of the run this activity was recorded from elsewhere (`hadPrimarySource`) |
 | `agent` | No | `person:<unix id>` or `software:<name>` asserting this record; defaults to `software:<this MCP client>` |
 | `on_behalf_of` | No | `person:<unix id>` the software agent acted on behalf of; defaults to the logged-in user when `agent` is a software agent |
 | `model` | No | Model identifier for a software agent (requires `agent software:<name>`) |
@@ -359,6 +375,25 @@ Unless `agent` is given explicitly, the record is attributed to this calling too
 | `dry_run` | No | Print the record that would be written without writing it |
 
 See [Provenance]({{< ref "provenance" >}}) for the full record format and agent-workflow recommendations.
+
+### provenance_import
+
+Import provenance a workflow engine already recorded (wraps `exo provenance import`): reads one run from a supported source format and writes ExoHub provenance records with `exo:assertion imported`, staged like records written by `provenance_add`. Each run file is resolved to repository content the same way `provenance_add` resolves a path, verified by checksum when possible, by size otherwise; a file outside the repository or whose content no longer matches is referenced by an external IRI. Importing a run that was already imported writes nothing and exits zero, reporting the existing record; pass `supersedes` to re-import on purpose. Requires an exo login token to identify the importing person (run `login` first).
+
+**Parameters:**
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `repo_dir` | Yes | Path to the git repository |
+| `format` | Yes | Import format adapter name, for example `nextflow` |
+| `run` | No | Run id/name to import (defaults to the latest run found in the format's default location) |
+| `store` | No | Location of the format's lineage store (format-specific; defaults to the format's usual location) |
+| `tasks` | No | Write one activity per task instead of one for the whole run |
+| `supersedes` | No | Record ids this import supersedes (repeatable); required to re-import an already-imported run |
+| `keep_source` | No | Commit a copy of the run's source lineage documents under `.exohub/provenance/sources/`, referenced as evidence |
+| `dry_run` | No | Print the records that would be written without writing them |
+
+See [Importing from a Workflow Engine]({{< ref "provenance#importing-from-a-workflow-engine" >}}) for the full command behavior.
 
 ### provenance_show
 

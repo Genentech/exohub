@@ -16,6 +16,7 @@ import (
 	"github.com/Genentech/exohub/go/exo/commands/login"
 	"github.com/Genentech/exohub/go/exo/configdir"
 	"github.com/Genentech/exohub/go/exo/internal/auth"
+	"github.com/Genentech/exohub/go/useragent"
 )
 
 const groupAuth = "Identity & Auth"
@@ -196,6 +197,7 @@ func checkAWSIdentity() CheckResult {
 	cfg, err := config.LoadDefaultConfig(ctx,
 		config.WithSharedConfigProfile(profile),
 		config.WithRegion(region),
+		config.WithAppID(useragent.AppID()),
 	)
 	if err != nil {
 		return fail(id, groupAuth,

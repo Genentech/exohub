@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -3273,4 +3274,229 @@ func TestRunBundle_IncrementalReemitsOnLineageChange(t *testing.T) {
 	if artifact.Lineage == nil || !artifact.Lineage.Covered {
 		t.Fatalf("artifact.Lineage = %+v, want a covered lineage object", artifact.Lineage)
 	}
+}
+
+// TestRunBundle_NeedsUpgradeFailsBeforeWriting covers spec "Readers refuse
+// records that need a newer exo" / "Bundle does not compile a partial
+// graph": exo bundle fails and writes nothing when a record's
+// exo:minVersion exceeds the running exo version.
+func TestRunBundle_NeedsUpgradeFailsBeforeWriting(t *testing.T) {
+	dir, run := setupBundleTestRepo(t)
+	os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hello\n"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	blobID := strings.TrimSpace(run("git", "rev-parse", "HEAD:a.txt"))
+	entityID := "urn:exohub:git:blob:" + blobID
+	recID := "018f8f3e-1a2b-7c3d-8e4f-5a6b7c8d9e0f"
+	record := fmt.Sprintf(`{
+  "@context": "https://genentech.github.io/exohub/ns/provenance/v1.jsonld",
+  "@id": "urn:exohub:record:%s",
+  "exo:assertion": "recorded",
+  "exo:assertedBy": "urn:exohub:agent:person:alice",
+  "generatedAtTime": "2026-10-14T10:00:00Z",
+  "exo:minVersion": "0.999.0",
+  "@graph": [{"@id": %q, "@type": "Entity"}]
+}`, recID, entityID)
+	os.MkdirAll(filepath.Join(dir, ".exohub", "provenance"), 0o755)
+	os.WriteFile(filepath.Join(dir, ".exohub", "provenance", "r.jsonld"), []byte(record), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "record")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	outputDir := filepath.Join(".exohub", "bundles", "out")
+	err := runBundle("", "", "default", outputDir, "", false, false, true, false, false, false, false, false, "0.140.0", nil)
+	if err == nil {
+		t.Fatal("runBundle() error = nil, want a needs-upgrade error")
+	}
+	if !strings.Contains(err.Error(), "0.999.0") {
+		t.Errorf("error = %q, want it to name exo:minVersion 0.999.0", err.Error())
+	}
+	if _, statErr := os.Stat(filepath.Join(outputDir, "bundle.json")); !os.IsNotExist(statErr) {
+		t.Error("bundle.json was written despite the needs-upgrade failure")
+	}
+}
+
+// TestRunBundle_IncrementalReemitsOnRoleChange covers tasks.md 4.3:
+// an incremental bundle re-emits an artifact whose lineage changes only
+// through a new design-D9 field (here, a qualified usage's role), even
+// though neither the artifact's own content nor its generating activity's
+// id changed.
+func TestRunBundle_IncrementalReemitsOnRoleChange(t *testing.T) {
+	dir, run := setupBundleTestRepo(t)
+	os.WriteFile(filepath.Join(dir, "input.csv"), []byte("input\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "output.csv"), []byte("output\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "other.txt"), []byte("first\n"), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "files")
+
+	inputID := provenance.GitBlobEntityID(strings.TrimSpace(run("git", "rev-parse", "HEAD:input.csv")))
+	outputID := provenance.GitBlobEntityID(strings.TrimSpace(run("git", "rev-parse", "HEAD:output.csv")))
+	actID := provenance.NewActivityID()
+
+	rec1 := fmt.Sprintf(`{
+  "@context": "https://genentech.github.io/exohub/ns/provenance/v1.jsonld",
+  "@id": %q,
+  "exo:assertion": "recorded",
+  "exo:assertedBy": "urn:exohub:agent:person:alice",
+  "generatedAtTime": "2026-10-14T10:00:00Z",
+  "@graph": [
+    {"@id": %q, "@type": "Entity"},
+    {"@id": %q, "@type": "Activity", "used": [%q]},
+    {"@id": %q, "@type": "Entity", "wasGeneratedBy": %q}
+  ]
+}`, provenance.NewRecordID(), inputID, actID, inputID, outputID, actID)
+	os.MkdirAll(filepath.Join(dir, ".exohub", "provenance"), 0o755)
+	os.WriteFile(filepath.Join(dir, ".exohub", "provenance", "r.jsonld"), []byte(rec1), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "v1: record")
+	v1 := strings.TrimSpace(run("git", "rev-parse", "HEAD"))
+
+	// v2: output.csv's content does not change, and the generating
+	// activity keeps the same id, but the record now qualifies the usage
+	// with a role. An unrelated file also changes, so the bundle has
+	// something else to diff for --from-ref.
+	os.WriteFile(filepath.Join(dir, "other.txt"), []byte("second\n"), 0o644)
+	usageID := provenance.NewUsageID()
+	rec2 := fmt.Sprintf(`{
+  "@context": "https://genentech.github.io/exohub/ns/provenance/v1.jsonld",
+  "@id": %q,
+  "exo:assertion": "recorded",
+  "exo:assertedBy": "urn:exohub:agent:person:alice",
+  "generatedAtTime": "2026-10-14T11:00:00Z",
+  "exo:minVersion": "0.143.0",
+  "@graph": [
+    {"@id": %q, "@type": "Entity"},
+    {"@id": %q, "@type": "Activity", "used": [%q], "qualifiedUsage": %q},
+    {"@id": %q, "@type": "Usage", "entity": %q, "hadRole": "primary"},
+    {"@id": %q, "@type": "Entity", "wasGeneratedBy": %q}
+  ]
+}`, provenance.NewRecordID(), inputID, actID, inputID, usageID, usageID, inputID, outputID, actID)
+	os.WriteFile(filepath.Join(dir, ".exohub", "provenance", "r2.jsonld"), []byte(rec2), 0o644)
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "v2: role + unrelated change")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	outputDir := filepath.Join(".exohub", "bundles", "out")
+	if err := runBundle("", v1, "default", outputDir, "", false, true, true, false, false, false, false, false, "0.0.0-dev", nil); err != nil {
+		t.Fatalf("runBundle() error = %v", err)
+	}
+
+	artifactData, err := os.ReadFile(filepath.Join(outputDir, "files", "output.csv.json"))
+	if err != nil {
+		t.Fatalf("output.csv.json not emitted despite its new role: %v", err)
+	}
+	var artifact Artifact
+	if err := json.Unmarshal(artifactData, &artifact); err != nil {
+		t.Fatalf("Unmarshal(files/output.csv.json) error = %v", err)
+	}
+	if artifact.Lineage == nil || len(artifact.Lineage.Inputs) != 1 || artifact.Lineage.Inputs[0].Role != "primary" {
+		t.Fatalf("artifact.Lineage.Inputs = %+v, want one input with role primary", artifact.Lineage)
+	}
+}
+
+// TestRunBundle_RefUsesRefTreeNotWorktree is the exo-cli#203 regression:
+// `exo bundle --ref <tag>` must emit exactly the ref's tree (paths AND
+// annex keys), never the current checkout's. The repo has a file modified
+// after the ref (data.bin: different content/key at v1 vs HEAD), a file
+// added after the ref (added.bin, absent at v1), and a file removed after
+// the ref (removed.bin, present at v1, gone by HEAD).
+func TestRunBundle_RefUsesRefTreeNotWorktree(t *testing.T) {
+	if _, err := exec.LookPath("git-annex"); err != nil {
+		t.Skip("git-annex not in PATH")
+	}
+
+	dir, run := setupBundleTestRepo(t)
+	run("git", "annex", "init", "testrepo")
+	// git-annex stores object files as 0444; make them writable before
+	// t.TempDir()'s cleanup removes the directory.
+	t.Cleanup(func() {
+		filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil
+			}
+			return os.Chmod(path, info.Mode()|0o600)
+		})
+	})
+
+	v1Key := func() string {
+		os.WriteFile(filepath.Join(dir, "data.bin"), []byte("v1 content"), 0o644)
+		run("git", "annex", "add", "data.bin")
+		os.WriteFile(filepath.Join(dir, "removed.bin"), []byte("removed content"), 0o644)
+		run("git", "annex", "add", "removed.bin")
+		run("git", "add", ".")
+		run("git", "commit", "-q", "-m", "v1")
+		run("git", "tag", "v1")
+		return strings.TrimSpace(run("git", "annex", "lookupkey", "data.bin"))
+	}()
+
+	if err := os.Remove(filepath.Join(dir, "data.bin")); err != nil {
+		t.Fatalf("remove data.bin: %v", err)
+	}
+	os.WriteFile(filepath.Join(dir, "data.bin"), []byte("v2 content, modified"), 0o644)
+	run("git", "annex", "add", "data.bin")
+	headKey := strings.TrimSpace(run("git", "annex", "lookupkey", "data.bin"))
+	if headKey == v1Key {
+		t.Fatal("test setup invalid: data.bin's key should differ between v1 and HEAD")
+	}
+	os.WriteFile(filepath.Join(dir, "added.bin"), []byte("added after v1"), 0o644)
+	run("git", "annex", "add", "added.bin")
+	run("git", "rm", "-q", "removed.bin")
+	run("git", "commit", "-q", "-m", "v2: modify data.bin, add added.bin, remove removed.bin")
+
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	outputDir := filepath.Join(".exohub", "bundles", "v1")
+	if err := runBundle("", "", "default", outputDir, "v1", false, false, true, false, false, false, false, false, "test", nil); err != nil {
+		t.Fatalf("runBundle(--ref v1) error = %v", err)
+	}
+
+	filesDir := filepath.Join(outputDir, "files")
+	entries, err := os.ReadDir(filesDir)
+	if err != nil {
+		t.Fatalf("ReadDir(%s) error = %v", filesDir, err)
+	}
+	var gotPaths []string
+	for _, e := range entries {
+		gotPaths = append(gotPaths, e.Name())
+	}
+	sort.Strings(gotPaths)
+	wantPaths := []string{"data.bin.json", "removed.bin.json"}
+	if !reflect.DeepEqual(gotPaths, wantPaths) {
+		t.Fatalf("bundle files = %v, want %v (added.bin must be absent, removed.bin must be present)", gotPaths, wantPaths)
+	}
+
+	dataArtifact := readArtifact(t, filepath.Join(filesDir, "data.bin.json"))
+	if dataArtifact.Key != v1Key {
+		t.Errorf("data.bin.json key = %q, want v1's key %q (got HEAD's key %q)", dataArtifact.Key, v1Key, headKey)
+	}
+	if dataArtifact.Path != "data.bin" {
+		t.Errorf("data.bin.json path = %q, want data.bin", dataArtifact.Path)
+	}
+
+	removedArtifact := readArtifact(t, filepath.Join(filesDir, "removed.bin.json"))
+	if removedArtifact.Path != "removed.bin" {
+		t.Errorf("removed.bin.json path = %q, want removed.bin", removedArtifact.Path)
+	}
+}
+
+func readArtifact(t *testing.T, path string) Artifact {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", path, err)
+	}
+	var artifact Artifact
+	if err := json.Unmarshal(data, &artifact); err != nil {
+		t.Fatalf("Unmarshal(%s) error = %v", path, err)
+	}
+	return artifact
 }

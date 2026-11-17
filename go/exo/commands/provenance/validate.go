@@ -3,6 +3,7 @@ package provenance
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -16,8 +17,10 @@ type validateOptions struct {
 	jsonOutput bool
 }
 
-// newValidateCommand returns `exo provenance validate` (design D7).
-func newValidateCommand() *cobra.Command {
+// newValidateCommand returns `exo provenance validate` (design D7). version
+// is the running exo version, used to refuse records whose exo:minVersion
+// is higher (design "Readers refuse records that need a newer exo").
+func newValidateCommand(version string) *cobra.Command {
 	var opts validateOptions
 
 	cmd := &cobra.Command{
@@ -32,7 +35,7 @@ content identifiers resolved from the index. --staged checks the index.
 command exits non-zero only when an error is found.`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runValidate(cmd, opts)
+			return runValidate(cmd, opts, version)
 		},
 	}
 
@@ -44,7 +47,7 @@ command exits non-zero only when an error is found.`,
 	return cmd
 }
 
-func runValidate(cmd *cobra.Command, opts validateOptions) error {
+func runValidate(cmd *cobra.Command, opts validateOptions, version string) error {
 	if opts.staged && opts.ref != "" {
 		return fmt.Errorf("--staged and --ref are mutually exclusive")
 	}
@@ -69,6 +72,10 @@ func runValidate(cmd *cobra.Command, opts validateOptions) error {
 		return err
 	}
 
+	if err := appendMinVersionFindings(reader, report, version); err != nil {
+		return err
+	}
+
 	cfg, err := reader.LoadConfig()
 	if err != nil {
 		return fmt.Errorf("load .exohub/config: %w", err)
@@ -88,6 +95,36 @@ func runValidate(cmd *cobra.Command, opts validateOptions) error {
 	if report.HasErrors() {
 		return fmt.Errorf("provenance validation failed")
 	}
+	return nil
+}
+
+// appendMinVersionFindings appends an error Finding for every record whose
+// exo:minVersion is refused by version (design "Readers refuse records
+// that need a newer exo"), then re-sorts report.Findings the same way
+// lib.Validate does (by Path, then Code).
+func appendMinVersionFindings(reader *lib.Reader, report *lib.Report, version string) error {
+	versions, err := lib.LoadRecordVersions(reader)
+	if err != nil {
+		return fmt.Errorf("load provenance record versions: %w", err)
+	}
+	for _, rv := range versions {
+		if lib.NeedsUpgrade(rv.MinVersion, version) {
+			report.Findings = append(report.Findings, lib.Finding{
+				Severity: lib.SeverityError,
+				Class:    lib.ClassProfile,
+				Code:     "needs-upgrade",
+				Path:     rv.Path,
+				Message:  lib.MinVersionMessage(rv.MinVersion),
+			})
+		}
+	}
+	sort.SliceStable(report.Findings, func(i, j int) bool {
+		a, b := report.Findings[i], report.Findings[j]
+		if a.Path != b.Path {
+			return a.Path < b.Path
+		}
+		return a.Code < b.Code
+	})
 	return nil
 }
 

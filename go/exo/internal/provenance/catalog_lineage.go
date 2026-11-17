@@ -1,15 +1,67 @@
 package provenance
 
 import (
+	"encoding/json"
 	"sort"
 	"strings"
 )
 
 // LineageRef is an id with the path it resolves to at the bundle's ref,
-// when known (design D16).
+// when known (design D16). Role is design D9's lineage.inputs[].role,
+// flattened from a qualified usage.
 type LineageRef struct {
 	ID   string `json:"id"`
 	Path string `json:"path,omitempty"`
+	Role string `json:"role,omitempty"`
+}
+
+// LineageValue is one entry of lineage.generated_by.parameters or
+// .results (design D9): a name and a value coerced through catalogValue so
+// an array or object never reaches the catalog's keyword index.
+type LineageValue struct {
+	Name  string `json:"name"`
+	Value any    `json:"value"`
+}
+
+// LineageEnvironment is one entry of lineage.generated_by.environment
+// (design D9): the software environment entity's kind ("container" or
+// "conda", from its label) and id.
+type LineageEnvironment struct {
+	Kind string `json:"kind"`
+	ID   string `json:"id"`
+}
+
+// LineagePlan is lineage.generated_by.plan (design D9): the plan entity's
+// id and path, plus its optional checksum, repository, commit and url
+// pointer fields.
+type LineagePlan struct {
+	ID         string `json:"id"`
+	Path       string `json:"path,omitempty"`
+	Checksum   string `json:"checksum,omitempty"`
+	Repository string `json:"repository,omitempty"`
+	Commit     string `json:"commit,omitempty"`
+	URL        string `json:"url,omitempty"`
+}
+
+// catalogValue coerces a provenance record's typed value into the shape
+// exo bundle writes to catalog documents (lineage.generated_by.parameters/
+// results, provenance.json entities[].value): a scalar (string, number,
+// boolean, nil) passes through typed, while an array or object is encoded
+// as its canonical JSON string, since ES indexes "value" as keyword+text
+// and rejects object values at index time (P1/!315 review). The record's
+// own provenance.jsonld keeps the original typed value; this only applies
+// to catalog documents.
+func catalogValue(v any) any {
+	switch v.(type) {
+	case []any, map[string]any:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return v
+		}
+		return string(b)
+	default:
+		return v
+	}
 }
 
 // LineageAgent is one entry of lineage.generated_by.agents (design D16):
@@ -23,13 +75,20 @@ type LineageAgent struct {
 	ActedOnBehalfOf []string `json:"acted_on_behalf_of,omitempty"`
 }
 
-// LineageActivity is lineage.generated_by (design D16).
+// LineageActivity is lineage.generated_by (design D16, D9). Source is the
+// hadPrimarySource IRI of the run this activity was imported from.
+// Parameters, Results and Environment are design D9's additive fields,
+// flattened from qualified usages and generations.
 type LineageActivity struct {
-	ID      string         `json:"id"`
-	Started string         `json:"started,omitempty"`
-	Ended   string         `json:"ended,omitempty"`
-	Plan    *LineageRef    `json:"plan,omitempty"`
-	Agents  []LineageAgent `json:"agents,omitempty"`
+	ID          string               `json:"id"`
+	Started     string               `json:"started,omitempty"`
+	Ended       string               `json:"ended,omitempty"`
+	Plan        *LineagePlan         `json:"plan,omitempty"`
+	Agents      []LineageAgent       `json:"agents,omitempty"`
+	Source      string               `json:"source,omitempty"`
+	Parameters  []LineageValue       `json:"parameters,omitempty"`
+	Results     []LineageValue       `json:"results,omitempty"`
+	Environment []LineageEnvironment `json:"environment,omitempty"`
 }
 
 // LineageCollectionEntry is one entry of lineage.collections (design D8):
@@ -112,6 +171,7 @@ func BuildArtifactLineage(doc *CompiledDocument, contentIDs, treeIDs map[string]
 			GeneratedAtTime: r.GeneratedAtTime,
 		}
 	}
+	generatedByAct := generatedEntitiesByActivity(doc.Graph)
 
 	lineageByID := map[string]*ArtifactLineage{}
 	var buildFor func(id string) *ArtifactLineage
@@ -127,10 +187,12 @@ func BuildArtifactLineage(doc *CompiledDocument, contentIDs, treeIDs map[string]
 		l := &ArtifactLineage{Covered: nodeCovered(node)}
 		lineageByID[id] = l // guard before recursing into related nodes
 
+		var quals *activityQualifications
 		if actID := singleRef(node["wasGeneratedBy"]); actID != "" {
-			l.GeneratedBy = buildActivity(nodeByID, actID)
+			quals = classifyQualifiedUsage(nodeByID, actID)
+			l.GeneratedBy = buildActivity(nodeByID, actID, quals, generatedByAct)
 		}
-		l.Inputs = buildInputs(nodeByID, node, l.GeneratedBy)
+		l.Inputs = buildInputs(nodeByID, node, l.GeneratedBy, quals)
 		l.RevisionOf = sortedRefs(node["wasRevisionOf"])
 		l.AttributedTo = sortedRefs(node["wasAttributedTo"])
 		l.Records = recordsFor(node, recordByID)
@@ -293,10 +355,138 @@ func nodeCovered(node Node) bool {
 	return false
 }
 
+// activityQualifications is the result of classifying an activity's
+// qualifiedUsage nodes (design D9): roles for plain input entities,
+// parameters and the environment, plus the set of entity ids that are
+// parameters or the environment and so must not also appear in
+// lineage.inputs (the spec's "Roles, parameters and environment" scenario:
+// a parameter or environment entity is reported only through
+// generated_by, never as a plain input, even though it shares the
+// activity's "used" shortcut).
+type activityQualifications struct {
+	roles       map[string]string
+	parameters  []LineageValue
+	environment []LineageEnvironment
+	exclude     map[string]bool
+}
+
+// classifyQualifiedUsage walks actID's qualifiedUsage Usage nodes (design
+// D2, D3, D4) and buckets each referenced entity into a role (a plain
+// input), a parameter (the entity has a "value") or the environment
+// (hadRole "environment").
+func classifyQualifiedUsage(nodeByID map[string]Node, actID string) *activityQualifications {
+	q := &activityQualifications{roles: map[string]string{}, exclude: map[string]bool{}}
+	node, ok := nodeByID[actID]
+	if !ok {
+		return q
+	}
+	usageIDs := nodeRefs(node["qualifiedUsage"])
+	sort.Strings(usageIDs)
+	for _, usageID := range usageIDs {
+		usage, ok := nodeByID[usageID]
+		if !ok {
+			continue
+		}
+		role, _ := usage["hadRole"].(string)
+		entityID := singleRef(usage["entity"])
+		if entityID == "" {
+			continue
+		}
+		entity := nodeByID[entityID]
+		switch {
+		case role == "environment":
+			q.environment = append(q.environment, LineageEnvironment{Kind: environmentKind(entityID), ID: entityID})
+			q.exclude[entityID] = true
+		case hasValueKey(entity):
+			q.parameters = append(q.parameters, LineageValue{Name: role, Value: catalogValue(entity["value"])})
+			q.exclude[entityID] = true
+		case role != "":
+			q.roles[entityID] = role
+		}
+	}
+	return q
+}
+
+// environmentKind derives a software environment entity's kind (design D4
+// "Kind is derived from the IRI scheme") from its id: a "docker://" IRI is
+// a container, anything else used with hadRole "environment" (an annex
+// key, git blob or the engine's env hash) is a conda environment.
+func environmentKind(id string) string {
+	if strings.HasPrefix(id, "docker://") {
+		return "container"
+	}
+	return "conda"
+}
+
+// hasValueKey reports whether node carries a "value" property (design D3's
+// value entity marker).
+func hasValueKey(node Node) bool {
+	_, ok := node["value"]
+	return ok
+}
+
+// resultRoleFor returns the hadRole of entity's qualifiedGeneration node
+// whose activity is actID (design D3 "Parameters and results as value
+// entities"), or "" when entity has no such generation.
+func resultRoleFor(nodeByID map[string]Node, entity Node, actID string) string {
+	for _, genID := range nodeRefs(entity["qualifiedGeneration"]) {
+		gen, ok := nodeByID[genID]
+		if !ok || singleRef(gen["activity"]) != actID {
+			continue
+		}
+		if role, _ := gen["hadRole"].(string); role != "" {
+			return role
+		}
+	}
+	return ""
+}
+
+// generatedEntitiesByActivity returns, for every activity id in graph, the
+// sorted ids of the entities it generated (via each entity's
+// wasGeneratedBy), reused by buildActivity's results computation and
+// BuildProvenanceDocument's activities[].generated.
+func generatedEntitiesByActivity(graph []Node) map[string][]string {
+	generatedBy := map[string][]string{}
+	for _, n := range graph {
+		if actID := singleRef(n["wasGeneratedBy"]); actID != "" {
+			generatedBy[actID] = append(generatedBy[actID], n.ID())
+		}
+	}
+	for actID := range generatedBy {
+		sort.Strings(generatedBy[actID])
+	}
+	return generatedBy
+}
+
+// buildPlan builds lineage.generated_by.plan (design D9): the plan
+// entity's id and path, plus its exo:checksum, exo:repository, exo:commit
+// and, when the plan is only referenced by an addressable URL (design D5
+// option 4 — not a content id, not a repository+commit pair), its own id
+// as url.
+func buildPlan(nodeByID map[string]Node, planID string) *LineagePlan {
+	plan := &LineagePlan{ID: planID, Path: pathOf(nodeByID, planID)}
+	node := nodeByID[planID]
+	if c, ok := node["exo:checksum"].(string); ok {
+		plan.Checksum = c
+	}
+	repo, hasRepo := node["exo:repository"].(string)
+	if hasRepo {
+		plan.Repository = repo
+	}
+	commit, hasCommit := node["exo:commit"].(string)
+	if hasCommit {
+		plan.Commit = commit
+	}
+	if !(hasRepo && hasCommit) && !strings.HasPrefix(planID, "urn:exohub:") && absoluteIRIPattern.MatchString(planID) {
+		plan.URL = planID
+	}
+	return plan
+}
+
 // buildActivity builds lineage.generated_by for the activity node actID
-// (design D16): id, started, ended, plan and every wasAssociatedWith
-// agent.
-func buildActivity(nodeByID map[string]Node, actID string) *LineageActivity {
+// (design D16, D9): id, started, ended, plan, every wasAssociatedWith
+// agent, source, parameters, results and environment.
+func buildActivity(nodeByID map[string]Node, actID string, quals *activityQualifications, generatedByAct map[string][]string) *LineageActivity {
 	act := &LineageActivity{ID: actID}
 	node, ok := nodeByID[actID]
 	if !ok {
@@ -309,13 +499,32 @@ func buildActivity(nodeByID map[string]Node, actID string) *LineageActivity {
 		act.Ended = e
 	}
 	if planID := singleRef(node["hadPlan"]); planID != "" {
-		act.Plan = &LineageRef{ID: planID, Path: pathOf(nodeByID, planID)}
+		act.Plan = buildPlan(nodeByID, planID)
 	}
+	act.Source = singleRef(node["hadPrimarySource"])
 	agentIDs := nodeRefs(node["wasAssociatedWith"])
 	sort.Strings(agentIDs)
 	for _, agentID := range agentIDs {
 		act.Agents = append(act.Agents, buildAgent(nodeByID, agentID))
 	}
+	if quals != nil {
+		act.Parameters = append([]LineageValue(nil), quals.parameters...)
+		act.Environment = append([]LineageEnvironment(nil), quals.environment...)
+		sort.Slice(act.Parameters, func(i, j int) bool { return act.Parameters[i].Name < act.Parameters[j].Name })
+		sort.Slice(act.Environment, func(i, j int) bool { return act.Environment[i].ID < act.Environment[j].ID })
+	}
+	for _, entID := range generatedByAct[actID] {
+		entity := nodeByID[entID]
+		if !hasValueKey(entity) {
+			continue
+		}
+		role := resultRoleFor(nodeByID, entity, actID)
+		if role == "" {
+			continue
+		}
+		act.Results = append(act.Results, LineageValue{Name: role, Value: catalogValue(entity["value"])})
+	}
+	sort.Slice(act.Results, func(i, j int) bool { return act.Results[i].Name < act.Results[j].Name })
 	return act
 }
 
@@ -351,13 +560,20 @@ func primaryType(types []string) string {
 	return ""
 }
 
-// buildInputs builds lineage.inputs (design D16): the generating activity's
-// direct "used" entities, plus node's own "wasDerivedFrom" entities.
-func buildInputs(nodeByID map[string]Node, node Node, act *LineageActivity) []LineageRef {
+// buildInputs builds lineage.inputs (design D16, D9): the generating
+// activity's direct "used" entities, plus node's own "wasDerivedFrom"
+// entities, with each entity's role attached when quals has one. Entities
+// quals classified as a parameter or the environment are excluded (they
+// are reported through generated_by instead, spec "Roles, parameters and
+// environment in the artifact document").
+func buildInputs(nodeByID map[string]Node, node Node, act *LineageActivity, quals *activityQualifications) []LineageRef {
 	seen := map[string]bool{}
 	var ids []string
 	add := func(raw any) {
 		for _, id := range nodeRefs(raw) {
+			if quals != nil && quals.exclude[id] {
+				continue
+			}
 			if !seen[id] {
 				seen[id] = true
 				ids = append(ids, id)
@@ -374,7 +590,11 @@ func buildInputs(nodeByID map[string]Node, node Node, act *LineageActivity) []Li
 
 	refs := make([]LineageRef, 0, len(ids))
 	for _, id := range ids {
-		refs = append(refs, LineageRef{ID: id, Path: pathOf(nodeByID, id)})
+		ref := LineageRef{ID: id, Path: pathOf(nodeByID, id)}
+		if quals != nil {
+			ref.Role = quals.roles[id]
+		}
+		refs = append(refs, ref)
 	}
 	return refs
 }
@@ -480,30 +700,48 @@ type ProvenanceAgentRef struct {
 	Records         []string `json:"records,omitempty"`
 }
 
+// ProvenanceQualifiedRef is one entry of provenance.json's
+// activities[].inputs or .outputs (design D9): a qualified usage or
+// generation's entity id and role, flattened. Unlike LineageRef it has no
+// path, matching the schema's additionalProperties: false for these
+// items.
+type ProvenanceQualifiedRef struct {
+	ID   string `json:"id"`
+	Role string `json:"role,omitempty"`
+}
+
 // ProvenanceActivity is one entry of provenance.json's "activities"
-// (design D16): id, plan, started, ended, associated agents, used and
-// generated entity ids. Records is the activity's contributing,
-// non-superseded record ids (design D16 scope addition).
+// (design D16, D9): id, plan, started, ended, associated agents, used and
+// generated entity ids, plus qualified inputs/outputs (entity + role,
+// unfiltered: parameters and the environment are included here, unlike
+// lineage.inputs). Records is the activity's contributing, non-superseded
+// record ids (design D16 scope addition).
 type ProvenanceActivity struct {
-	ID        string   `json:"id"`
-	Plan      string   `json:"plan,omitempty"`
-	Started   string   `json:"started,omitempty"`
-	Ended     string   `json:"ended,omitempty"`
-	Agents    []string `json:"agents,omitempty"`
-	Used      []string `json:"used,omitempty"`
-	Generated []string `json:"generated,omitempty"`
-	Records   []string `json:"records,omitempty"`
+	ID        string                   `json:"id"`
+	Plan      string                   `json:"plan,omitempty"`
+	Started   string                   `json:"started,omitempty"`
+	Ended     string                   `json:"ended,omitempty"`
+	Agents    []string                 `json:"agents,omitempty"`
+	Used      []string                 `json:"used,omitempty"`
+	Generated []string                 `json:"generated,omitempty"`
+	Inputs    []ProvenanceQualifiedRef `json:"inputs,omitempty"`
+	Outputs   []ProvenanceQualifiedRef `json:"outputs,omitempty"`
+	Records   []string                 `json:"records,omitempty"`
 }
 
 // ProvenanceEntity is one entry of provenance.json's "entities" (design
-// D16): id, type, path at the ref, coverage and revision. Records is the
-// entity's contributing, non-superseded record ids (design D16 scope
-// addition).
+// D16, D9): id, type, path at the ref, coverage, value and revision.
+// Records is the entity's contributing, non-superseded record ids (design
+// D16 scope addition).
 type ProvenanceEntity struct {
-	ID         string   `json:"id"`
-	Type       string   `json:"type,omitempty"`
-	Path       string   `json:"path,omitempty"`
-	Covered    bool     `json:"covered"`
+	ID      string `json:"id"`
+	Type    string `json:"type,omitempty"`
+	Path    string `json:"path,omitempty"`
+	Covered bool   `json:"covered"`
+	// Value is the entity's original JSON-typed value for a value entity
+	// (parameter or result), coerced through catalogValue. Set only when
+	// the merged node has a "value" property.
+	Value      any      `json:"value,omitempty"`
 	RevisionOf []string `json:"revision_of,omitempty"`
 	Records    []string `json:"records,omitempty"`
 	// MemberCount is design D8's "Collection entity member counts": set
@@ -575,6 +813,48 @@ func collectionMemberCount(node Node, contentIDs, treeIDs map[string]string) *in
 		}
 	}
 	return &n
+}
+
+// qualifiedUsageRefs returns actID's qualifiedUsage entities and roles
+// (design D9 "Usage/generation roles are flattened onto
+// activities[].inputs[]"), sorted by entity id. Unlike lineage.inputs,
+// every qualified entity is included: parameters and the environment too.
+func qualifiedUsageRefs(nodeByID map[string]Node, actID string) []ProvenanceQualifiedRef {
+	node, ok := nodeByID[actID]
+	if !ok {
+		return nil
+	}
+	var refs []ProvenanceQualifiedRef
+	for _, usageID := range nodeRefs(node["qualifiedUsage"]) {
+		usage, ok := nodeByID[usageID]
+		if !ok {
+			continue
+		}
+		entityID := singleRef(usage["entity"])
+		if entityID == "" {
+			continue
+		}
+		role, _ := usage["hadRole"].(string)
+		refs = append(refs, ProvenanceQualifiedRef{ID: entityID, Role: role})
+	}
+	sort.Slice(refs, func(i, j int) bool { return refs[i].ID < refs[j].ID })
+	return refs
+}
+
+// qualifiedGenerationRefs returns the role of each of generatedIDs that has
+// a qualifiedGeneration naming actID (design D9 "...and outputs[]"),
+// sorted by entity id.
+func qualifiedGenerationRefs(nodeByID map[string]Node, generatedIDs []string, actID string) []ProvenanceQualifiedRef {
+	var refs []ProvenanceQualifiedRef
+	for _, id := range generatedIDs {
+		role := resultRoleFor(nodeByID, nodeByID[id], actID)
+		if role == "" {
+			continue
+		}
+		refs = append(refs, ProvenanceQualifiedRef{ID: id, Role: role})
+	}
+	sort.Slice(refs, func(i, j int) bool { return refs[i].ID < refs[j].ID })
+	return refs
 }
 
 // BuildProvenanceDocument flattens doc, the already compiled and scoped
@@ -661,6 +941,8 @@ func BuildProvenanceDocument(doc *CompiledDocument, ref string, contentIDs, tree
 		generated := append([]string(nil), generatedBy[id]...)
 		sort.Strings(generated)
 		a.Generated = generated
+		a.Inputs = qualifiedUsageRefs(nodeByID, id)
+		a.Outputs = qualifiedGenerationRefs(nodeByID, generatedBy[id], id)
 		a.Records = recordIDsFor(node)
 		activityRefs = append(activityRefs, a)
 	}
@@ -673,6 +955,7 @@ func BuildProvenanceDocument(doc *CompiledDocument, ref string, contentIDs, tree
 			Type:        primaryType(node.Types()),
 			Path:        pathOf(nodeByID, id),
 			Covered:     nodeCovered(node),
+			Value:       catalogValue(node["value"]),
 			RevisionOf:  sortedRefs(node["wasRevisionOf"]),
 			Records:     recordIDsFor(node),
 			MemberCount: collectionMemberCount(node, contentIDs, treeIDs),

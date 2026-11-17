@@ -14,6 +14,6 @@ func printCredsFromServerError(err error, _ string) {
 
 // getCredsFromServer is not available in this build.
 // Build with -tags exohubapi to enable the POST /api/grants/credentials fallback.
-func getCredsFromServer(_, _ string, _ func(string, ...any)) (*credentialOutput, error) {
+func getCredsFromServer(_, _, _ string, _ func(string, ...any)) (*credentialOutput, error) {
 	return nil, fmt.Errorf("not built with 'exohubapi' support")
 }

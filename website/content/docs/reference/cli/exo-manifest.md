@@ -3,7 +3,7 @@ title: "exo manifest"
 description: "Validate and initialize exohub manifests"
 ---
 
-Full `exo manifest --help` output, generated from exo-cli v0.140.2.
+Full `exo manifest --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Validate and initialize exohub manifests.

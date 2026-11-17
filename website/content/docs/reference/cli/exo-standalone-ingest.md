@@ -3,7 +3,7 @@ title: "exo standalone ingest"
 description: "Catalog a new project version from a bundle directory"
 ---
 
-Full `exo standalone ingest --help` output, generated from exo-cli v0.140.2.
+Full `exo standalone ingest --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Publish a new project version to the running adb-standalone catalog.

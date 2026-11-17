@@ -10,6 +10,7 @@ type RecordMeta struct {
 	Assertion       Assertion
 	AssertedBy      string
 	GeneratedAtTime string
+	MinVersion      string
 }
 
 // MergedNode is one @graph node merged across every non-superseded record
@@ -29,8 +30,13 @@ type MergedGraph struct {
 // mergeMostRecentWins lists node properties where merging a node across
 // records keeps only the most recent non-superseded record's value (by
 // envelope generatedAtTime) instead of a union: the single-valued
-// properties design D15 defines for conflict detection, plus "label",
-// which D15 says comes from the most recent non-superseded record.
+// properties design D15 defines for conflict detection, "label", which
+// D15 says comes from the most recent non-superseded record, and "value"
+// (design D3 "Parameters and results as value entities"): a value
+// entity's scalar/array/object payload is never a set of id references
+// and so must not go through mergeRefs, and is, by the deterministic
+// value entity id's construction, already identical across every record
+// that defines the same id.
 var mergeMostRecentWins = map[string]bool{
 	"startedAtTime":   true,
 	"endedAtTime":     true,
@@ -40,6 +46,7 @@ var mergeMostRecentWins = map[string]bool{
 	"exo:version":     true,
 	"label":           true,
 	"exo:path":        true,
+	"value":           true,
 }
 
 // LoadRecords parses every non-annexed, well-formed provenance record at
@@ -86,6 +93,7 @@ func MergeRecords(parsed []parsedRecord) *MergedGraph {
 			Assertion:       p.rec.Assertion,
 			AssertedBy:      p.rec.AssertedBy,
 			GeneratedAtTime: p.rec.GeneratedAtTime,
+			MinVersion:      p.rec.MinVersion,
 		}
 	}
 

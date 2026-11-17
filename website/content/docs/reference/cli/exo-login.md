@@ -3,7 +3,7 @@ title: "exo login"
 description: "Authenticate via device flow"
 ---
 
-Full `exo login --help` output, generated from exo-cli v0.140.2.
+Full `exo login --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Authenticate via OIDC device flow.

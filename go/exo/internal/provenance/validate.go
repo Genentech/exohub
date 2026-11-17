@@ -90,6 +90,8 @@ func Validate(reader *Reader) (*Report, error) {
 
 	checkCrossRecord(report, parsed)
 	checkIdentifiers(reader, report, parsed)
+	checkMinVersionDeclared(report, parsed)
+	checkQualifiedNodes(report, parsed)
 
 	if err := checkCollectionManifests(reader, report); err != nil {
 		return nil, err
@@ -380,6 +382,344 @@ func checkSingleValuedConflicts(report *Report, parsed []parsedRecord, supersede
 	}
 }
 
+// checkMinVersionDeclared implements the D1 part of the "Record envelope"
+// and "Readers refuse records that need a newer exo" requirements that
+// does not depend on the running exo version (design D1, task 2.1
+// scenarios "New terms require minVersion" and "Original records need no
+// minVersion"): a record that uses a term from termIntroducedIn must
+// carry exo:minVersion at least as high as that term requires.
+func checkMinVersionDeclared(report *Report, parsed []parsedRecord) {
+	for _, p := range parsed {
+		required, ok := ComputeMinVersion(p.rec.Graph)
+		if !ok {
+			continue
+		}
+		if p.rec.MinVersion == "" {
+			report.add(Finding{
+				Severity: SeverityError,
+				Class:    ClassProfile,
+				Code:     "missing-minversion",
+				Path:     p.path,
+				Message:  fmt.Sprintf("record uses a term introduced in exo %s but has no exo:minVersion", required),
+			})
+			continue
+		}
+		if compareSemver(required, p.rec.MinVersion) > 0 {
+			report.add(Finding{
+				Severity: SeverityError,
+				Class:    ClassProfile,
+				Code:     "minversion-too-low",
+				Path:     p.path,
+				Message:  fmt.Sprintf("exo:minVersion %s is lower than %s, the version required by the terms this record uses", p.rec.MinVersion, required),
+			})
+		}
+	}
+}
+
+// checkRecordVersions implements "Readers refuse records that need a newer
+// exo" for a []parsedRecord already in hand (compileBundle): every record
+// whose exo:minVersion is refused by runningVersion (NeedsUpgrade) is an
+// error Finding. runningVersion == "" skips the check entirely (treated as
+// a development build by NeedsUpgrade/IsDevVersion), which keeps
+// CompileBundle and CompileBundleWithVerify's behavior unchanged for
+// callers that do not pass a running version.
+func checkRecordVersions(report *Report, parsed []parsedRecord, runningVersion string) {
+	for _, p := range parsed {
+		if NeedsUpgrade(p.rec.MinVersion, runningVersion) {
+			report.add(Finding{
+				Severity: SeverityError,
+				Class:    ClassProfile,
+				Code:     "needs-upgrade",
+				Path:     p.path,
+				Message:  MinVersionMessage(p.rec.MinVersion),
+			})
+		}
+	}
+}
+
+// checkQualifiedNodes implements design D2/D3/D4/D5 validation (task 2.4,
+// specs "Roles of inputs and outputs", "Parameter values", "Software
+// environment", "Step code pointers", "Non-file results"): qualified
+// usage/generation nodes have the required entity/activity and hadRole and
+// their unqualified shortcut, value entities have a deterministic id,
+// environment entities identified by tag only get a warning, and plan
+// entities with no traceable reference get a warning.
+func checkQualifiedNodes(report *Report, parsed []parsedRecord) {
+	for _, p := range parsed {
+		nodes := make(map[string]Node, len(p.rec.Graph))
+		for _, n := range p.rec.Graph {
+			nodes[n.ID()] = n
+		}
+		checkUsageNodes(report, p.path, p.rec.Graph)
+		checkGenerationNodes(report, p.path, p.rec.Graph)
+		checkValueEntities(report, p.path, p.rec.Graph)
+		checkEnvironmentNodes(report, p.path, p.rec.Graph)
+		checkPlanPointers(report, p.path, p.rec.Graph, nodes)
+	}
+}
+
+// idRefValues extracts every id a property value references (a bare IRI
+// string, a compact {"@id": ...} object, or an array of either).
+func idRefValues(v any) []string {
+	var out []string
+	collectValueIdentifiers(v, func(id string) { out = append(out, id) })
+	return out
+}
+
+func containsString(list []string, s string) bool {
+	for _, item := range list {
+		if item == s {
+			return true
+		}
+	}
+	return false
+}
+
+func hasType(n Node, typ string) bool {
+	return containsString(n.Types(), typ)
+}
+
+// checkUsageNodes validates every Usage-typed node (spec "Roles of inputs
+// and outputs"): it must have a non-empty entity and hadRole, and the
+// activity that references it via qualifiedUsage must also list that
+// entity in its unqualified used.
+func checkUsageNodes(report *Report, path string, graph []Node) {
+	for _, n := range graph {
+		if !hasType(n, "Usage") {
+			continue
+		}
+		entityIDs := idRefValues(n["entity"])
+		role, _ := n["hadRole"].(string)
+		if len(entityIDs) == 0 {
+			report.add(Finding{
+				Severity: SeverityError,
+				Class:    ClassProfile,
+				Code:     "qualified-usage-missing-entity",
+				Path:     path,
+				Message:  fmt.Sprintf("qualifiedUsage node %s is missing entity", n.ID()),
+			})
+		}
+		if role == "" {
+			report.add(Finding{
+				Severity: SeverityError,
+				Class:    ClassProfile,
+				Code:     "qualified-usage-missing-role",
+				Path:     path,
+				Message:  fmt.Sprintf("qualifiedUsage node %s is missing hadRole", n.ID()),
+			})
+		}
+		for _, act := range graph {
+			if !hasType(act, "Activity") || !containsString(idRefValues(act["qualifiedUsage"]), n.ID()) {
+				continue
+			}
+			used := idRefValues(act["used"])
+			for _, eid := range entityIDs {
+				if !containsString(used, eid) {
+					report.add(Finding{
+						Severity: SeverityError,
+						Class:    ClassProfile,
+						Code:     "missing-usage-shortcut",
+						Path:     path,
+						Message:  fmt.Sprintf("activity %s has qualifiedUsage of %s but no matching used", act.ID(), eid),
+					})
+				}
+			}
+		}
+	}
+}
+
+// checkGenerationNodes validates every Generation-typed node (spec "Roles
+// of inputs and outputs"): it must have a non-empty activity and hadRole,
+// and the entity that references it via qualifiedGeneration must also list
+// that activity in its unqualified wasGeneratedBy.
+func checkGenerationNodes(report *Report, path string, graph []Node) {
+	for _, n := range graph {
+		if !hasType(n, "Generation") {
+			continue
+		}
+		activityIDs := idRefValues(n["activity"])
+		role, _ := n["hadRole"].(string)
+		if len(activityIDs) == 0 {
+			report.add(Finding{
+				Severity: SeverityError,
+				Class:    ClassProfile,
+				Code:     "qualified-generation-missing-activity",
+				Path:     path,
+				Message:  fmt.Sprintf("qualifiedGeneration node %s is missing activity", n.ID()),
+			})
+		}
+		if role == "" {
+			report.add(Finding{
+				Severity: SeverityError,
+				Class:    ClassProfile,
+				Code:     "qualified-generation-missing-role",
+				Path:     path,
+				Message:  fmt.Sprintf("qualifiedGeneration node %s is missing hadRole", n.ID()),
+			})
+		}
+		for _, ent := range graph {
+			if !containsString(idRefValues(ent["qualifiedGeneration"]), n.ID()) {
+				continue
+			}
+			generatedBy := idRefValues(ent["wasGeneratedBy"])
+			for _, aid := range activityIDs {
+				if !containsString(generatedBy, aid) {
+					report.add(Finding{
+						Severity: SeverityError,
+						Class:    ClassProfile,
+						Code:     "missing-generation-shortcut",
+						Path:     path,
+						Message:  fmt.Sprintf("entity %s has qualifiedGeneration by %s but no matching wasGeneratedBy", ent.ID(), aid),
+					})
+				}
+			}
+		}
+	}
+}
+
+// rolesForValueEntity returns the hadRole values of every Usage node that
+// uses entityID, and every Generation node that entityID's own
+// qualifiedGeneration references (spec "Parameter values", "Non-file
+// results").
+func rolesForValueEntity(graph []Node, entityID string) []string {
+	var roles []string
+	for _, n := range graph {
+		if hasType(n, "Usage") && containsString(idRefValues(n["entity"]), entityID) {
+			if role, _ := n["hadRole"].(string); role != "" {
+				roles = append(roles, role)
+			}
+		}
+	}
+	for _, ent := range graph {
+		if ent.ID() != entityID {
+			continue
+		}
+		for _, genID := range idRefValues(ent["qualifiedGeneration"]) {
+			for _, gn := range graph {
+				if gn.ID() == genID && hasType(gn, "Generation") {
+					if role, _ := gn["hadRole"].(string); role != "" {
+						roles = append(roles, role)
+					}
+				}
+			}
+		}
+	}
+	return roles
+}
+
+// checkValueEntities validates every entity with a value property (spec
+// "Parameter values", "Non-file results"): its @id must be the
+// deterministic urn:exohub:value:sha256(...) id of at least one role it is
+// used or generated with.
+func checkValueEntities(report *Report, path string, graph []Node) {
+	for _, n := range graph {
+		value, hasValue := n["value"]
+		if !hasValue {
+			continue
+		}
+		roles := rolesForValueEntity(graph, n.ID())
+		if len(roles) == 0 {
+			continue
+		}
+		var expected []string
+		match := false
+		for _, role := range roles {
+			id, err := ValueEntityID(role, value)
+			if err != nil {
+				continue
+			}
+			expected = append(expected, id)
+			if n.ID() == id {
+				match = true
+			}
+		}
+		if !match && len(expected) > 0 {
+			report.add(Finding{
+				Severity: SeverityError,
+				Class:    ClassProfile,
+				Code:     "value-entity-id-mismatch",
+				Path:     path,
+				Message:  fmt.Sprintf("value entity %s does not match urn:exohub:value:sha256(role, value); expected %s", n.ID(), strings.Join(expected, " or ")),
+			})
+		}
+	}
+}
+
+// dockerDigestPattern matches a container image reference identified by
+// digest ("...@sha256:..."), as opposed to a tag.
+var dockerDigestPattern = regexp.MustCompile(`@sha256:[0-9a-f]{64}$`)
+
+// checkEnvironmentNodes warns on an environment entity identified by tag
+// only (spec "Software environment"): a qualifiedUsage with hadRole
+// "environment" whose entity is a docker:// reference with no digest.
+func checkEnvironmentNodes(report *Report, path string, graph []Node) {
+	for _, n := range graph {
+		if !hasType(n, "Usage") {
+			continue
+		}
+		role, _ := n["hadRole"].(string)
+		if role != "environment" {
+			continue
+		}
+		for _, eid := range idRefValues(n["entity"]) {
+			if strings.HasPrefix(eid, "docker://") && !dockerDigestPattern.MatchString(eid) {
+				report.add(Finding{
+					Severity: SeverityWarning,
+					Class:    ClassWarning,
+					Code:     "environment-tag-only",
+					Path:     path,
+					Message:  fmt.Sprintf("environment %s is identified by tag only, not reproducible", eid),
+				})
+			}
+		}
+	}
+}
+
+// planIsTraceable reports whether plan has a reference better than its
+// exo:checksum alone (spec "Step code pointers"): a repository content id,
+// exo:repository + exo:commit, or another addressable absolute URL.
+func planIsTraceable(plan Node) bool {
+	id := plan.ID()
+	if strings.HasPrefix(id, AnnexURNPrefix) || strings.HasPrefix(id, GitBlobURNPrefix) {
+		return true
+	}
+	_, hasRepository := plan["exo:repository"]
+	_, hasCommit := plan["exo:commit"]
+	if hasRepository && hasCommit {
+		return true
+	}
+	if !strings.HasPrefix(id, "urn:exohub:") && absoluteIRIPattern.MatchString(id) {
+		return true
+	}
+	return false
+}
+
+// checkPlanPointers warns when a hadPlan entity has only exo:checksum and
+// no other reference (spec "Step code pointers", scenario "Untraceable
+// code").
+func checkPlanPointers(report *Report, path string, graph []Node, nodes map[string]Node) {
+	for _, n := range graph {
+		if !hasType(n, "Activity") {
+			continue
+		}
+		for _, planID := range idRefValues(n["hadPlan"]) {
+			plan, ok := nodes[planID]
+			if !ok || planIsTraceable(plan) {
+				continue
+			}
+			if _, hasChecksum := plan["exo:checksum"]; hasChecksum {
+				report.add(Finding{
+					Severity: SeverityWarning,
+					Class:    ClassWarning,
+					Code:     "plan-not-traceable",
+					Path:     path,
+					Message:  "pipeline code not traceable",
+				})
+			}
+		}
+	}
+}
+
 // gitOIDPattern matches a git object id: 40 lowercase hex characters
 // (SHA-1) or 64 (SHA-256).
 var gitOIDPattern = regexp.MustCompile(`^[0-9a-f]{40}$|^[0-9a-f]{64}$`)
@@ -447,6 +787,22 @@ func classifyIdentifier(id string) (ok bool, message string) {
 		if err != nil || u.Version() != 7 {
 			return false, fmt.Sprintf("%s is not urn:exohub:activity:<UUIDv7>", id)
 		}
+	case strings.HasPrefix(id, UsageURNPrefix):
+		rest := strings.TrimPrefix(id, UsageURNPrefix)
+		u, err := uuid.Parse(rest)
+		if err != nil || u.Version() != 7 {
+			return false, fmt.Sprintf("%s is not urn:exohub:usage:<UUIDv7>", id)
+		}
+	case strings.HasPrefix(id, GenerationURNPrefix):
+		rest := strings.TrimPrefix(id, GenerationURNPrefix)
+		u, err := uuid.Parse(rest)
+		if err != nil || u.Version() != 7 {
+			return false, fmt.Sprintf("%s is not urn:exohub:generation:<UUIDv7>", id)
+		}
+	case strings.HasPrefix(id, ValueURNPrefix):
+		if digest := strings.TrimPrefix(id, ValueURNPrefix); !sha256HexPattern.MatchString(digest) {
+			return false, fmt.Sprintf("%s is not a 64 character lowercase hex SHA-256 digest", id)
+		}
 	case strings.HasPrefix(id, PersonAgentURNPrefix):
 		if name := strings.TrimPrefix(id, PersonAgentURNPrefix); !validAgentName(name) {
 			return false, fmt.Sprintf("%s has an empty name, or one containing whitespace or \"/\"", id)
@@ -476,16 +832,20 @@ var absoluteIRIPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*:`)
 // inspected far enough to catch an accidentally malformed urn:exohub:
 // identifier, never to require one.
 var iriValuedNodeProperties = map[string]bool{
-	"used":              true,
-	"wasGeneratedBy":    true,
-	"wasDerivedFrom":    true,
-	"wasRevisionOf":     true,
-	"wasAssociatedWith": true,
-	"wasAttributedTo":   true,
-	"actedOnBehalfOf":   true,
-	"hadPlan":           true,
-	"hadMember":         true,
-	"hadPrimarySource":  true,
+	"used":                true,
+	"wasGeneratedBy":      true,
+	"wasDerivedFrom":      true,
+	"wasRevisionOf":       true,
+	"wasAssociatedWith":   true,
+	"wasAttributedTo":     true,
+	"actedOnBehalfOf":     true,
+	"hadPlan":             true,
+	"hadMember":           true,
+	"hadPrimarySource":    true,
+	"qualifiedUsage":      true,
+	"qualifiedGeneration": true,
+	"entity":              true,
+	"activity":            true,
 }
 
 type identifierRef struct {

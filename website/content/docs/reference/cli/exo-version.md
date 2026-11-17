@@ -3,7 +3,7 @@ title: "exo version"
 description: "Print exo CLI version"
 ---
 
-Full `exo version --help` output, generated from exo-cli v0.140.2.
+Full `exo version --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Print exo CLI version

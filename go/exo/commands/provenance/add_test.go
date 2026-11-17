@@ -1498,3 +1498,470 @@ func TestAdd_DuplicateGenerationDryRun(t *testing.T) {
 		t.Errorf("got %d record files, want 1 (nothing written)", n)
 	}
 }
+
+// TestAdd_Role covers --role role=path: a qualifiedUsage/Usage node with
+// hadRole alongside the activity's used shortcut (tasks.md 3.1).
+func TestAdd_Role(t *testing.T) {
+	root, run := addTestRepo(t, false)
+	chdir(t, root)
+	noLoginToken(t)
+
+	writeFile(t, root, "data/counts.csv", "a,b\n1,2\n")
+	writeFile(t, root, "results/de.tsv", "gene,fc\n")
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	out, err := runAddCmd(t, "--generated", "results/de.tsv", "--role", "counts=data/counts.csv", "--agent", "person:alice")
+	if err != nil {
+		t.Fatalf("add error = %v, output: %s", err, out)
+	}
+
+	rec := loadWrittenRecord(t, root)
+	countsID := lib.GitBlobEntityID(gitBlobID(t, run, "data/counts.csv"))
+	byID := nodesByID(rec)
+
+	activity := findActivity(t, byID)
+	if !containsRef(activity["used"], countsID) {
+		t.Errorf("activity used = %v, want to include %v", activity["used"], countsID)
+	}
+	usage := findUsageWithRole(t, byID, "counts")
+	if usage["entity"] != countsID {
+		t.Errorf("usage entity = %v, want %v", usage["entity"], countsID)
+	}
+	if !containsRef(activity["qualifiedUsage"], usage.ID()) {
+		t.Errorf("activity qualifiedUsage = %v, want to include %v", activity["qualifiedUsage"], usage.ID())
+	}
+	if rec.MinVersion == "" {
+		t.Error("MinVersion is empty, want it set (record uses post-v1 terms)")
+	}
+}
+
+// TestAdd_Param covers --param name=value: a value entity (keeping its
+// JSON type) used through a qualifiedUsage with hadRole the parameter name
+// (tasks.md 3.1).
+func TestAdd_Param(t *testing.T) {
+	root, run := addTestRepo(t, false)
+	chdir(t, root)
+	noLoginToken(t)
+
+	writeFile(t, root, "results/de.tsv", "gene,fc\n")
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	out, err := runAddCmd(t, "--generated", "results/de.tsv", "--param", "alpha=0.05", "--param", "method=DESeq2", "--agent", "person:alice")
+	if err != nil {
+		t.Fatalf("add error = %v, output: %s", err, out)
+	}
+
+	rec := loadWrittenRecord(t, root)
+	byID := nodesByID(rec)
+
+	alphaID, err := lib.ValueEntityID("alpha", float64(0.05))
+	if err != nil {
+		t.Fatalf("ValueEntityID() error = %v", err)
+	}
+	alpha, ok := byID[alphaID]
+	if !ok {
+		t.Fatalf("alpha value entity %s missing from graph", alphaID)
+	}
+	if v, ok := alpha["value"].(float64); !ok || v != 0.05 {
+		t.Errorf("alpha value = %v, want 0.05 (number)", alpha["value"])
+	}
+
+	methodID, err := lib.ValueEntityID("method", "DESeq2")
+	if err != nil {
+		t.Fatalf("ValueEntityID() error = %v", err)
+	}
+	method, ok := byID[methodID]
+	if !ok {
+		t.Fatalf("method value entity %s missing from graph", methodID)
+	}
+	if v, ok := method["value"].(string); !ok || v != "DESeq2" {
+		t.Errorf("method value = %v, want %q (string)", method["value"], "DESeq2")
+	}
+
+	activity := findActivity(t, byID)
+	if !containsRef(activity["used"], alphaID) || !containsRef(activity["used"], methodID) {
+		t.Errorf("activity used = %v, want to include %v and %v", activity["used"], alphaID, methodID)
+	}
+	if findUsageWithRole(t, byID, "alpha")["entity"] != alphaID {
+		t.Error("alpha usage does not reference the alpha value entity")
+	}
+	if findUsageWithRole(t, byID, "method")["entity"] != methodID {
+		t.Error("method usage does not reference the method value entity")
+	}
+}
+
+// TestAdd_OutputRole covers --output-role role=path: a qualifiedGeneration
+// node on the --generated entity it names (tasks.md 3.1).
+func TestAdd_OutputRole(t *testing.T) {
+	root, run := addTestRepo(t, false)
+	chdir(t, root)
+	noLoginToken(t)
+
+	writeFile(t, root, "results/de.tsv", "gene,fc\n")
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	out, err := runAddCmd(t, "--generated", "results/de.tsv", "--output-role", "summary=results/de.tsv", "--agent", "person:alice")
+	if err != nil {
+		t.Fatalf("add error = %v, output: %s", err, out)
+	}
+
+	rec := loadWrittenRecord(t, root)
+	byID := nodesByID(rec)
+
+	deID := lib.GitBlobEntityID(gitBlobID(t, run, "results/de.tsv"))
+	de, ok := byID[deID]
+	if !ok {
+		t.Fatalf("generated entity %s missing from graph", deID)
+	}
+	gen := findGenerationWithRole(t, byID, "summary")
+	if !containsRef(de["qualifiedGeneration"], gen.ID()) {
+		t.Errorf("entity qualifiedGeneration = %v, want to include %v", de["qualifiedGeneration"], gen.ID())
+	}
+	activityID, _ := de["wasGeneratedBy"].(string)
+	if gen["activity"] != activityID {
+		t.Errorf("generation activity = %v, want %v", gen["activity"], activityID)
+	}
+}
+
+// TestAdd_OutputRoleNotGenerated covers that --output-role for a path that
+// is not a --generated entity is rejected, writing nothing.
+func TestAdd_OutputRoleNotGenerated(t *testing.T) {
+	root, run := addTestRepo(t, false)
+	chdir(t, root)
+	noLoginToken(t)
+
+	writeFile(t, root, "results/de.tsv", "gene,fc\n")
+	writeFile(t, root, "results/other.tsv", "different,content\n")
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	_, err := runAddCmd(t, "--generated", "results/de.tsv", "--output-role", "summary=results/other.tsv", "--agent", "person:alice")
+	if err == nil {
+		t.Fatal("expected an error for --output-role on a non-generated path")
+	}
+	if n := recordFileCount(t, root); n != 0 {
+		t.Errorf("got %d record files, want 0 (nothing written)", n)
+	}
+}
+
+// TestAdd_Result covers --result name=value: a value entity (keeping its
+// JSON type) generated through a qualifiedGeneration with hadRole the
+// result name (tasks.md 3.1).
+func TestAdd_Result(t *testing.T) {
+	root, run := addTestRepo(t, false)
+	chdir(t, root)
+	noLoginToken(t)
+
+	writeFile(t, root, "model.pkl", "fake-model")
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	out, err := runAddCmd(t, "--generated", "model.pkl", "--result", "accuracy=0.93", "--agent", "person:alice")
+	if err != nil {
+		t.Fatalf("add error = %v, output: %s", err, out)
+	}
+
+	rec := loadWrittenRecord(t, root)
+	byID := nodesByID(rec)
+
+	activity := findActivity(t, byID)
+	resultID, err := lib.ValueEntityID("accuracy", float64(0.93))
+	if err != nil {
+		t.Fatalf("ValueEntityID() error = %v", err)
+	}
+	result, ok := byID[resultID]
+	if !ok {
+		t.Fatalf("accuracy value entity %s missing from graph", resultID)
+	}
+	if v, ok := result["value"].(float64); !ok || v != 0.93 {
+		t.Errorf("accuracy value = %v, want 0.93 (number)", result["value"])
+	}
+	if result["wasGeneratedBy"] != activity.ID() {
+		t.Errorf("accuracy wasGeneratedBy = %v, want %v", result["wasGeneratedBy"], activity.ID())
+	}
+	gen := findGenerationWithRole(t, byID, "accuracy")
+	if !containsRef(result["qualifiedGeneration"], gen.ID()) {
+		t.Errorf("accuracy qualifiedGeneration = %v, want to include %v", result["qualifiedGeneration"], gen.ID())
+	}
+}
+
+// TestAdd_Environment covers --environment: an entity used with
+// hadRole "environment" (tasks.md 3.1).
+func TestAdd_Environment(t *testing.T) {
+	root, run := addTestRepo(t, false)
+	chdir(t, root)
+	noLoginToken(t)
+
+	writeFile(t, root, "results/de.tsv", "gene,fc\n")
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	digest := "docker://ghcr.io/org/tool@sha256:" + strings.Repeat("ab", 32)
+	out, err := runAddCmd(t, "--generated", "results/de.tsv", "--environment", digest, "--agent", "person:alice")
+	if err != nil {
+		t.Fatalf("add error = %v, output: %s", err, out)
+	}
+
+	rec := loadWrittenRecord(t, root)
+	byID := nodesByID(rec)
+
+	activity := findActivity(t, byID)
+	if !containsRef(activity["used"], digest) {
+		t.Errorf("activity used = %v, want to include %v", activity["used"], digest)
+	}
+	usage := findUsageWithRole(t, byID, "environment")
+	if usage["entity"] != digest {
+		t.Errorf("environment usage entity = %v, want %v", usage["entity"], digest)
+	}
+}
+
+// TestAdd_PlanRepositoryCommitURL covers --plan-repository/--plan-commit/
+// --plan-url synthesizing a plan entity when --plan is not given
+// (tasks.md 3.1, spec "Step code pointers" scenario "Code from a git
+// repository").
+func TestAdd_PlanRepositoryCommitURL(t *testing.T) {
+	root, run := addTestRepo(t, false)
+	chdir(t, root)
+	noLoginToken(t)
+
+	writeFile(t, root, "out.csv", "a,b\n")
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	out, err := runAddCmd(t, "--generated", "out.csv",
+		"--plan-repository", "https://github.com/org/pipeline",
+		"--plan-commit", "4f2a9c1",
+		"--plan-url", "main.nf",
+		"--agent", "person:alice")
+	if err != nil {
+		t.Fatalf("add error = %v, output: %s", err, out)
+	}
+
+	rec := loadWrittenRecord(t, root)
+	byID := nodesByID(rec)
+
+	planID := "https://github.com/org/pipeline@4f2a9c1"
+	plan, ok := byID[planID]
+	if !ok {
+		t.Fatalf("plan entity %s missing from graph", planID)
+	}
+	if plan["exo:repository"] != "https://github.com/org/pipeline" {
+		t.Errorf("plan exo:repository = %v, want https://github.com/org/pipeline", plan["exo:repository"])
+	}
+	if plan["exo:commit"] != "4f2a9c1" {
+		t.Errorf("plan exo:commit = %v, want 4f2a9c1", plan["exo:commit"])
+	}
+	if plan["label"] != "main.nf" {
+		t.Errorf("plan label = %v, want main.nf", plan["label"])
+	}
+	activity := findActivity(t, byID)
+	if activity["hadPlan"] != planID {
+		t.Errorf("activity hadPlan = %v, want %v", activity["hadPlan"], planID)
+	}
+}
+
+// TestAdd_PlanPointerRequiresIdentifier covers that
+// --plan-repository/--plan-commit/--plan-url need enough to identify a
+// plan entity without --plan.
+func TestAdd_PlanPointerRequiresIdentifier(t *testing.T) {
+	root, run := addTestRepo(t, false)
+	chdir(t, root)
+	noLoginToken(t)
+
+	writeFile(t, root, "out.csv", "a,b\n")
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	_, err := runAddCmd(t, "--generated", "out.csv", "--plan-repository", "https://github.com/org/pipeline", "--agent", "person:alice")
+	if err == nil {
+		t.Fatal("expected an error: --plan-repository alone cannot identify a plan entity")
+	}
+}
+
+// TestAdd_Source covers --source <iri>: sets the activity's
+// hadPrimarySource (tasks.md 3.1, spec "Link to the source run").
+func TestAdd_Source(t *testing.T) {
+	root, run := addTestRepo(t, false)
+	chdir(t, root)
+	noLoginToken(t)
+
+	writeFile(t, root, "out.csv", "a,b\n")
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	out, err := runAddCmd(t, "--generated", "out.csv", "--source", "lid://0d1f", "--agent", "person:alice")
+	if err != nil {
+		t.Fatalf("add error = %v, output: %s", err, out)
+	}
+
+	rec := loadWrittenRecord(t, root)
+	byID := nodesByID(rec)
+	activity := findActivity(t, byID)
+	if activity["hadPrimarySource"] != "lid://0d1f" {
+		t.Errorf("activity hadPrimarySource = %v, want lid://0d1f", activity["hadPrimarySource"])
+	}
+}
+
+// TestAdd_AllNewFlagsDryRunJSON covers --dry-run --json with every new flag
+// combined, checking the record parses, validates against the schema, and
+// carries exo:minVersion (tasks.md 3.1 "golden-record tests for each flag
+// plus --dry-run --json").
+func TestAdd_AllNewFlagsDryRunJSON(t *testing.T) {
+	root, run := addTestRepo(t, false)
+	chdir(t, root)
+	noLoginToken(t)
+
+	writeFile(t, root, "data/counts.csv", "a,b\n1,2\n")
+	writeFile(t, root, "results/de.tsv", "gene,fc\n")
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	digest := "docker://ghcr.io/org/tool@sha256:" + strings.Repeat("ab", 32)
+	out, err := runAddCmd(t, "--dry-run", "--json",
+		"--generated", "results/de.tsv",
+		"--role", "counts=data/counts.csv",
+		"--param", "alpha=0.05",
+		"--output-role", "summary=results/de.tsv",
+		"--result", "accuracy=0.93",
+		"--environment", digest,
+		"--plan-repository", "https://github.com/org/pipeline",
+		"--plan-commit", "4f2a9c1",
+		"--plan-url", "main.nf",
+		"--source", "lid://0d1f",
+		"--agent", "person:alice",
+	)
+	if err != nil {
+		t.Fatalf("add error = %v, output: %s", err, out)
+	}
+	if n := recordFileCount(t, root); n != 0 {
+		t.Errorf("got %d record files, want 0 (--dry-run writes nothing)", n)
+	}
+
+	rec, err := lib.Parse([]byte(out))
+	if err != nil {
+		t.Fatalf("Parse() error = %v\noutput: %s", err, out)
+	}
+	if msgs, err := lib.ValidateSchema([]byte(out)); err != nil {
+		t.Fatalf("ValidateSchema() error = %v", err)
+	} else if len(msgs) > 0 {
+		t.Fatalf("schema violations: %s\nrecord:\n%s", strings.Join(msgs, "; "), out)
+	}
+	if rec.MinVersion == "" {
+		t.Error("MinVersion is empty, want it set")
+	}
+}
+
+// TestAdd_ParamMalformedRejected covers that --param/--result/--role/
+// --output-role without "name=value" is rejected.
+func TestAdd_ParamMalformedRejected(t *testing.T) {
+	root, run := addTestRepo(t, false)
+	chdir(t, root)
+	noLoginToken(t)
+
+	writeFile(t, root, "out.csv", "a,b\n")
+	run("git", "add", ".")
+	run("git", "commit", "-q", "-m", "init")
+
+	_, err := runAddCmd(t, "--generated", "out.csv", "--param", "alpha", "--agent", "person:alice")
+	if err == nil {
+		t.Fatal("expected an error for --param without \"=\"")
+	}
+	if n := recordFileCount(t, root); n != 0 {
+		t.Errorf("got %d record files, want 0 (nothing written)", n)
+	}
+}
+
+// loadWrittenRecord reads the single record `exo provenance add` wrote
+// under .exohub/provenance/ and parses it.
+func loadWrittenRecord(t *testing.T, root string) *lib.Record {
+	t.Helper()
+	files, err := os.ReadDir(filepath.Join(root, ".exohub/provenance"))
+	if err != nil {
+		t.Fatalf("ReadDir() error = %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("got %d record files, want 1", len(files))
+	}
+	data, err := os.ReadFile(filepath.Join(root, ".exohub/provenance", files[0].Name()))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	rec, err := lib.Parse(data)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	return rec
+}
+
+func nodesByID(rec *lib.Record) map[string]lib.Node {
+	byID := map[string]lib.Node{}
+	for _, n := range rec.Graph {
+		byID[n.ID()] = n
+	}
+	return byID
+}
+
+func findActivity(t *testing.T, byID map[string]lib.Node) lib.Node {
+	t.Helper()
+	for _, n := range byID {
+		if hasTypeHelper(n, "Activity") {
+			return n
+		}
+	}
+	t.Fatal("no Activity node found")
+	return nil
+}
+
+func findUsageWithRole(t *testing.T, byID map[string]lib.Node, role string) lib.Node {
+	t.Helper()
+	for _, n := range byID {
+		if hasTypeHelper(n, "Usage") {
+			if r, _ := n["hadRole"].(string); r == role {
+				return n
+			}
+		}
+	}
+	t.Fatalf("no Usage node with hadRole %q found", role)
+	return nil
+}
+
+func findGenerationWithRole(t *testing.T, byID map[string]lib.Node, role string) lib.Node {
+	t.Helper()
+	for _, n := range byID {
+		if hasTypeHelper(n, "Generation") {
+			if r, _ := n["hadRole"].(string); r == role {
+				return n
+			}
+		}
+	}
+	t.Fatalf("no Generation node with hadRole %q found", role)
+	return nil
+}
+
+func hasTypeHelper(n lib.Node, typ string) bool {
+	for _, t := range n.Types() {
+		if t == typ {
+			return true
+		}
+	}
+	return false
+}
+
+// containsRef reports whether v (a bare string or []any of strings, as a
+// node property value may be) contains id.
+func containsRef(v any, id string) bool {
+	switch t := v.(type) {
+	case string:
+		return t == id
+	case []any:
+		for _, item := range t {
+			if s, ok := item.(string); ok && s == id {
+				return true
+			}
+		}
+	}
+	return false
+}

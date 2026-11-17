@@ -3,7 +3,7 @@ title: "exo completion fish"
 description: "Generate the autocompletion script for fish"
 ---
 
-Full `exo completion fish --help` output, generated from exo-cli v0.140.2.
+Full `exo completion fish --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Generate the autocompletion script for the fish shell.

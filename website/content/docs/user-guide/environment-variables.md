@@ -90,9 +90,15 @@ Directory layout under `EXO_CONFIG_DIR`:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `EXOHUB_GRANTS_ACCOUNT_ID` | AWS account ID for S3 Access Grants. Required on open-source builds (no built-in default); the internal binary has a built-in production value. When not set on an OSS build, `exo doctor`'s S3 Control network probe is skipped. | _(none — set by internal binary on internal builds)_ |
+| `EXOHUB_GRANTS_ACCOUNT_ID` | AWS account ID for S3 Access Grants. Required on open-source builds (no built-in default); the internal binary has a built-in production value. When not set on an OSS build, `exo doctor`'s S3 Control network probe is skipped. A remote's own `grants_account_id` field in `.exohub/remotes` overrides this for that remote only; see [Working with Repositories]({{< ref "repositories#exohubremotes" >}}). | _(none — set by internal binary on internal builds)_ |
 | `EXOHUB_GRANTS_REGION` | AWS region for S3 Access Grants. Required on open-source builds (no built-in default); the internal binary has a built-in production value. | _(none — set by internal binary on internal builds)_ |
 | `EXO_CREDENTIAL_HELPER_BIN` | Path to the credential helper binary | `exo-credential-helper` |
+
+## HTTP Requests
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `EXO_USER_AGENT` | Overrides the `User-Agent` header sent on every HTTP request `exo`, `exo-credential-helper`, and `git-annex-remote-artifactdb-export` make directly (including `exo doctor`'s network checks) to the ExoHub API and GitLab. Does not affect requests made via the AWS SDK for Go v2 (S3, S3 Access Grants, STS), which carry their own `app/exo-<version>` identifier instead, or subprocesses exo shells out to (`git`, `git-annex`, `s5cmd`). | `exo/<version> (<os>/<arch>)` |
 
 ## Local Standalone Catalog
 

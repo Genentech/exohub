@@ -3,7 +3,7 @@ title: "exo doctor"
 description: "Run diagnostics on your ExoHub client environment"
 ---
 
-Full `exo doctor --help` output, generated from exo-cli v0.140.2.
+Full `exo doctor --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Run grouped, non-destructive diagnostics of your ExoHub client environment.

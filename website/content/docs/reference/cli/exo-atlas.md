@@ -3,7 +3,7 @@ title: "exo atlas"
 description: "Browse and search an ArtifactDB catalog"
 ---
 
-Full `exo atlas --help` output, generated from exo-cli v0.140.2.
+Full `exo atlas --help` output, generated from exo-cli v0.145.1.
 
 ```text
 Browse and search content in an ArtifactDB catalog using an interactive TUI.

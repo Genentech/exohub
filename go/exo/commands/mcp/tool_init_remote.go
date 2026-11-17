@@ -87,7 +87,7 @@ func handleInitRemote(_ context.Context, request gomcp.CallToolRequest) (*gomcp.
 	case "annex", "export", "artifactdb":
 		s3url := getStringParam(request, "s3url")
 		if s3url == "" {
-			// Default to sandbox bucket: s3://exohub-sandbox-uat/sandbox/<org>/<repo>/_<type>
+			// Default to sandbox bucket: s3://example-sandbox-bucket/sandbox/<org>/<repo>/_<type>
 			repoName := filepath.Base(repoAbs)
 			suffix := "_annex"
 			if remoteType == "export" {
@@ -97,12 +97,26 @@ func handleInitRemote(_ context.Context, request gomcp.CallToolRequest) (*gomcp.
 			}
 			org := deriveOrgFromOrigin(repoAbs)
 			if org != "" {
-				s3url = fmt.Sprintf("s3://exohub-sandbox-uat/sandbox/%s/%s/%s", org, repoName, suffix)
+				s3url = fmt.Sprintf("s3://example-sandbox-bucket/sandbox/%s/%s/%s", org, repoName, suffix)
 			} else {
-				s3url = fmt.Sprintf("s3://exohub-sandbox-uat/sandbox/%s/%s", repoName, suffix)
+				s3url = fmt.Sprintf("s3://example-sandbox-bucket/sandbox/%s/%s", repoName, suffix)
 			}
 		}
 		args = append(args, "--s3url", s3url)
+		if remoteType == "artifactdb" {
+			if role := getStringParam(request, "role"); role != "" {
+				args = append(args, "--role", role)
+			}
+			if url := getStringParam(request, "url"); url != "" {
+				args = append(args, "--url", url)
+			}
+			if grantsAccountID := getStringParam(request, "grants_account_id"); grantsAccountID != "" {
+				args = append(args, "--grants-account-id", grantsAccountID)
+			}
+			if dataFrom := getStringParam(request, "data_from"); dataFrom != "" {
+				args = append(args, "--data-from", dataFrom)
+			}
+		}
 	case "exospace":
 		rsyncurl := getStringParam(request, "rsyncurl")
 		if rsyncurl == "" {

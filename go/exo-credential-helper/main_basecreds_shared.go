@@ -10,6 +10,8 @@ import (
 	"time"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+
+	"github.com/Genentech/exohub/go/useragent"
 )
 
 // tokenFile holds the parsed contents of token.json.
@@ -26,6 +28,7 @@ func fetchProfileCreds(ctx context.Context, profile, region string, duration int
 	cfg, err := awsconfig.LoadDefaultConfig(ctx,
 		awsconfig.WithRegion(region),
 		awsconfig.WithSharedConfigProfile(profile),
+		awsconfig.WithAppID(useragent.AppID()),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS profile %q: %w", profile, err)

@@ -165,7 +165,6 @@ func httpProbe(url string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	req.Header.Set("User-Agent", "exo-doctor/1.0")
 	resp, err := client.Do(req)
 	if err != nil {
 		// If HEAD is blocked by proxy, try GET
@@ -183,7 +182,6 @@ func httpProbeMethod(method, url string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	req.Header.Set("User-Agent", "exo-doctor/1.0")
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, err
